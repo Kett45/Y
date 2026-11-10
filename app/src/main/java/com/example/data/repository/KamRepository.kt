@@ -16,16 +16,17 @@ import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.MetadataChanges
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -42,6 +43,8 @@ class KamRepository(private val db: FirebaseFirestore) {
 
     private val auth = Firebase.auth
     private val profileMutex = Mutex()
+    private val pendingWritesBySource = MutableStateFlow( Triple(false, false, false) )
+    private val hasPendingWritesFlow = pendingWritesBySource.map { (b, s, e) -> b || s || e }
 
     private fun requireUserId(): String {
         return auth.currentUser?.uid
@@ -96,6 +99,10 @@ class KamRepository(private val db: FirebaseFirestore) {
                     "collapsedBlockIds" to emptyList<String>(),
                     "hiddenBlockIds" to emptyList<String>(),
                     "compactViewMode" to false,
+                    "themeId" to "DARK",
+                    "uiScaleMode" to "AUTO",
+                    "uiScaleFactor" to 0.85,
+                    "showFloatingAddButton" to true,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
@@ -110,7 +117,11 @@ class KamRepository(private val db: FirebaseFirestore) {
                     enabledCards = CardType.defaultEnabledIds,
                     collapsedBlockIds = emptyList(),
                     hiddenBlockIds = emptyList(),
-                    compactViewMode = false
+                    compactViewMode = false,
+                    themeId = "DARK",
+                    uiScaleMode = "AUTO",
+                    uiScaleFactor = 0.85,
+                    showFloatingAddButton = true
                 )
             } catch (e: CancellationException) {
                 throw e
@@ -123,16 +134,53 @@ class KamRepository(private val db: FirebaseFirestore) {
         }
     }
 
+    private suspend fun safeUpsertUserProfileFields(
+        uid: String,
+        docRef: DocumentReference,
+        fields: Map<String, Any>
+    ) {
+        val updatePayload = fields + ("updatedAt" to FieldValue.serverTimestamp())
+        try {
+            docRef.update(updatePayload).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Fallback for legacy or not-yet-created profile document: ensure all required blueprint fields exist
+            val existingSnap = runCatching { docRef.get().await() }.getOrNull()
+            val currentUser = auth.currentUser
+            val safeName = (existingSnap?.getString("displayName") ?: currentUser?.displayName ?: "خادم الفصل")
+                .trim().ifBlank { "خادم الفصل" }.take(80)
+            val safeEmail = (existingSnap?.getString("email") ?: currentUser?.email ?: "$uid@kamlite.app")
+                .trim().take(150)
+            val safeGroupId = (existingSnap?.getString("groupId") ?: "").take(40)
+            @Suppress("UNCHECKED_CAST")
+            val safeEnabledCards = (existingSnap?.get("enabledCards") as? List<String>)
+                ?.distinct()?.take(7) ?: CardType.defaultEnabledIds
+            val createdAtVal: Any = existingSnap?.getTimestamp("createdAt") ?: FieldValue.serverTimestamp()
+
+            val fullMergePayload = mutableMapOf<String, Any>(
+                "userId" to uid,
+                "displayName" to safeName,
+                "email" to safeEmail,
+                "groupId" to safeGroupId,
+                "enabledCards" to safeEnabledCards,
+                "createdAt" to createdAtVal,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            fullMergePayload.putAll(fields)
+            docRef.set(fullMergePayload, SetOptions.merge()).await()
+        }
+    }
+
     suspend fun updateEnabledCards(enabledCards: List<String>): Result<Unit> = runCatching {
         val uid = requireUserId()
         val docRef = db.collection("users").document(uid)
         try {
-            docRef.update(
-                mapOf(
-                    "enabledCards" to enabledCards.distinct().take(7),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
+            safeUpsertUserProfileFields(
+                uid = uid,
+                docRef = docRef,
+                fields = mapOf("enabledCards" to enabledCards.distinct().take(7))
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -148,13 +196,41 @@ class KamRepository(private val db: FirebaseFirestore) {
         val uid = requireUserId()
         val docRef = db.collection("users").document(uid)
         try {
-            docRef.update(
-                mapOf(
+            safeUpsertUserProfileFields(
+                uid = uid,
+                docRef = docRef,
+                fields = mapOf(
                     "collapsedBlockIds" to collapsedBlockIds.distinct().take(50),
-                    "hiddenBlockIds" to hiddenBlockIds.distinct().take(50),
-                    "updatedAt" to FieldValue.serverTimestamp()
+                    "hiddenBlockIds" to hiddenBlockIds.distinct().take(50)
                 )
-            ).await()
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun updateUserAppearanceAndScalePreferences(
+        themeId: String,
+        uiScaleMode: String,
+        uiScaleFactor: Double,
+        showFloatingAddButton: Boolean
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val docRef = db.collection("users").document(uid)
+        try {
+            safeUpsertUserProfileFields(
+                uid = uid,
+                docRef = docRef,
+                fields = mapOf(
+                    "themeId" to themeId.trim().ifBlank { "DARK" }.take(40),
+                    "uiScaleMode" to uiScaleMode.trim().ifBlank { "AUTO" }.take(20),
+                    "uiScaleFactor" to uiScaleFactor.coerceIn(0.70, 1.30),
+                    "showFloatingAddButton" to showFloatingAddButton
+                )
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -176,13 +252,12 @@ class KamRepository(private val db: FirebaseFirestore) {
                 existingJoinedGroupIds.distinct().take(20)
             }
             val updates = mutableMapOf<String, Any>(
-                "groupId" to groupId,
-                "updatedAt" to FieldValue.serverTimestamp()
+                "groupId" to groupId
             )
             if (updatedJoined.isNotEmpty()) {
                 updates["joinedGroupIds"] = updatedJoined
             }
-            docRef.update(updates).await()
+            safeUpsertUserProfileFields(uid = uid, docRef = docRef, fields = updates)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -869,6 +944,8 @@ class KamRepository(private val db: FirebaseFirestore) {
             .whereEqualTo("groupId", groupId)
             .snapshots()
             .map { snapshot ->
+                val cur = pendingWritesBySource.value
+                pendingWritesBySource.value = cur.copy(first = snapshot.metadata.hasPendingWrites())
                 snapshot.toObjects(ServantBlock::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                     .sortedWith(compareBy<ServantBlock> { it.sortOrder }.thenBy { it.id })
             }
@@ -967,6 +1044,8 @@ class KamRepository(private val db: FirebaseFirestore) {
             .whereEqualTo("groupId", groupId)
             .snapshots()
             .map { snapshot ->
+                val cur = pendingWritesBySource.value
+                pendingWritesBySource.value = cur.copy(second = snapshot.metadata.hasPendingWrites())
                 snapshot.toObjects(Student::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                     .sortedWith(
                         compareBy<Student> { it.effectivePosition }
@@ -1281,6 +1360,8 @@ class KamRepository(private val db: FirebaseFirestore) {
             .whereEqualTo("groupId", groupId)
             .snapshots()
             .map { snapshot ->
+                val cur = pendingWritesBySource.value
+                pendingWritesBySource.value = cur.copy(third = snapshot.metadata.hasPendingWrites())
                 snapshot.toObjects(CardEvent::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                     .sortedByDescending { it.createdAt?.seconds ?: 0L }
             }
@@ -1326,31 +1407,10 @@ class KamRepository(private val db: FirebaseFirestore) {
     }
 
     fun observeHasPendingWrites(
-        groupId: String,
+        @Suppress("UNUSED_PARAMETER") groupId: String,
         @Suppress("UNUSED_PARAMETER") currentUserId: String = ""
     ): Flow<Boolean> {
-        val groupRef = db.collection("groups").document(groupId)
-        val eventsPending = groupRef.collection("cardEvents")
-            .whereEqualTo("groupId", groupId)
-            .snapshots(MetadataChanges.INCLUDE)
-            .map { it.metadata.hasPendingWrites() }
-            .catch { emit(false) }
-
-        val studentsPending = groupRef.collection("students")
-            .whereEqualTo("groupId", groupId)
-            .snapshots(MetadataChanges.INCLUDE)
-            .map { it.metadata.hasPendingWrites() }
-            .catch { emit(false) }
-
-        val blocksPending = groupRef.collection("blocks")
-            .whereEqualTo("groupId", groupId)
-            .snapshots(MetadataChanges.INCLUDE)
-            .map { it.metadata.hasPendingWrites() }
-            .catch { emit(false) }
-
-        return combine(eventsPending, studentsPending, blocksPending) { ePending, sPending, bPending ->
-            ePending || sPending || bPending
-        }.distinctUntilChanged()
+        return hasPendingWritesFlow
     }
 
     /**

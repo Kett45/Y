@@ -75,9 +75,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.material3.Slider
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.CardType
@@ -85,15 +82,13 @@ import com.example.data.model.Invitation
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
 import com.example.data.model.ServantBlock
 import com.example.data.sync.GitHubSmartSyncEngine
-import com.example.ui.components.AppearanceAndIconSettingsSection
+import com.example.ui.components.AppearanceFullScreen
+import com.example.ui.components.AppearanceSettingsEntryCard
 import com.example.ui.theme.KamSemanticColors
-import com.example.ui.theme.LocalAppAppearanceController
 import com.example.ui.theme.LocalUiScaleController
-import com.example.ui.theme.UiScaleMode
 import com.example.ui.viewmodel.KamScreenState
 import com.example.ui.viewmodel.KamViewModel
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 private fun shareInvitationText(
     context: Context,
@@ -929,6 +924,14 @@ fun SettingsScreen(
 ) {
     val enabledIds = state.userProfile?.enabledCards ?: CardType.defaultEnabledIds
     val group = state.group
+    var showAppearanceFullScreen by rememberSaveable { mutableStateOf(false) }
+
+    if (showAppearanceFullScreen) {
+        AppearanceFullScreen(
+            onBack = { showAppearanceFullScreen = false }
+        )
+        return
+    }
 
     var allowServantUndo by rememberSaveable(group?.allowServantUndo) {
         mutableStateOf(group?.allowServantUndo ?: true)
@@ -956,14 +959,11 @@ fun SettingsScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 0a. Automatic & Manual Device UI Scaling Card ("التأقلم التلقائي واليدوي من داخل الإعدادات للأجهزة المختلفة")
-        item(key = "ui_scale_settings_card") {
-            UiScaleSettingsCard()
-        }
-
-        // 0b. App Interior Themes (7 Static + 2 Live Neon = 9) & Exterior Launcher Icons (5 Sunday School/Coptic + 1 Live Neon = 6)
+        // 0. Appearance & Themes Dedicated Screen Entry Button ("المظهر والسمات")
         item(key = "appearance_and_icon_settings") {
-            AppearanceAndIconSettingsSection()
+            AppearanceSettingsEntryCard(
+                onOpenAppearanceScreen = { showAppearanceFullScreen = true }
+            )
         }
 
         // 0. Multi-Group Switcher Card ("التبديل بين المجموعات من شاشة المجموعة والإعدادات فقط")
@@ -1408,7 +1408,7 @@ private fun GitHubAutoSyncSettingsCard() {
                     onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                         clipboard?.setPrimaryClip(
-                            ClipData.newPlainText("kAM Lite Latest APK", syncState.latestDirectApkUrl)
+                            ClipData.newPlainText("نجم الكارت v1.6 Latest APK", syncState.latestDirectApkUrl)
                         )
                         GitHubSmartSyncEngine.startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
                     },
@@ -1723,230 +1723,4 @@ private fun PolicySwitchRow(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun UiScaleSettingsCard() {
-    val uiScaleController = LocalUiScaleController.current
-    val currentPercent = uiScaleController.effectiveScalePercent
-    val autoPercent = (uiScaleController.autoRecommendedScale * 100f).roundToInt()
-    val deviceTypeLabel = if (uiScaleController.isCompactMobile) "هاتف موبايل" else "تابلت / شاشة كبيرة"
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("ui_scale_settings_card"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "حجم الواجهة والخطوط للأجهزة المختلفة",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "الجهاز المكتشف: $deviceTypeLabel • الوضع: ${if (uiScaleController.mode == UiScaleMode.AUTO) "تلقائي ذكي" else "تحكم يدوي"}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Text(
-                        text = "$currentPercent%",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                            .testTag("ui_scale_percent_badge")
-                    )
-                }
-            }
-
-            HorizontalDivider()
-
-            // Quick Presets Row (Auto Smart, Mobile Compact 85%, Standard 100%, Tablet Large 115%)
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val isAuto = uiScaleController.mode == UiScaleMode.AUTO
-                PresetScaleChip(
-                    label = "تلقائي ذكي ($autoPercent%)",
-                    selected = isAuto,
-                    onClick = { uiScaleController.setAutoMode() },
-                    testTag = "ui_scale_preset_auto"
-                )
-                PresetScaleChip(
-                    label = "صغير للموبايل (85%)",
-                    selected = !isAuto && currentPercent == 85,
-                    onClick = { uiScaleController.setManualScale(0.85f) },
-                    testTag = "ui_scale_preset_compact"
-                )
-                PresetScaleChip(
-                    label = "قياسي (100%)",
-                    selected = !isAuto && currentPercent == 100,
-                    onClick = { uiScaleController.setManualScale(1.00f) },
-                    testTag = "ui_scale_preset_standard"
-                )
-                PresetScaleChip(
-                    label = "كبير للتابلت (115%)",
-                    selected = !isAuto && currentPercent == 115,
-                    onClick = { uiScaleController.setManualScale(1.15f) },
-                    testTag = "ui_scale_preset_tablet"
-                )
-            }
-
-            // Manual Slider (70% to 130%) + Step Buttons (-5% / +5%)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "شريط الضبط اليدوي الدقيق (70% – 130%):",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                val next = (uiScaleController.effectiveScaleFactor - 0.05f).coerceIn(0.70f, 1.30f)
-                                uiScaleController.setManualScale(next)
-                            },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            modifier = Modifier
-                                .height(32.dp)
-                                .testTag("ui_scale_decrease_button")
-                        ) {
-                            Text("- 5%", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                val next = (uiScaleController.effectiveScaleFactor + 0.05f).coerceIn(0.70f, 1.30f)
-                                uiScaleController.setManualScale(next)
-                            },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            modifier = Modifier
-                                .height(32.dp)
-                                .testTag("ui_scale_increase_button")
-                        ) {
-                            Text("+ 5%", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-
-                Slider(
-                    value = uiScaleController.effectiveScaleFactor,
-                    onValueChange = { newValue ->
-                        val stepped = (newValue * 20f).roundToInt() / 20f
-                        uiScaleController.setManualScale(stepped)
-                    },
-                    valueRange = 0.70f..1.30f,
-                    steps = 11,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("ui_scale_slider")
-                )
-            }
-
-            HorizontalDivider()
-
-            // Show / Hide Floating Add Button (+ إضافة / استيراد) for ALL users
-            val appearanceController = LocalAppAppearanceController.current
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(end = 10.dp)
-                ) {
-                    Text(
-                        text = "إظهار زر (+ إضافة / استيراد الأسماء) العائم",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "زر عائم يظهر في الشاشة الرئيسية وينكمش تلقائياً لأيقونة صغيرة عند النزول لأسفل القائمة، ومتاح إظهاره أو إخفاؤه لكل مستخدم بحرية.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = appearanceController.showFloatingAddButton,
-                    onCheckedChange = { checked ->
-                        appearanceController.updateShowFloatingAddButton(checked)
-                    },
-                    modifier = Modifier.testTag("switch_show_floating_add_button")
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PresetScaleChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    testTag: String
-) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
-        },
-        border = BorderStroke(
-            width = if (selected) 1.5.dp else 1.dp,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
-        ),
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .testTag(testTag)
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-        )
-    }
-}
 

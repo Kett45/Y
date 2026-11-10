@@ -438,7 +438,7 @@ fun AuthScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Star,
-                        contentDescription = "شعار kAM Lite",
+                        contentDescription = "شعار نجم الكارت v1.6",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(46.dp)
                     )
@@ -447,7 +447,7 @@ fun AuthScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
-                    text = "kAM Lite",
+                    text = "نجم الكارت v1.6",
                     style = MaterialTheme.typography.displayLarge,
                     color = MaterialTheme.colorScheme.onBackground
                 )

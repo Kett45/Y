@@ -53,6 +53,10 @@ data class UserProfile(
     val collapsedBlockIds: List<String> = emptyList(),
     val hiddenBlockIds: List<String> = emptyList(),
     val compactViewMode: Boolean = false,
+    val themeId: String = "DARK",
+    val uiScaleMode: String = "AUTO",
+    val uiScaleFactor: Double = 0.85,
+    val showFloatingAddButton: Boolean = true,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )

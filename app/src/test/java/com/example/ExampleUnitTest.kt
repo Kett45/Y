@@ -237,17 +237,31 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun appearancePresets_providesNineThemesWithTwoLiveAndSixIconsWithOneLive() {
+    fun appearancePresets_providesTwoThemesDarkAndSunlightLightAndSingleStarIcon() {
         val allThemes = com.example.ui.theme.KamAppThemePreset.entries
-        assertEquals(9, allThemes.size)
-        assertEquals(7, allThemes.count { !it.isLiveAnimated })
-        assertEquals(2, allThemes.count { it.isLiveAnimated })
+        assertEquals(2, allThemes.size)
+        assertEquals(
+            listOf(
+                com.example.ui.theme.KamAppThemePreset.DARK,
+                com.example.ui.theme.KamAppThemePreset.LIGHT
+            ),
+            allThemes
+        )
+        assertTrue(com.example.ui.theme.KamAppThemePreset.DARK.isDark)
+        assertFalse(com.example.ui.theme.KamAppThemePreset.LIGHT.isDark)
+        // Legacy theme IDs safely resolve to DARK or LIGHT
+        assertEquals(
+            com.example.ui.theme.KamAppThemePreset.LIGHT,
+            com.example.ui.theme.KamAppThemePreset.fromId("MORNING_PEARL")
+        )
+        assertEquals(
+            com.example.ui.theme.KamAppThemePreset.DARK,
+            com.example.ui.theme.KamAppThemePreset.fromId("ROYAL_DARK")
+        )
 
         val allIcons = com.example.ui.theme.KamLauncherIconPreset.entries
-        assertEquals(6, allIcons.size)
-        assertEquals(5, allIcons.count { !it.isLiveIcon })
-        assertEquals(1, allIcons.count { it.isLiveIcon })
-        assertEquals(6, allIcons.map { it.aliasClassName }.distinct().size)
+        assertEquals(1, allIcons.size)
+        assertEquals(com.example.ui.theme.KamLauncherIconPreset.BETHLEHEM_STAR, allIcons.first())
     }
 
     @Test

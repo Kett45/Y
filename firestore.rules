@@ -1,16 +1,17 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Global Safety Net: Default-deny catch-all
-    match /{document=**} {
-      allow read, write: if false;
-    }
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
 
-    // --- GLOBAL PRIMITIVE HELPERS ---
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
     }
 
     function incoming() {
@@ -21,121 +22,186 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function isValidId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    function isDocOwner(userId) {
+      return isSignedIn() && uid() == userId;
     }
 
-    function isBoundedStringList(arr, minSize, maxSize) {
-      return arr is list &&
-             arr.size() >= minSize &&
-             arr.size() <= maxSize &&
-             (arr.size() == 0 || (arr[0] is string && arr[0].size() <= 128));
+    function isNonEmptyString(val, maxLen) {
+      return val is string && val.size() > 0 && val.size() <= maxLen;
     }
 
-    // Group membership & role helpers evaluated against the authoritative /groups/{groupId} document
-    function groupDoc(groupId) {
-      return get(/databases/$(database)/documents/groups/$(groupId));
+    function isOptionalString(val, maxLen) {
+      return val is string && val.size() <= maxLen;
     }
 
-    function groupExists(groupId) {
-      return exists(/databases/$(database)/documents/groups/$(groupId));
+    function isBoundedStringList(listVal, minSize, maxSize) {
+      return listVal is list && listVal.size() >= minSize && listVal.size() <= maxSize;
     }
 
-    function isGroupAdmin(groupId) {
-      return isSignedIn() &&
-             groupExists(groupId) &&
-             groupDoc(groupId).data.adminId == request.auth.uid;
+    function isValidNumberPos(val) {
+      return (val is int || val is float) && val >= -1000000 && val <= 100000000;
     }
 
+    // Group membership lookup on the parent /groups/{groupId} document.
+    // Every member whose UID is in groups/{groupId}.memberUids (or adminId) has full shared access
+    // to all students, blocks, cardEvents, monthlyBalances, and invitations in that group—
+    // even if a child or block was created before a new servant joined!
     function isGroupMember(groupId) {
       return isSignedIn() &&
-             groupExists(groupId) &&
-             (!('bannedUids' in groupDoc(groupId).data) || !(request.auth.uid in groupDoc(groupId).data.bannedUids)) &&
-             (request.auth.uid in groupDoc(groupId).data.memberUids ||
-              groupDoc(groupId).data.adminId == request.auth.uid);
+        exists(/databases/$(database)/documents/groups/$(groupId)) &&
+        (
+          uid() in get(/databases/$(database)/documents/groups/$(groupId)).data.memberUids ||
+          get(/databases/$(database)/documents/groups/$(groupId)).data.adminId == uid()
+        );
+    }
+
+    // Admin check on the parent /groups/{groupId} document.
+    // Delete operations on students and blocks are strictly restricted to the Group Admin.
+    function isGroupAdmin(groupId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/groups/$(groupId)) &&
+        get(/databases/$(database)/documents/groups/$(groupId)).data.adminId == uid();
     }
 
     function groupAllowsServantUndo(groupId) {
-      return groupExists(groupId) &&
-             groupDoc(groupId).data.allowServantUndo == true;
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/groups/$(groupId)) &&
+        get(/databases/$(database)/documents/groups/$(groupId)).data.allowServantUndo == true;
     }
 
-    // --- ENTITY VALIDATION BLUEPRINTS ---
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
 
     function isValidUserProfile(data) {
-      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
-             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
-             data.email is string && data.email.size() >= 1 && data.email.size() <= 150 &&
-             data.groupId is string && data.groupId.size() <= 128 &&
-             isBoundedStringList(data.enabledCards, 0, 7) &&
-             (!('joinedGroupIds' in data) || isBoundedStringList(data.joinedGroupIds, 0, 20)) &&
-             (!('collapsedBlockIds' in data) || isBoundedStringList(data.collapsedBlockIds, 0, 50)) &&
-             (!('hiddenBlockIds' in data) || isBoundedStringList(data.hiddenBlockIds, 0, 50)) &&
-             (!('compactViewMode' in data) || data.compactViewMode is bool) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+      return data.keys().hasAll([
+          'userId', 'displayName', 'email', 'groupId',
+          'enabledCards', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'displayName', 'email', 'groupId', 'joinedGroupIds',
+          'enabledCards', 'collapsedBlockIds', 'hiddenBlockIds',
+          'compactViewMode', 'themeId', 'uiScaleMode', 'uiScaleFactor',
+          'showFloatingAddButton', 'createdAt', 'updatedAt'
+        ]) &&
+        data.userId == uid() &&
+        isNonEmptyString(data.displayName, 80) &&
+        isOptionalString(data.email, 150) &&
+        isOptionalString(data.groupId, 40) &&
+        (!('joinedGroupIds' in data) || isBoundedStringList(data.joinedGroupIds, 0, 25)) &&
+        isBoundedStringList(data.enabledCards, 0, 7) &&
+        (!('collapsedBlockIds' in data) || isBoundedStringList(data.collapsedBlockIds, 0, 50)) &&
+        (!('hiddenBlockIds' in data) || isBoundedStringList(data.hiddenBlockIds, 0, 50)) &&
+        (!('compactViewMode' in data) || data.compactViewMode is bool) &&
+        (!('themeId' in data) || isOptionalString(data.themeId, 40)) &&
+        (!('uiScaleMode' in data) || isOptionalString(data.uiScaleMode, 20)) &&
+        (!('uiScaleFactor' in data) || ((data.uiScaleFactor is int || data.uiScaleFactor is float) && data.uiScaleFactor >= 0.5 && data.uiScaleFactor <= 2.0)) &&
+        (!('showFloatingAddButton' in data) || data.showFloatingAddButton is bool) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
     }
 
-    function isValidGroup(data) {
-      return data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 20 &&
-             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
-             data.adminId is string && data.adminId.size() >= 1 && data.adminId.size() <= 128 &&
-             data.adminName is string && data.adminName.size() >= 1 && data.adminName.size() <= 100 &&
-             isBoundedStringList(data.memberUids, 1, 10) &&
-             data.allowServantUndo is bool &&
-             data.enforceWeeklyCardLimit is bool &&
-             data.maxMonthlyPoints is int && data.maxMonthlyPoints >= 0 && data.maxMonthlyPoints <= 10000 &&
-             data.attendanceIsCardOnly is bool &&
-             data.showLeaderboard is bool &&
-             data.autoStudentNumber is bool &&
-             (!('bannedUids' in data) || isBoundedStringList(data.bannedUids, 0, 50)) &&
-             (!('bannedServantEntries' in data) || isBoundedStringList(data.bannedServantEntries, 0, 50)) &&
-             (!('dailyInviteToken' in data) || (data.dailyInviteToken is string && data.dailyInviteToken.size() <= 16)) &&
-             (!('inviteCodeUpdatedAtMillis' in data) || (data.inviteCodeUpdatedAtMillis is int && data.inviteCodeUpdatedAtMillis >= 0 && data.inviteCodeUpdatedAtMillis <= 9999999999999)) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    function isValidGroup(data, groupId) {
+      return data.keys().hasAll([
+          'inviteCode', 'name', 'adminId', 'adminName', 'memberUids',
+          'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
+          'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'inviteCode', 'name', 'adminId', 'adminName', 'memberUids',
+          'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
+          'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
+          'bannedUids', 'bannedServantEntries', 'dailyInviteToken', 'inviteCodeUpdatedAtMillis',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.inviteCode == groupId &&
+        isNonEmptyString(data.inviteCode, 20) &&
+        isNonEmptyString(data.name, 80) &&
+        isNonEmptyString(data.adminId, 64) &&
+        isNonEmptyString(data.adminName, 80) &&
+        isBoundedStringList(data.memberUids, 1, 10) &&
+        data.adminId in data.memberUids &&
+        data.allowServantUndo is bool &&
+        data.enforceWeeklyCardLimit is bool &&
+        data.maxMonthlyPoints is int && data.maxMonthlyPoints >= 0 && data.maxMonthlyPoints <= 5000 &&
+        data.attendanceIsCardOnly is bool &&
+        data.showLeaderboard is bool &&
+        data.autoStudentNumber is bool &&
+        (!('bannedUids' in data) || isBoundedStringList(data.bannedUids, 0, 50)) &&
+        (!('bannedServantEntries' in data) || isBoundedStringList(data.bannedServantEntries, 0, 50)) &&
+        (!('dailyInviteToken' in data) || isOptionalString(data.dailyInviteToken, 16)) &&
+        (!('inviteCodeUpdatedAtMillis' in data) || (data.inviteCodeUpdatedAtMillis is int && data.inviteCodeUpdatedAtMillis >= 0)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
     }
 
-    function isValidInvitation(data) {
-      return data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
-             data.groupName is string && data.groupName.size() >= 1 && data.groupName.size() <= 100 &&
-             data.adminId is string && data.adminId.size() >= 1 && data.adminId.size() <= 128 &&
-             data.inviteeName is string && data.inviteeName.size() >= 1 && data.inviteeName.size() <= 100 &&
-             data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 32 &&
-             data.status is string && data.status in ['PENDING', 'ACCEPTED', 'REJECTED'] &&
-             data.acceptedByUid is string && data.acceptedByUid.size() <= 128 &&
-             (!('memberUids' in data) || isBoundedStringList(data.memberUids, 0, 10)) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    function isValidInvitation(data, groupId) {
+      return data.keys().hasAll([
+          'groupId', 'groupName', 'adminId', 'inviteeName', 'inviteCode',
+          'status', 'acceptedByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'groupId', 'groupName', 'adminId', 'inviteeName', 'inviteCode',
+          'status', 'acceptedByUid', 'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        data.groupId == groupId &&
+        isNonEmptyString(data.groupName, 80) &&
+        isNonEmptyString(data.adminId, 64) &&
+        isNonEmptyString(data.inviteeName, 80) &&
+        data.inviteCode == groupId &&
+        data.status in ['PENDING', 'ACCEPTED', 'REJECTED'] &&
+        isOptionalString(data.acceptedByUid, 64) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
     }
 
-    function isValidServantBlock(data) {
-      return data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
-             data.servantId is string && data.servantId.size() <= 128 &&
-             data.servantName is string && data.servantName.size() >= 1 && data.servantName.size() <= 100 &&
-             data.colorHex is string && data.colorHex.size() >= 1 && data.colorHex.size() <= 30 &&
-             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 10000 &&
-             (!('memberUids' in data) || isBoundedStringList(data.memberUids, 0, 10)) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    function isValidServantBlock(data, groupId) {
+      return data.keys().hasAll([
+          'groupId', 'servantId', 'servantName', 'colorHex',
+          'sortOrder', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'groupId', 'servantId', 'servantName', 'colorHex',
+          'sortOrder', 'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        data.groupId == groupId &&
+        isOptionalString(data.servantId, 64) &&
+        isNonEmptyString(data.servantName, 80) &&
+        isNonEmptyString(data.colorHex, 24) &&
+        data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 500 &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
     }
 
-    function isValidStudent(data) {
-      return data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
-             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
-             data.studentNumber is int && data.studentNumber >= 1 && data.studentNumber <= 9999 &&
-             data.blockId is string && data.blockId.size() <= 128 &&
-             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 100000 &&
-             (!('position' in data) || ((data.position is int || data.position is float) && data.position >= -100000000 && data.position <= 100000000)) &&
-             data.avatarInitials is string && data.avatarInitials.size() >= 1 && data.avatarInitials.size() <= 10 &&
-             (!('avatarBase64' in data) || (data.avatarBase64 is string && data.avatarBase64.size() <= 50000)) &&
-             data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
-             (!('memberUids' in data) || isBoundedStringList(data.memberUids, 0, 10)) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    function isValidStudent(data, groupId) {
+      return data.keys().hasAll([
+          'groupId', 'name', 'studentNumber', 'blockId',
+          'sortOrder', 'avatarInitials', 'createdByUid',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'groupId', 'name', 'studentNumber', 'blockId',
+          'sortOrder', 'position', 'avatarInitials', 'avatarBase64', 'createdByUid',
+          'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        data.groupId == groupId &&
+        isNonEmptyString(data.name, 100) &&
+        data.studentNumber is int && data.studentNumber >= 1 && data.studentNumber <= 2000 &&
+        isOptionalString(data.blockId, 80) &&
+        data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 5000 &&
+        (!('position' in data) || isValidNumberPos(data.position)) &&
+        isOptionalString(data.avatarInitials, 10) &&
+        (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 50000)) &&
+        isNonEmptyString(data.createdByUid, 64) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
     }
 
-    function isValidCardPoints(cardType, points) {
+    function isValidCardPointsPair(cardType, points) {
       return (cardType == 'ATTENDANCE' && points == 3) ||
              (cardType == 'QUIET' && points == 5) ||
              (cardType == 'PARTICIPATION' && points == 2) ||
@@ -145,360 +211,179 @@ service cloud.firestore {
              (cardType == 'CONFESSION' && points == 4);
     }
 
-    function isValidCardEvent(data) {
-      return data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
-             data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
-             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
-             data.cardType is string && data.cardType in ['ATTENDANCE', 'QUIET', 'PARTICIPATION', 'PRAISE', 'GOLD', 'MEMORIZATION', 'CONFESSION'] &&
-             data.points is int && isValidCardPoints(data.cardType, data.points) &&
-             data.servantId is string && data.servantId.size() >= 1 && data.servantId.size() <= 128 &&
-             data.servantName is string && data.servantName.size() >= 1 && data.servantName.size() <= 100 &&
-             data.monthKey is string && data.monthKey.size() == 7 && data.monthKey.matches('^[0-9]{4}-[0-9]{2}$') &&
-             data.weekKey is string && data.weekKey.size() >= 6 && data.weekKey.size() <= 15 &&
-             (!('memberUids' in data) || isBoundedStringList(data.memberUids, 0, 10)) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    function isValidCardEvent(data, groupId) {
+      return data.keys().hasAll([
+          'groupId', 'studentId', 'studentName', 'cardType', 'points',
+          'servantId', 'servantName', 'monthKey', 'weekKey',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'groupId', 'studentId', 'studentName', 'cardType', 'points',
+          'servantId', 'servantName', 'monthKey', 'weekKey',
+          'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        data.groupId == groupId &&
+        isNonEmptyString(data.studentId, 80) &&
+        isNonEmptyString(data.studentName, 100) &&
+        isValidCardPointsPair(data.cardType, data.points) &&
+        isNonEmptyString(data.servantId, 64) &&
+        isNonEmptyString(data.servantName, 80) &&
+        isNonEmptyString(data.monthKey, 12) &&
+        isNonEmptyString(data.weekKey, 16) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
     }
 
-    function isValidMonthlyBalance(data) {
-      return data.groupId is string && data.groupId.size() >= 1 && data.groupId.size() <= 128 &&
-             data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
-             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 100 &&
-             data.monthKey is string && data.monthKey.size() == 7 && data.monthKey.matches('^[0-9]{4}-[0-9]{2}$') &&
-             data.totalPoints is int && data.totalPoints >= 0 && data.totalPoints <= 100000 &&
-             data.eventsCount is int && data.eventsCount >= 0 && data.eventsCount <= 10000 &&
-             data.lastUpdatedByUid is string && data.lastUpdatedByUid.size() >= 1 && data.lastUpdatedByUid.size() <= 128 &&
-             (!('memberUids' in data) || isBoundedStringList(data.memberUids, 0, 10)) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    function isValidMonthlyBalance(data, groupId) {
+      return data.keys().hasAll([
+          'groupId', 'studentId', 'studentName', 'monthKey',
+          'totalPoints', 'eventsCount', 'lastUpdatedByUid',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'groupId', 'studentId', 'studentName', 'monthKey',
+          'totalPoints', 'eventsCount', 'lastUpdatedByUid',
+          'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        data.groupId == groupId &&
+        isNonEmptyString(data.studentId, 80) &&
+        isNonEmptyString(data.studentName, 100) &&
+        isNonEmptyString(data.monthKey, 12) &&
+        data.totalPoints is int && data.totalPoints >= 0 && data.totalPoints <= 100000 &&
+        data.eventsCount is int && data.eventsCount >= 0 && data.eventsCount <= 10000 &&
+        isNonEmptyString(data.lastUpdatedByUid, 64) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
     }
 
-    // --- COLLECTION 1: /users/{userId} (Owner-Isolated PII & Personal Preferences ONLY) ---
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // 1. User Profiles (Strict Owner Isolation for PII & Personal Preferences)
     match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-
-      allow create: if isSignedIn() &&
-                       isValidId(userId) &&
-                       request.auth.uid == userId &&
-                       incoming().userId == request.auth.uid &&
-                       incoming().keys().hasAll(['userId', 'displayName', 'email', 'groupId', 'enabledCards', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly([
-                         'userId', 'displayName', 'email', 'groupId', 'joinedGroupIds',
-                         'enabledCards', 'collapsedBlockIds', 'hiddenBlockIds', 'compactViewMode',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidUserProfile(incoming());
-
-      allow update: if isSignedIn() &&
-                       isValidId(userId) &&
-                       isValidUserProfile(incoming()) &&
-                       request.auth.uid == userId &&
-                       incoming().userId == existing().userId &&
-                       incoming().email == existing().email &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'displayName', 'groupId', 'joinedGroupIds',
-                         'enabledCards', 'collapsedBlockIds', 'hiddenBlockIds', 'compactViewMode',
-                         'updatedAt'
-                       ]);
-
-      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
-
-      // Legacy user-scoped data read/cleanup ONLY for migrating old personal records to group level
-      match /{legacyCollection}/{docId} {
-        allow get, list: if isSignedIn() &&
-                            isValidId(userId) &&
-                            request.auth.uid == userId &&
-                            legacyCollection in ['students', 'blocks', 'cardEvents'];
-        allow delete: if isSignedIn() &&
-                         isValidId(userId) &&
-                         isValidId(docId) &&
-                         request.auth.uid == userId &&
-                         legacyCollection in ['students', 'blocks', 'cardEvents'];
-      }
+      allow get: if isDocOwner(userId);
+      allow list: if false;
+      allow create: if isDocOwner(userId) && isValidUserProfile(incoming());
+      allow update: if isDocOwner(userId) &&
+        isValidUserProfile(incoming()) &&
+        (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt);
+      allow delete: if isDocOwner(userId);
     }
 
-    // --- COLLECTION 2: /groups/{groupId} ---
+    // 2. Groups (Admin + up to 6 Servants)
     match /groups/{groupId} {
-      // Any signed-in user knowing the groupId (inviteCode) can fetch the group metadata to join; list is restricted to members
-      allow get: if isSignedIn() && isValidId(groupId);
-      allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+      // Any signed-in user who knows the exact inviteCode (document ID) can fetch the group to join it.
+      allow get: if isSignedIn();
+      // Listing groups is only allowed for groups where the user is already a member.
+      allow list: if isSignedIn() && uid() in existing().memberUids;
 
       allow create: if isSignedIn() &&
-                       isValidId(groupId) &&
-                       incoming().inviteCode == groupId &&
-                       incoming().adminId == request.auth.uid &&
-                       incoming().memberUids.size() == 1 &&
-                       incoming().memberUids[0] == request.auth.uid &&
-                       incoming().keys().hasAll([
-                         'inviteCode', 'name', 'adminId', 'adminName', 'memberUids',
-                         'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
-                         'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'inviteCode', 'name', 'adminId', 'adminName', 'memberUids',
-                         'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
-                         'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
-                         'bannedUids', 'bannedServantEntries', 'dailyInviteToken', 'inviteCodeUpdatedAtMillis',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidGroup(incoming());
+        incoming().adminId == uid() &&
+        isValidGroup(incoming(), groupId);
 
+      // Admin can update group settings & memberUids;
+      // A joining servant can append ONLY their own UID to memberUids (up to 7 members total) if not banned,
+      // or a leaving servant can remove ONLY their own UID from memberUids.
       allow update: if isSignedIn() &&
-                       isValidId(groupId) &&
-                       isValidGroup(incoming()) &&
-                       incoming().inviteCode == existing().inviteCode &&
-                       incoming().adminId == existing().adminId &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().adminId in incoming().memberUids && (
-                         // Action 1: Admin updates group configuration, member list, banned list, or daily invite code
-                         (existing().adminId == request.auth.uid &&
-                          incoming().diff(existing()).affectedKeys().hasOnly([
-                            'name', 'adminName', 'memberUids', 'allowServantUndo',
-                            'enforceWeeklyCardLimit', 'maxMonthlyPoints', 'attendanceIsCardOnly',
-                            'showLeaderboard', 'autoStudentNumber',
-                            'bannedUids', 'bannedServantEntries', 'dailyInviteToken', 'inviteCodeUpdatedAtMillis',
-                            'updatedAt'
-                          ])) ||
-                         // Action 2: Servant self-joins using the inviteCode (bounded to max 7 total members: Admin + 6 Servants, and NOT banned)
-                         (!(request.auth.uid in existing().memberUids) &&
-                          (!('bannedUids' in existing()) || !(request.auth.uid in existing().bannedUids)) &&
-                          existing().memberUids.size() < 7 &&
-                          incoming().memberUids.size() == existing().memberUids.size() + 1 &&
-                          request.auth.uid in incoming().memberUids &&
-                          incoming().memberUids.hasAll(existing().memberUids) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt']))
-                       );
+        isValidGroup(incoming(), groupId) &&
+        incoming().adminId == existing().adminId &&
+        incoming().inviteCode == existing().inviteCode &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          existing().adminId == uid() ||
+          uid() in existing().memberUids ||
+          (
+            uid() in incoming().memberUids &&
+            !('bannedUids' in existing() && uid() in existing().bannedUids) &&
+            incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+            incoming().memberUids.hasAll(existing().memberUids) &&
+            incoming().name == existing().name &&
+            incoming().allowServantUndo == existing().allowServantUndo &&
+            incoming().enforceWeeklyCardLimit == existing().enforceWeeklyCardLimit &&
+            incoming().maxMonthlyPoints == existing().maxMonthlyPoints
+          )
+        );
 
-      // Delete strictly restricted to the Admin (الأمين)
-      allow delete: if isSignedIn() && isValidId(groupId) && existing().adminId == request.auth.uid;
+      allow delete: if isSignedIn() && existing().adminId == uid();
 
-      // --- SUBCOLLECTION 3: /groups/{groupId}/invitations/{invitationId} ---
+      // 2a. Group Invitations
       match /invitations/{invitationId} {
-        allow get: if isSignedIn() && isValidId(groupId) && isValidId(invitationId) &&
-                      existing().groupId == groupId && isGroupMember(groupId);
-        allow list: if isSignedIn() &&
-                       resource.data.groupId == groupId &&
-                       isGroupMember(groupId);
-
-        allow create: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(invitationId) &&
-                         incoming().groupId == groupId &&
-                         incoming().adminId == request.auth.uid &&
-                         incoming().status == 'PENDING' &&
-                         incoming().keys().hasAll([
-                           'groupId', 'groupName', 'adminId', 'inviteeName', 'inviteCode',
-                           'status', 'acceptedByUid', 'createdAt', 'updatedAt'
-                         ]) &&
-                         incoming().keys().hasOnly([
-                           'groupId', 'groupName', 'adminId', 'inviteeName', 'inviteCode',
-                           'status', 'acceptedByUid', 'memberUids', 'createdAt', 'updatedAt'
-                         ]) &&
-                         isValidInvitation(incoming()) &&
-                         isGroupAdmin(groupId);
-
-        allow update: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(invitationId) &&
-                         isValidInvitation(incoming()) &&
-                         incoming().groupId == existing().groupId &&
-                         incoming().adminId == existing().adminId &&
-                         incoming().inviteCode == existing().inviteCode &&
-                         incoming().createdAt == existing().createdAt && (
-                           // Action 1: Admin manages invitation
-                           (isGroupAdmin(groupId) &&
-                            incoming().diff(existing()).affectedKeys().hasOnly([
-                              'inviteeName', 'status', 'acceptedByUid', 'memberUids', 'updatedAt'
-                            ])) ||
-                           // Action 2: Group member accepts/rejects a non-terminal PENDING invitation
-                           (existing().status == 'PENDING' &&
-                            incoming().status in ['ACCEPTED', 'REJECTED'] &&
-                            incoming().acceptedByUid == request.auth.uid &&
-                            isGroupMember(groupId) &&
-                            incoming().diff(existing()).affectedKeys().hasOnly([
-                              'status', 'acceptedByUid', 'memberUids', 'updatedAt'
-                            ]))
-                         );
-
-        allow delete: if isSignedIn() && isValidId(groupId) && isValidId(invitationId) && isGroupAdmin(groupId);
+        allow get, list: if isGroupMember(groupId);
+        allow create: if isGroupAdmin(groupId) && isValidInvitation(incoming(), groupId);
+        allow update: if isGroupMember(groupId) &&
+          isValidInvitation(incoming(), groupId) &&
+          incoming().groupId == existing().groupId &&
+          incoming().adminId == existing().adminId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isGroupAdmin(groupId);
       }
 
-      // --- SUBCOLLECTION 4: /groups/{groupId}/blocks/{blockId} ---
+      // 2b. Servant Blocks
+      // Read/List: Any member of the group (queried by groupId).
+      // Create/Update: Any member of the group.
+      // Delete: Strictly Group Admin ONLY.
       match /blocks/{blockId} {
-        allow get: if isSignedIn() && isValidId(groupId) && isValidId(blockId) &&
-                      existing().groupId == groupId && isGroupMember(groupId);
-        allow list: if isSignedIn() &&
-                       resource.data.groupId == groupId &&
-                       isGroupMember(groupId);
-
-        allow create: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(blockId) &&
-                         incoming().groupId == groupId &&
-                         incoming().keys().hasAll([
-                           'groupId', 'servantId', 'servantName', 'colorHex',
-                           'sortOrder', 'createdAt', 'updatedAt'
-                         ]) &&
-                         incoming().keys().hasOnly([
-                           'groupId', 'servantId', 'servantName', 'colorHex',
-                           'sortOrder', 'memberUids', 'createdAt', 'updatedAt'
-                         ]) &&
-                         isValidServantBlock(incoming()) &&
-                         isGroupMember(groupId);
-
-        allow update: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(blockId) &&
-                         isValidServantBlock(incoming()) &&
-                         incoming().groupId == existing().groupId &&
-                         incoming().createdAt == existing().createdAt &&
-                         isGroupMember(groupId) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly([
-                           'servantId', 'servantName', 'colorHex', 'sortOrder', 'memberUids', 'updatedAt'
-                         ]);
-
-        // Delete strictly restricted to the Admin (الأمين)
-        allow delete: if isSignedIn() && isValidId(groupId) && isValidId(blockId) && isGroupAdmin(groupId);
+        allow get, list: if isGroupMember(groupId);
+        allow create: if isGroupMember(groupId) && isValidServantBlock(incoming(), groupId);
+        allow update: if isGroupMember(groupId) &&
+          isValidServantBlock(incoming(), groupId) &&
+          incoming().groupId == existing().groupId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isGroupAdmin(groupId);
       }
 
-      // --- SUBCOLLECTION 5: /groups/{groupId}/students/{studentId} ---
+      // 2c. Students (Children)
+      // Read/List: Any member of the group (queried by groupId — no stale memberUids array dependency!).
+      // Create/Update: Any member of the group (supports adding, editing, moving blocks, and fractional position).
+      // Delete: Strictly Group Admin ONLY.
       match /students/{studentId} {
-        allow get: if isSignedIn() && isValidId(groupId) && isValidId(studentId) &&
-                      existing().groupId == groupId && isGroupMember(groupId);
-        allow list: if isSignedIn() &&
-                       resource.data.groupId == groupId &&
-                       isGroupMember(groupId);
-
-        allow create: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(studentId) &&
-                         incoming().groupId == groupId &&
-                         incoming().createdByUid == request.auth.uid &&
-                         incoming().keys().hasAll([
-                           'groupId', 'name', 'studentNumber', 'blockId', 'sortOrder',
-                           'avatarInitials', 'createdByUid', 'createdAt', 'updatedAt'
-                         ]) &&
-                         incoming().keys().hasOnly([
-                           'groupId', 'name', 'studentNumber', 'blockId', 'sortOrder', 'position',
-                           'avatarInitials', 'avatarBase64', 'createdByUid', 'memberUids', 'createdAt', 'updatedAt'
-                         ]) &&
-                         isValidStudent(incoming()) &&
-                         isGroupMember(groupId);
-
-        allow update: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(studentId) &&
-                         isValidStudent(incoming()) &&
-                         incoming().groupId == existing().groupId &&
-                         incoming().createdByUid == existing().createdByUid &&
-                         incoming().createdAt == existing().createdAt &&
-                         isGroupMember(groupId) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly([
-                           'name', 'studentNumber', 'blockId', 'sortOrder', 'position',
-                           'avatarInitials', 'avatarBase64', 'memberUids', 'updatedAt'
-                         ]);
-
-        // Delete strictly restricted to the Admin (الأمين)
-        allow delete: if isSignedIn() && isValidId(groupId) && isValidId(studentId) && isGroupAdmin(groupId);
+        allow get, list: if isGroupMember(groupId);
+        allow create: if isGroupMember(groupId) &&
+          isValidStudent(incoming(), groupId);
+        allow update: if isGroupMember(groupId) &&
+          isValidStudent(incoming(), groupId) &&
+          incoming().groupId == existing().groupId &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isGroupAdmin(groupId);
       }
 
-      // --- SUBCOLLECTION 6: /groups/{groupId}/cardEvents/{eventId} ---
+      // 2d. Card Events (7 Approved Cards Audit Log)
+      // Read/List: Any member of the group.
+      // Create/Update: Any member of the group.
+      // Delete (Undo): Group Admin OR Servant who recorded the event when allowServantUndo is enabled.
       match /cardEvents/{eventId} {
-        allow get: if isSignedIn() && isValidId(groupId) && isValidId(eventId) &&
-                      existing().groupId == groupId && isGroupMember(groupId);
-        allow list: if isSignedIn() &&
-                       resource.data.groupId == groupId &&
-                       isGroupMember(groupId);
-
-        allow create: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(eventId) &&
-                         incoming().groupId == groupId &&
-                         incoming().servantId == request.auth.uid &&
-                         incoming().keys().hasAll([
-                           'groupId', 'studentId', 'studentName', 'cardType', 'points',
-                           'servantId', 'servantName', 'monthKey', 'weekKey',
-                           'createdAt', 'updatedAt'
-                         ]) &&
-                         incoming().keys().hasOnly([
-                           'groupId', 'studentId', 'studentName', 'cardType', 'points',
-                           'servantId', 'servantName', 'monthKey', 'weekKey',
-                           'memberUids', 'createdAt', 'updatedAt'
-                         ]) &&
-                         isValidCardEvent(incoming()) &&
-                         isGroupMember(groupId);
-
-        // Allow updating studentId/studentName when merging duplicate student records or idempotent retry by group members
-        allow update: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(eventId) &&
-                         isValidCardEvent(incoming()) &&
-                         incoming().groupId == existing().groupId &&
-                         incoming().cardType == existing().cardType &&
-                         incoming().points == existing().points &&
-                         incoming().servantId == existing().servantId &&
-                         incoming().monthKey == existing().monthKey &&
-                         incoming().weekKey == existing().weekKey &&
-                         isGroupMember(groupId) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly([
-                           'studentId', 'studentName', 'servantName', 'memberUids', 'createdAt', 'updatedAt'
-                         ]);
-
-        // Delete (Undo card): Allowed for Admin always, or for the recording Servant if allowServantUndo is enabled on the group
-        allow delete: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(eventId) && (
-                           isGroupAdmin(groupId) ||
-                           (existing().servantId == request.auth.uid &&
-                            isGroupMember(groupId) &&
-                            groupAllowsServantUndo(groupId))
-                         );
+        allow get, list: if isGroupMember(groupId);
+        allow create: if isGroupMember(groupId) &&
+          incoming().servantId == uid() &&
+          isValidCardEvent(incoming(), groupId);
+        allow update: if isGroupMember(groupId) &&
+          isValidCardEvent(incoming(), groupId) &&
+          incoming().groupId == existing().groupId &&
+          incoming().studentId == existing().studentId &&
+          incoming().cardType == existing().cardType &&
+          incoming().points == existing().points;
+        allow delete: if isGroupAdmin(groupId) ||
+          (
+            isGroupMember(groupId) &&
+            existing().servantId == uid() &&
+            groupAllowsServantUndo(groupId)
+          );
       }
 
-      // --- SUBCOLLECTION 7: /groups/{groupId}/monthlyBalances/{balanceId} ---
+      // 2e. Monthly Balances
       match /monthlyBalances/{balanceId} {
-        allow get: if isSignedIn() && isValidId(groupId) && isValidId(balanceId) &&
-                      existing().groupId == groupId && isGroupMember(groupId);
-        allow list: if isSignedIn() &&
-                       resource.data.groupId == groupId &&
-                       isGroupMember(groupId);
-
-        allow create: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(balanceId) &&
-                         incoming().groupId == groupId &&
-                         incoming().lastUpdatedByUid == request.auth.uid &&
-                         incoming().keys().hasAll([
-                           'groupId', 'studentId', 'studentName', 'monthKey',
-                           'totalPoints', 'eventsCount', 'lastUpdatedByUid',
-                           'createdAt', 'updatedAt'
-                         ]) &&
-                         incoming().keys().hasOnly([
-                           'groupId', 'studentId', 'studentName', 'monthKey',
-                           'totalPoints', 'eventsCount', 'lastUpdatedByUid',
-                           'memberUids', 'createdAt', 'updatedAt'
-                         ]) &&
-                         isValidMonthlyBalance(incoming()) &&
-                         isGroupMember(groupId);
-
-        allow update: if isSignedIn() &&
-                         isValidId(groupId) &&
-                         isValidId(balanceId) &&
-                         isValidMonthlyBalance(incoming()) &&
-                         incoming().groupId == existing().groupId &&
-                         incoming().studentId == existing().studentId &&
-                         incoming().monthKey == existing().monthKey &&
-                         incoming().lastUpdatedByUid == request.auth.uid &&
-                         isGroupMember(groupId) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly([
-                           'studentName', 'totalPoints', 'eventsCount',
-                           'lastUpdatedByUid', 'memberUids', 'createdAt', 'updatedAt'
-                         ]);
-
-        allow delete: if isSignedIn() && isValidId(groupId) && isValidId(balanceId) && isGroupAdmin(groupId);
+        allow get, list: if isGroupMember(groupId);
+        allow create: if isGroupMember(groupId) &&
+          isValidMonthlyBalance(incoming(), groupId);
+        allow update: if isGroupMember(groupId) &&
+          isValidMonthlyBalance(incoming(), groupId) &&
+          incoming().groupId == existing().groupId &&
+          incoming().studentId == existing().studentId &&
+          incoming().monthKey == existing().monthKey;
+        allow delete: if isGroupAdmin(groupId);
       }
     }
   }

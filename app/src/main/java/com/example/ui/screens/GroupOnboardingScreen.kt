@@ -140,6 +140,15 @@ fun GroupOnboardingScreen(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
+                    text = "نجم الكارت v1.6",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
                     text = "إعداد مجموعة الفصل",
                     style = MaterialTheme.typography.headlineLarge,
                     color = MaterialTheme.colorScheme.onBackground

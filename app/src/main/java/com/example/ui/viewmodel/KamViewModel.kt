@@ -8,6 +8,9 @@ import android.net.NetworkRequest
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.cache.CachedClassroomSnapshot
+import com.example.data.cache.LocalClassroomCache
+import com.example.data.cache.LocalUserPreferences
 import com.example.data.model.ArabicInitialsHelper
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
@@ -41,6 +44,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -346,6 +350,13 @@ class KamViewModel(
     val isOnlineFlow: Flow<Boolean> = flowOf(true)
 ) : ViewModel() {
 
+    private val initialCachedSnapshot: CachedClassroomSnapshot? =
+        LocalClassroomCache.getCachedSnapshot(currentUserId)
+
+    private val _localPrefsOverride = MutableStateFlow<LocalUserPreferences?>(
+        LocalClassroomCache.loadUserPreferences(currentUserId).takeIf { it.updatedAtMillis > 0L }
+    )
+
     private val _selectedMonthKey = MutableStateFlow(currentYearMonth())
     private val _selectedWeekKey = MutableStateFlow<String?>(currentYearWeek())
     private val _searchQuery = MutableStateFlow("")
@@ -361,8 +372,10 @@ class KamViewModel(
     private val recentTapTimestamps = mutableMapOf<String, Long>()
     private var lastMigratedGroupKey: String = ""
     private var lastSyncedSequenceSignature: String = ""
+    private var lastSavedCacheSignature: String = ""
     private var lastAutoRotatedGroupKey: String = ""
     private var lastEjectedBannedGroupId: String = ""
+    private var hasSeededPrefsFromCloud: Boolean = false
     private var bannerJob: Job? = null
 
     init {
@@ -379,7 +392,9 @@ class KamViewModel(
                 Log.d(TAG, "[Step 4] User profile ready: uid=${profile.userId}, groupId='${profile.groupId}'")
             }.onFailure { err ->
                 Log.w(TAG, "[Step 4] Profile initialization failed: ${err.javaClass.simpleName} - ${err.message}", err)
-                _operationError.value = err.localizedMessage ?: "تعذر تهيئة حساب الخادم"
+                if (initialCachedSnapshot == null) {
+                    _operationError.value = err.localizedMessage ?: "تعذر تهيئة حساب الخادم"
+                }
             }
         }
     }
@@ -387,18 +402,41 @@ class KamViewModel(
     private val userProfileFlow: Flow<UserProfile?> = repository.observeUserProfile(currentUserId)
         .map { profile ->
             Log.d(TAG, "[Step 4] observeUserProfile emitted: exists=${profile != null}, groupId='${profile?.groupId.orEmpty()}'")
+            if (profile != null && !hasSeededPrefsFromCloud) {
+                hasSeededPrefsFromCloud = true
+                val existingLocal = _localPrefsOverride.value
+                val mergedPrefs = LocalUserPreferences(
+                    enabledCards = existingLocal?.enabledCards ?: profile.enabledCards.ifEmpty { CardType.defaultEnabledIds },
+                    collapsedBlockIds = existingLocal?.collapsedBlockIds ?: profile.collapsedBlockIds,
+                    hiddenBlockIds = existingLocal?.hiddenBlockIds ?: profile.hiddenBlockIds,
+                    themeId = profile.themeId.ifBlank { existingLocal?.themeId ?: "DARK" },
+                    uiScaleMode = profile.uiScaleMode.ifBlank { existingLocal?.uiScaleMode ?: "AUTO" },
+                    uiScaleFactor = profile.uiScaleFactor.toFloat().takeIf { it in 0.70f..1.30f }
+                        ?: existingLocal?.uiScaleFactor ?: 0.85f,
+                    showFloatingAddButton = profile.showFloatingAddButton,
+                    activeGroupId = profile.groupId
+                )
+                _localPrefsOverride.value = mergedPrefs
+                LocalClassroomCache.saveUserPreferences(currentUserId, mergedPrefs)
+            }
             profile
+        }
+        .onStart {
+            initialCachedSnapshot?.userProfile?.let { emit(it) }
         }
         .catch { err ->
             Log.w(TAG, "[Step 4] Error observing userProfile: ${err.javaClass.simpleName} - ${err.message}", err)
-            _operationError.value = err.localizedMessage
-            emit(null)
+            if (initialCachedSnapshot == null) {
+                _operationError.value = err.localizedMessage
+            }
+            emit(initialCachedSnapshot?.userProfile)
         }
 
     private val userGroupsFlow: Flow<List<Group>> = repository.observeUserGroups(currentUserId)
+        .onStart { emit(initialCachedSnapshot?.userGroups.orEmpty()) }
         .catch { err ->
             Log.w(TAG, "Error observing userGroups", err)
-            emit(emptyList())
+            emit(initialCachedSnapshot?.userGroups.orEmpty())
         }
 
     private val activeGroupIdFlow: Flow<String> = userProfileFlow
@@ -411,10 +449,12 @@ class KamViewModel(
             flowOf(null)
         } else {
             Log.d(TAG, "[Step 4] Observing group document for groupId=$groupId")
+            val cachedGroup = initialCachedSnapshot?.group?.takeIf { it.inviteCode == groupId }
             repository.observeGroup(groupId)
+                .onStart { if (cachedGroup != null) emit(cachedGroup) }
                 .catch { err ->
                     Log.w(TAG, "[Step 4] Error observing group ($groupId): ${err.javaClass.simpleName} - ${err.message}", err)
-                    emit(null)
+                    emit(cachedGroup)
                 }
         }
     }
@@ -423,10 +463,12 @@ class KamViewModel(
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
+            val cachedBlocks = initialCachedSnapshot?.blocks.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeBlocks(groupId, currentUserId)
+                .onStart { emit(cachedBlocks) }
                 .catch { err ->
                     Log.w(TAG, "Error observing blocks", err)
-                    emit(emptyList())
+                    emit(cachedBlocks)
                 }
         }
     }
@@ -435,10 +477,12 @@ class KamViewModel(
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
+            val cachedStudents = initialCachedSnapshot?.students.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeStudents(groupId, currentUserId)
+                .onStart { emit(cachedStudents) }
                 .catch { err ->
                     Log.w(TAG, "Error observing students", err)
-                    emit(emptyList())
+                    emit(cachedStudents)
                 }
         }
     }
@@ -448,6 +492,7 @@ class KamViewModel(
             flowOf(emptyList())
         } else {
             repository.observeInvitations(groupId, currentUserId)
+                .onStart { emit(emptyList()) }
                 .catch { err ->
                     Log.w(TAG, "Error observing invitations", err)
                     emit(emptyList())
@@ -459,10 +504,12 @@ class KamViewModel(
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
+            val cachedEvents = initialCachedSnapshot?.cardEvents.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeAllCardEventsForGroup(groupId, currentUserId)
+                .onStart { emit(cachedEvents) }
                 .catch { err ->
                     Log.w(TAG, "Error observing allCardEvents", err)
-                    emit(emptyList())
+                    emit(cachedEvents)
                 }
         }
     }
@@ -472,6 +519,7 @@ class KamViewModel(
             flowOf(false)
         } else {
             repository.observeHasPendingWrites(groupId, currentUserId)
+                .onStart { emit(false) }
         }
     }
 
@@ -479,17 +527,19 @@ class KamViewModel(
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
+            val cachedBalances = initialCachedSnapshot?.monthlyBalances.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeAllMonthlyBalancesForGroup(groupId, currentUserId)
+                .onStart { emit(cachedBalances) }
                 .catch { err ->
                     Log.w(TAG, "Error observing allMonthlyBalances", err)
-                    emit(emptyList())
+                    emit(cachedBalances)
                 }
         }
     }
 
     val uiState: StateFlow<KamScreenState> = combine(
-        combine(userProfileFlow, groupFlow, userGroupsFlow, blocksFlow) { profile, group, userGroups, blocks ->
-            arrayOf<Any?>(profile, group, userGroups, blocks)
+        combine(userProfileFlow, groupFlow, userGroupsFlow, blocksFlow, _localPrefsOverride) { profile, group, userGroups, blocks, localPrefs ->
+            arrayOf<Any?>(profile, group, userGroups, blocks, localPrefs)
         },
         combine(studentsFlow, allCardEventsFlow, allMonthlyBalancesFlow, invitationsFlow) { students, allEvents, allBalances, invites ->
             arrayOf<Any?>(students, allEvents, allBalances, invites)
@@ -508,12 +558,29 @@ class KamViewModel(
             )
         }
     ) { groupArr, dataArr, metaArr ->
-        val profile = groupArr[0] as UserProfile?
+        val rawProfile = groupArr[0] as UserProfile?
         val group = groupArr[1] as Group?
         @Suppress("UNCHECKED_CAST")
         val userGroups = groupArr[2] as List<Group>
         @Suppress("UNCHECKED_CAST")
         val blocks = groupArr[3] as List<ServantBlock>
+        val localPrefs = groupArr[4] as LocalUserPreferences?
+
+        val profile = rawProfile?.let { base ->
+            if (localPrefs != null) {
+                base.copy(
+                    enabledCards = localPrefs.enabledCards,
+                    collapsedBlockIds = localPrefs.collapsedBlockIds,
+                    hiddenBlockIds = localPrefs.hiddenBlockIds,
+                    themeId = localPrefs.themeId,
+                    uiScaleMode = localPrefs.uiScaleMode,
+                    uiScaleFactor = localPrefs.uiScaleFactor.toDouble(),
+                    showFloatingAddButton = localPrefs.showFloatingAddButton
+                )
+            } else {
+                base
+            }
+        }
 
         @Suppress("UNCHECKED_CAST")
         val rawStudents = dataArr[0] as List<Student>
@@ -569,17 +636,24 @@ class KamViewModel(
             }
         }
 
-        // Migrate any legacy user-scoped documents & normalize missing groupId/position fields once per active group
+        // Migrate any legacy user-scoped documents & normalize missing groupId/position fields ONCE ever per group
         val migrationKey = "${activeGroup?.inviteCode.orEmpty()}_${activeGroup?.memberUids?.size ?: 0}"
-        if (activeGroup != null && migrationKey != lastMigratedGroupKey && currentUserId in activeGroup.memberUids) {
+        if (
+            activeGroup != null &&
+            migrationKey != lastMigratedGroupKey &&
+            currentUserId in activeGroup.memberUids &&
+            !LocalClassroomCache.isGroupMigrationCompleted(activeGroup.inviteCode)
+        ) {
             lastMigratedGroupKey = migrationKey
             viewModelScope.launch {
                 repository.migrateAndNormalizeGroupData(activeGroup.inviteCode, currentUserId, activeGroup.memberUids)
+                    .onSuccess {
+                        LocalClassroomCache.markGroupMigrationCompleted(activeGroup.inviteCode)
+                    }
             }
         }
 
         // Compute global sequential student numbering (1, 2, 3, 4...) across the entire group
-        // so moving any student immediately updates its sequential number and keeps 1..N order.
         val sequentiallyNumberedStudents = computeSequentiallyNumberedStudents(rawStudents, blocks)
 
         if (activeGroup != null && currentUserId in activeGroup.memberUids && rawStudents.isNotEmpty()) {
@@ -602,6 +676,24 @@ class KamViewModel(
                         waitForServerAck = false
                     )
                 }
+            }
+        }
+
+        // Save classroom snapshot locally on device whenever data changes so next app launch is 0ms
+        if (profile != null) {
+            val cacheSig = "${profile.groupId}_${activeGroup?.inviteCode}_${blocks.size}_${sequentiallyNumberedStudents.size}_${allEvents.size}_${profile.enabledCards.joinToString(",")}_${profile.collapsedBlockIds.joinToString(",")}_${profile.hiddenBlockIds.joinToString(",")}_${profile.themeId}_${profile.uiScaleMode}_${profile.uiScaleFactor}_${profile.showFloatingAddButton}"
+            if (cacheSig != lastSavedCacheSignature) {
+                lastSavedCacheSignature = cacheSig
+                LocalClassroomCache.saveClassroomSnapshot(
+                    userId = currentUserId,
+                    userProfile = profile,
+                    group = activeGroup,
+                    userGroups = userGroups,
+                    blocks = blocks,
+                    students = sequentiallyNumberedStudents,
+                    cardEvents = allEvents,
+                    monthlyBalances = allBalances
+                )
             }
         }
 
@@ -639,10 +731,10 @@ class KamViewModel(
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000L),
-            initialValue = KamScreenState(
-                selectedMonthKey = currentYearMonth(),
-                selectedWeekKey = currentYearWeek(),
-                currentWeekKey = currentYearWeek()
+            initialValue = buildInitialStateFromCache(
+                cached = initialCachedSnapshot,
+                localPrefs = _localPrefsOverride.value,
+                currentUserId = currentUserId
             )
         )
 
@@ -852,44 +944,67 @@ class KamViewModel(
         }
     }
 
-    // --- Personal Block Collapse & Hide Preferences (Saved per User in users/{uid}) ---
+    // --- Personal Block Collapse & Hide Preferences (Saved per User Locally + in users/{uid}) ---
+
+    private fun currentEffectiveLocalPrefs(): LocalUserPreferences {
+        _localPrefsOverride.value?.let { return it }
+        val profile = uiState.value.userProfile
+        return LocalUserPreferences(
+            enabledCards = profile?.enabledCards ?: CardType.defaultEnabledIds,
+            collapsedBlockIds = profile?.collapsedBlockIds ?: emptyList(),
+            hiddenBlockIds = profile?.hiddenBlockIds ?: emptyList(),
+            themeId = profile?.themeId ?: "DARK",
+            uiScaleMode = profile?.uiScaleMode ?: "AUTO",
+            uiScaleFactor = (profile?.uiScaleFactor ?: 0.85).toFloat(),
+            showFloatingAddButton = profile?.showFloatingAddButton ?: true,
+            activeGroupId = profile?.groupId.orEmpty()
+        )
+    }
 
     fun toggleBlockCollapsed(blockId: String) {
-        val profile = uiState.value.userProfile ?: return
-        val currentCollapsed = profile.collapsedBlockIds
+        val prefs = currentEffectiveLocalPrefs()
+        val currentCollapsed = prefs.collapsedBlockIds
         val updatedCollapsed = if (blockId in currentCollapsed) {
             currentCollapsed.filter { it != blockId }
         } else {
             (currentCollapsed + blockId).distinct()
         }
+        val nextPrefs = prefs.copy(collapsedBlockIds = updatedCollapsed)
+        _localPrefsOverride.value = nextPrefs
+        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
+
         viewModelScope.launch {
             repository.updatePersonalBlockPreferences(
                 collapsedBlockIds = updatedCollapsed,
-                hiddenBlockIds = profile.hiddenBlockIds
+                hiddenBlockIds = nextPrefs.hiddenBlockIds
             )
         }
     }
 
     fun toggleBlockHidden(blockId: String) {
-        val profile = uiState.value.userProfile ?: return
-        val currentHidden = profile.hiddenBlockIds
+        val prefs = currentEffectiveLocalPrefs()
+        val currentHidden = prefs.hiddenBlockIds
         val updatedHidden = if (blockId in currentHidden) {
             currentHidden.filter { it != blockId }
         } else {
             (currentHidden + blockId).distinct()
         }
+        val nextPrefs = prefs.copy(hiddenBlockIds = updatedHidden)
+        _localPrefsOverride.value = nextPrefs
+        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
+
+        val blockName = uiState.value.blocks.find { it.id == blockId }?.servantName ?: "البلوك"
+        if (blockId in updatedHidden) {
+            showBanner("تم إخفاء بلوك '$blockName' من شاشتك الشخصية وحفظ التفضيل في حسابك")
+        } else {
+            showBanner("تم إظهار بلوك '$blockName' في شاشتك الشخصية وحفظ التفضيل في حسابك")
+        }
+
         viewModelScope.launch {
             repository.updatePersonalBlockPreferences(
-                collapsedBlockIds = profile.collapsedBlockIds,
+                collapsedBlockIds = nextPrefs.collapsedBlockIds,
                 hiddenBlockIds = updatedHidden
-            ).onSuccess {
-                val blockName = uiState.value.blocks.find { it.id == blockId }?.servantName ?: "البلوك"
-                if (blockId in updatedHidden) {
-                    showBanner("تم إخفاء بلوك '$blockName' من شاشتك الشخصية فقط")
-                } else {
-                    showBanner("تم إظهار بلوك '$blockName' في شاشتك الشخصية")
-                }
-            }
+            )
         }
     }
 
@@ -1439,10 +1554,11 @@ class KamViewModel(
         }
     }
 
-    // --- Personal Card Visibility & Group Policies ---
+    // --- Personal Card Visibility, Appearance & Group Policies ---
 
     fun toggleCardVisibility(cardType: CardType, enabled: Boolean) {
-        val current = uiState.value.userProfile?.enabledCards ?: CardType.defaultEnabledIds
+        val prefs = currentEffectiveLocalPrefs()
+        val current = prefs.enabledCards.ifEmpty { CardType.defaultEnabledIds }
         val updated = if (enabled) {
             (current + cardType.id).distinct()
         } else {
@@ -1453,8 +1569,39 @@ class KamViewModel(
             }
             remaining
         }
+        // Update in-memory and local disk cache in 0ms so the switch NEVER reverts when navigating between screens
+        val nextPrefs = prefs.copy(enabledCards = updated)
+        _localPrefsOverride.value = nextPrefs
+        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
+
         viewModelScope.launch {
             repository.updateEnabledCards(updated)
+        }
+    }
+
+    fun syncAppearanceAndScaleToCloud(
+        themeId: String? = null,
+        uiScaleMode: String? = null,
+        uiScaleFactor: Float? = null,
+        showFloatingAddButton: Boolean? = null
+    ) {
+        val prefs = currentEffectiveLocalPrefs()
+        val nextPrefs = prefs.copy(
+            themeId = (themeId ?: prefs.themeId).ifBlank { "DARK" },
+            uiScaleMode = (uiScaleMode ?: prefs.uiScaleMode).ifBlank { "AUTO" },
+            uiScaleFactor = (uiScaleFactor ?: prefs.uiScaleFactor).coerceIn(0.70f, 1.30f),
+            showFloatingAddButton = showFloatingAddButton ?: prefs.showFloatingAddButton
+        )
+        _localPrefsOverride.value = nextPrefs
+        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
+
+        viewModelScope.launch {
+            repository.updateUserAppearanceAndScalePreferences(
+                themeId = nextPrefs.themeId,
+                uiScaleMode = nextPrefs.uiScaleMode,
+                uiScaleFactor = nextPrefs.uiScaleFactor.toDouble(),
+                showFloatingAddButton = nextPrefs.showFloatingAddButton
+            )
         }
     }
 
@@ -1550,6 +1697,55 @@ class KamViewModel(
 
         fun currentYearWeek(): String {
             return SaturdayCalendarHelper.currentWeekKey()
+        }
+
+        fun buildInitialStateFromCache(
+            cached: CachedClassroomSnapshot?,
+            localPrefs: LocalUserPreferences?,
+            currentUserId: String
+        ): KamScreenState {
+            val monthKey = currentYearMonth()
+            val weekKey = currentYearWeek()
+            if (cached == null) {
+                return KamScreenState(
+                    isLoading = true,
+                    selectedMonthKey = monthKey,
+                    selectedWeekKey = weekKey,
+                    currentWeekKey = weekKey
+                )
+            }
+            val effectiveProfile = cached.userProfile.let { base ->
+                if (localPrefs != null) {
+                    base.copy(
+                        enabledCards = localPrefs.enabledCards,
+                        collapsedBlockIds = localPrefs.collapsedBlockIds,
+                        hiddenBlockIds = localPrefs.hiddenBlockIds,
+                        themeId = localPrefs.themeId,
+                        uiScaleMode = localPrefs.uiScaleMode,
+                        uiScaleFactor = localPrefs.uiScaleFactor.toDouble(),
+                        showFloatingAddButton = localPrefs.showFloatingAddButton
+                    )
+                } else {
+                    base
+                }
+            }
+            val activeGroup = cached.group
+            return KamScreenState(
+                isLoading = false,
+                userProfile = effectiveProfile,
+                group = activeGroup,
+                userGroups = cached.userGroups,
+                isAdmin = activeGroup?.adminId == currentUserId,
+                blocks = if (activeGroup == null) emptyList() else cached.blocks,
+                students = if (activeGroup == null) emptyList() else cached.students,
+                cardEvents = if (activeGroup == null) emptyList() else cached.cardEvents.filter { it.monthKey == monthKey },
+                monthlyBalances = if (activeGroup == null) emptyList() else cached.monthlyBalances.filter { it.monthKey == monthKey },
+                allGroupCardEvents = if (activeGroup == null) emptyList() else cached.cardEvents,
+                allGroupMonthlyBalances = if (activeGroup == null) emptyList() else cached.monthlyBalances,
+                selectedMonthKey = monthKey,
+                selectedWeekKey = weekKey,
+                currentWeekKey = weekKey
+            )
         }
 
         /**

@@ -261,6 +261,9 @@ val Icons.Filled.LockOpen: ImageVector
 val Icons.Filled.NotificationsActive: ImageVector
     get() = Icons.Default.Notifications
 
+val Icons.Filled.Palette: ImageVector
+    get() = Icons.Default.Star
+
 val Icons.Filled.PersonAdd: ImageVector
     get() = Icons.Default.Add
 

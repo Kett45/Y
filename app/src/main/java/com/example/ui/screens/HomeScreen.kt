@@ -665,9 +665,8 @@ private fun HomeTopControlCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 1. Group Name (compact single line)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
+                // 1. Group Name + App Name & Version (compact header)
+                Column(
                     modifier = Modifier.weight(1f, fill = false)
                 ) {
                     Text(
@@ -677,6 +676,13 @@ private fun HomeTopControlCard(
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "نجم الكارت v1.6",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
                 }
 

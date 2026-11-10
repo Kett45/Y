@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "kAM Lite"
+rootProject.name = "نجم الكارت v1.6"
 
 include(":app")

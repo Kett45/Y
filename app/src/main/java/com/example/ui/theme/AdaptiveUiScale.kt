@@ -11,11 +11,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Density
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 enum class UiScaleMode {
     AUTO,
-    MANUAL
+    MANUAL;
+
+    companion object {
+        fun fromString(raw: String?): UiScaleMode {
+            if (raw.isNullOrBlank()) return AUTO
+            return entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: AUTO
+        }
+    }
 }
 
 @Stable
@@ -32,6 +40,8 @@ class UiScaleController(
     var manualScaleFactor by mutableFloatStateOf(initialManualScale.coerceIn(MIN_SCALE, MAX_SCALE))
         private set
 
+    var onCloudScaleSyncRequested: ((mode: String, scaleFactor: Float) -> Unit)? = null
+
     val isCompactMobile: Boolean
         get() = rawScreenWidthDp < 600
 
@@ -47,16 +57,39 @@ class UiScaleController(
     val effectiveScalePercent: Int
         get() = (effectiveScaleFactor * 100f).roundToInt()
 
-    fun setAutoMode() {
+    fun setAutoMode(syncToCloud: Boolean = true) {
         mode = UiScaleMode.AUTO
         savePreferences()
+        if (syncToCloud) {
+            onCloudScaleSyncRequested?.invoke(mode.name, manualScaleFactor)
+        }
     }
 
-    fun setManualScale(scale: Float) {
+    fun setManualScale(scale: Float, syncToCloud: Boolean = true) {
         val clamped = ((scale * 20f).roundToInt() / 20f).coerceIn(MIN_SCALE, MAX_SCALE)
         mode = UiScaleMode.MANUAL
         manualScaleFactor = clamped
         savePreferences()
+        if (syncToCloud) {
+            onCloudScaleSyncRequested?.invoke(mode.name, manualScaleFactor)
+        }
+    }
+
+    fun applyCloudSyncedScale(modeStr: String, scaleFactor: Float) {
+        val resolvedMode = UiScaleMode.fromString(modeStr)
+        val clampedScale = ((scaleFactor * 20f).roundToInt() / 20f).coerceIn(MIN_SCALE, MAX_SCALE)
+        var changed = false
+        if (mode != resolvedMode) {
+            mode = resolvedMode
+            changed = true
+        }
+        if (abs(manualScaleFactor - clampedScale) > 0.005f) {
+            manualScaleFactor = clampedScale
+            changed = true
+        }
+        if (changed) {
+            savePreferences()
+        }
     }
 
     private fun savePreferences() {
@@ -91,7 +124,7 @@ class UiScaleController(
         fun loadFromContext(context: Context): Pair<UiScaleMode, Float> {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val modeStr = prefs.getString(KEY_MODE, UiScaleMode.AUTO.name) ?: UiScaleMode.AUTO.name
-            val parsedMode = runCatching { UiScaleMode.valueOf(modeStr) }.getOrDefault(UiScaleMode.AUTO)
+            val parsedMode = UiScaleMode.fromString(modeStr)
             val savedScale = prefs.getFloat(KEY_MANUAL_SCALE, PRESET_COMPACT_MOBILE).coerceIn(MIN_SCALE, MAX_SCALE)
             return parsedMode to savedScale
         }
@@ -126,9 +159,6 @@ fun rememberUiScaleController(): Pair<UiScaleController, Density> {
         )
     }
 
-    // By applying effectiveScaleFactor to density and normalizing fontScale = 1.0f,
-    // both .dp layout dimensions and .sp typography scale uniformly in complete harmony
-    // and never suffer from extreme OS font magnification crushing cards on mobile.
     val effectiveDensity = Density(
         density = (systemDensity * controller.effectiveScaleFactor).coerceAtLeast(1f),
         fontScale = 1.0f

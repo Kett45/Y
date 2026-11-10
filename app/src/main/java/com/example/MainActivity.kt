@@ -75,6 +75,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.cache.LocalClassroomCache
 import com.example.data.repository.KamRepository
 import com.example.data.sync.GitHubSmartSyncEngine
 import com.example.data.sync.GitHubVersionManifest
@@ -86,6 +87,8 @@ import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.KamLiteTheme
 import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.LocalAppAppearanceController
+import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.viewmodel.KamViewModel
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
@@ -115,6 +118,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        LocalClassroomCache.init(applicationContext)
+        Firebase.auth.currentUser?.uid?.let { uid ->
+            LocalClassroomCache.preloadForUser(applicationContext, uid)
+        }
         GitHubSmartSyncEngine.initializeFromLocalCache(applicationContext)
         setContent {
             KamLiteTheme {
@@ -180,12 +187,16 @@ fun AuthenticatedKamApp(
 ) {
     val context = LocalContext.current
     val credentialManager = remember(context) { CredentialManager.create(context) }
+    val appearanceController = LocalAppAppearanceController.current
+    val uiScaleController = LocalUiScaleController.current
 
     val viewModel: KamViewModel = viewModel(
         key = sessionKey,
         factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY])
+                LocalClassroomCache.init(app)
+                LocalClassroomCache.preloadForUser(app, user.uid)
                 val databaseId = app.getString(R.string.firestore_database_id)
                 val db = FirebaseFirestore.getInstance(databaseId)
                 Log.d("Auth", "[Step 4] Creating fresh KamViewModel for sessionKey=$sessionKey, uid=${user.uid}")
@@ -204,6 +215,44 @@ fun AuthenticatedKamApp(
     val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
     val githubSyncState by GitHubSmartSyncEngine.syncState.collectAsStateWithLifecycle()
     var currentTab by rememberSaveable(sessionKey) { mutableStateOf(KamBottomTab.HOME) }
+
+    // Wire appearance & UI scale changes to sync with user's cloud profile & local cache
+    DisposableEffect(appearanceController, uiScaleController, viewModel) {
+        appearanceController.onCloudPreferenceSyncRequested = { themeId, showFab ->
+            viewModel.syncAppearanceAndScaleToCloud(
+                themeId = themeId,
+                showFloatingAddButton = showFab
+            )
+        }
+        uiScaleController.onCloudScaleSyncRequested = { mode, scale ->
+            viewModel.syncAppearanceAndScaleToCloud(
+                uiScaleMode = mode,
+                uiScaleFactor = scale
+            )
+        }
+        onDispose {
+            appearanceController.onCloudPreferenceSyncRequested = null
+            uiScaleController.onCloudScaleSyncRequested = null
+        }
+    }
+
+    // Apply cloud-restored personal preferences when logging in on any device
+    LaunchedEffect(
+        state.userProfile?.themeId,
+        state.userProfile?.uiScaleMode,
+        state.userProfile?.uiScaleFactor,
+        state.userProfile?.showFloatingAddButton
+    ) {
+        val profile = state.userProfile ?: return@LaunchedEffect
+        appearanceController.applyCloudSyncedPreferences(
+            themeId = profile.themeId,
+            showFloatingAdd = profile.showFloatingAddButton
+        )
+        uiScaleController.applyCloudSyncedScale(
+            modeStr = profile.uiScaleMode,
+            scaleFactor = profile.uiScaleFactor.toFloat()
+        )
+    }
 
     // Silent background GitHub Delta Sync:
     // Checks `releases/version.json` & `releases/delta-sync.json` when online without interrupting the user.

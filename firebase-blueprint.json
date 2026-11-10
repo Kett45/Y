@@ -2,7 +2,7 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Personal profile and personal display/card/block visibility preferences for a signed-in user (Admin or Servant).",
+      "description": "Personal profile and cloud-synced personal display, theme, UI scale, card, and block visibility preferences for a signed-in user (Admin or Servant).",
       "type": "object",
       "properties": {
         "userId": {
@@ -40,6 +40,22 @@
         "compactViewMode": {
           "type": "boolean",
           "description": "Personal display mode preference for this user only."
+        },
+        "themeId": {
+          "type": "string",
+          "description": "Personal selected theme ID synced across devices (DARK or LIGHT)."
+        },
+        "uiScaleMode": {
+          "type": "string",
+          "description": "Personal UI scale mode synced across devices (AUTO or MANUAL)."
+        },
+        "uiScaleFactor": {
+          "type": "number",
+          "description": "Personal manual UI/font scale factor synced across devices (0.70 to 1.30)."
+        },
+        "showFloatingAddButton": {
+          "type": "boolean",
+          "description": "Whether the floating (+ إضافة / استيراد) button is shown on the Home screen for this user."
         },
         "createdAt": {
           "type": "string",
@@ -477,7 +493,7 @@
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
-      "description": "Owner-isolated user profile and personal card/block visibility preferences."
+      "description": "Owner-isolated user profile and personal theme, UI scale, card, and block visibility preferences."
     },
     "/groups/{groupId}": {
       "schema": { "$ref": "#/entities/Group" },

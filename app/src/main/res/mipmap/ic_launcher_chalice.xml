@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@drawable/ic_launcher_chalice_bg" />
-    <item android:drawable="@drawable/ic_launcher_chalice_fg" />
-</layer-list>
