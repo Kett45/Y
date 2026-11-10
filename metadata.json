@@ -1,0 +1,6 @@
+{
+  "name": "kAM Lite",
+  "description": "تطبيق سريع لتسجيل حضور وكروت ونقاط الأطفال وتوزيعهم على بلوكات الخدام مع مزامنة فورية ودعم العمل بدون إنترنت.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,22 @@
+{
+  "targetVersionCode": 2,
+  "targetVersionName": "1.2.0",
+  "minCompatibleBaseVersion": 1,
+  "commitSha": "latest",
+  "updatedAt": "2026-11-09T17:00:00Z",
+  "deltaSummaryArabic": "مزامنة التحديثات الخفيفة تلقائياً بالخلفية بدون تحميل التطبيق بالكامل",
+  "latestApkDirectUrl": "https://github.com/fkk7777k/kAM-Lite/releases/download/latest/kAM-Lite.apk",
+  "backupApkUrl": "https://raw.githubusercontent.com/fkk7777k/kAM-Lite/main/releases/kAM-Lite.apk",
+  "changedModules": [
+    "leaderboard_full_class",
+    "avatar_crop_editor",
+    "performance_o1_index",
+    "github_delta_sync"
+  ],
+  "dynamicConfig": {
+    "maxStudentsPerGroup": 150,
+    "defaultLeaderboardMultiMonthEnabled": true,
+    "enableGalleryPhotoDownload": true,
+    "announcementBanner": ""
+  }
+}

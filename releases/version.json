@@ -1,0 +1,13 @@
+{
+  "versionCode": 2,
+  "versionName": "1.2.0",
+  "minDeltaBaseVersionCode": 1,
+  "maxDeltaGap": 3,
+  "requiresFullInstall": false,
+  "commitSha": "latest",
+  "updatedAt": "2026-11-09T17:00:00Z",
+  "apkDirectUrl": "https://github.com/fkk7777k/kAM-Lite/releases/download/latest/kAM-Lite.apk",
+  "backupApkUrl": "https://raw.githubusercontent.com/fkk7777k/kAM-Lite/main/releases/kAM-Lite.apk",
+  "deltaSyncUrl": "https://raw.githubusercontent.com/fkk7777k/kAM-Lite/main/releases/delta-sync.json",
+  "releaseNotesArabic": "تحديث تلقائي صامت: تحسين السرعة القصوى (O(1))، لوحة شرف الفصل بالكامل، ومحرر الصور الاحترافي."
+}

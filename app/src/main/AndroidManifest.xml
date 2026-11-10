@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MyApplication">
+
+        <activity
+            android:name=".MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.MyApplication">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+            </intent-filter>
+        </activity>
+
+        <!-- Icon 1 (Default): Golden Coptic Cross -->
+        <activity-alias
+            android:name=".LauncherAliasCross"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Icon 2: Sacred Chalice & Host -->
+        <activity-alias
+            android:name=".LauncherAliasChalice"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_chalice"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_chalice"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Icon 3: Royal Crown & Stars -->
+        <activity-alias
+            android:name=".LauncherAliasCrown"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_crown"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_crown"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Icon 4: Star of Bethlehem -->
+        <activity-alias
+            android:name=".LauncherAliasStar"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_star"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_star"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Icon 5: Holy Bible & Cross -->
+        <activity-alias
+            android:name=".LauncherAliasBible"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_bible"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_bible"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Icon 6 (Live Neon Icon): Live Neon Cross & Starburst -->
+        <activity-alias
+            android:name=".LauncherAliasLive"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_live"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_live"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+    </application>
+
+</manifest>

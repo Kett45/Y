@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Top Cross on Crown -->
+    <path
+        android:fillColor="#FDE68A"
+        android:pathData="M52.5,24h3v11h-3zM49,27.5h10v3h-10z" />
+    <!-- Royal Golden Crown -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M28,68l-4,-24l16,10l14,-18l14,18l16,-10l-4,24z" />
+    <!-- Crown Base Band -->
+    <path
+        android:fillColor="#FDE68A"
+        android:pathData="M28,71h52v6h-52z" />
+    <!-- Emerald & Ruby Jewels inside Crown -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M54,58m-3.5,0a3.5,3.5 0,1 1,7 0a3.5,3.5 0,1 1,-7 0" />
+    <path
+        android:fillColor="#F43F5E"
+        android:pathData="M39,60m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0M69,60m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+</vector>

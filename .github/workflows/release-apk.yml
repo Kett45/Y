@@ -1,0 +1,152 @@
+name: Auto-Build & Sync Android APK + Delta Manifest
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - "releases/**"
+      - "README.md"
+  workflow_dispatch:
+    inputs:
+      requires_full_install:
+        description: "Require full APK install for major structural update (true/false)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-sync-release:
+    name: Build Latest APK & Update Repo Links + Delta Manifest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore Unified Signing Keystore
+        run: |
+          if [ -f "debug.keystore.base64" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+
+      - name: Compute Version & Build Signed APK
+        env:
+          REPO_SLUG: ${{ github.repository }}
+          RUN_NUM: ${{ github.run_number }}
+        run: |
+          VERSION_CODE=$((100 + RUN_NUM))
+          VERSION_NAME="1.2.${RUN_NUM}"
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+
+          gradle :app:assembleDebug \
+            -PGITHUB_REPO="${REPO_SLUG}" \
+            -PAPP_VERSION_CODE="${VERSION_CODE}" \
+            -PAPP_VERSION_NAME="${VERSION_NAME}" \
+            --no-daemon
+
+          mkdir -p releases
+          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+            cp -f app/build/outputs/apk/debug/app-debug.apk releases/kAM-Lite.apk
+          fi
+          ls -lh releases/kAM-Lite.apk
+
+      - name: Generate Smart Delta Manifest & Update README Links
+        env:
+          REPO_SLUG: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          FORCE_FULL: ${{ github.event.inputs.requires_full_install || 'false' }}
+        run: |
+          BRANCH_NAME="${GITHUB_REF_NAME:-main}"
+          DIRECT_RELEASE_URL="https://github.com/${REPO_SLUG}/releases/download/latest/kAM-Lite.apk"
+          RAW_APK_URL="https://raw.githubusercontent.com/${REPO_SLUG}/${BRANCH_NAME}/releases/kAM-Lite.apk"
+          DELTA_JSON_URL="https://raw.githubusercontent.com/${REPO_SLUG}/${BRANCH_NAME}/releases/delta-sync.json"
+          NOW_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          MIN_DELTA_BASE=$((VERSION_CODE - 3))
+          if [ "$MIN_DELTA_BASE" -lt 1 ]; then
+            MIN_DELTA_BASE=1
+          fi
+
+          cat > releases/version.json <<EOF
+          {
+            "versionCode": ${VERSION_CODE},
+            "versionName": "${VERSION_NAME}",
+            "minDeltaBaseVersionCode": ${MIN_DELTA_BASE},
+            "maxDeltaGap": 3,
+            "requiresFullInstall": ${FORCE_FULL},
+            "commitSha": "${COMMIT_SHA}",
+            "updatedAt": "${NOW_ISO}",
+            "apkDirectUrl": "${DIRECT_RELEASE_URL}",
+            "backupApkUrl": "${RAW_APK_URL}",
+            "deltaSyncUrl": "${DELTA_JSON_URL}",
+            "releaseNotesArabic": "تحديث تلقائي متزامن مع آخر تعديل في المستودع (${VERSION_NAME})"
+          }
+          EOF
+
+          cat > releases/delta-sync.json <<EOF
+          {
+            "targetVersionCode": ${VERSION_CODE},
+            "targetVersionName": "${VERSION_NAME}",
+            "minCompatibleBaseVersion": ${MIN_DELTA_BASE},
+            "commitSha": "${COMMIT_SHA}",
+            "updatedAt": "${NOW_ISO}",
+            "deltaSummaryArabic": "تمت مزامنة أحدث التطورات (${VERSION_NAME}) تلقائياً بالخلفية",
+            "latestApkDirectUrl": "${DIRECT_RELEASE_URL}",
+            "backupApkUrl": "${RAW_APK_URL}",
+            "changedModules": ["auto_delta_sync", "leaderboard_full_class", "avatar_crop_editor"],
+            "dynamicConfig": {
+              "maxStudentsPerGroup": 150,
+              "defaultLeaderboardMultiMonthEnabled": true,
+              "enableGalleryPhotoDownload": true,
+              "announcementBanner": ""
+            }
+          }
+          EOF
+
+          # Keep README download links permanently synced with the repository's latest release
+          sed -i "s|https://github.com/[^ )]*/releases/download/latest/kAM-Lite.apk|${DIRECT_RELEASE_URL}|g" README.md || true
+          sed -i "s|https://raw.githubusercontent.com/[^ )]*/releases/kAM-Lite.apk|${RAW_APK_URL}|g" README.md || true
+
+      - name: Commit Updated Manifests & Links to Repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add releases/version.json releases/delta-sync.json releases/kAM-Lite.apk README.md
+          git diff --staged --quiet || git commit -m "chore(release): auto-sync APK & delta manifest ${VERSION_NAME} [skip ci]"
+          git push || true
+
+      - name: Publish or Update Latest GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "kAM Lite v${{ env.VERSION_NAME }} - أحدث نسخة للأندرويد (APK)"
+          body: |
+            ## 📲 تحميل تطبيق kAM Lite للأندرويد (الإصدار ${{ env.VERSION_NAME }})
+
+            - **🔗 رابط التحميل الفوري المباشر (بضغطة واحدة - أحدث نسخة دائماً):**
+              https://github.com/${{ github.repository }}/releases/download/latest/kAM-Lite.apk
+            - **📦 رابط مباشر بديل من المستودع:**
+              https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/releases/kAM-Lite.apk
+            - **⚡ يدعم المزامنة التلقائية الصامتة للتحديثات (Smart Delta Sync) داخل التطبيق**
+          draft: false
+          prerelease: false
+          files: |
+            releases/kAM-Lite.apk
+            releases/version.json
+            releases/delta-sync.json

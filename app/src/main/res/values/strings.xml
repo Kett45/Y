@@ -1,0 +1,19 @@
+<resources>
+    <string name="app_name">kAM Lite</string>
+    <string name="app_subtitle">حضور وكروت الفصل بضغطة واحدة</string>
+    <string name="sign_in_google">تسجيل الدخول بحساب Google</string>
+    <string name="tab_home">الرئيسية</string>
+    <string name="tab_group">المجموعة والدعوات</string>
+    <string name="tab_settings">الإعدادات</string>
+    <string name="status_online">متصل • تمت المزامنة</string>
+    <string name="status_offline">أوفلاين، العمليات محفوظة</string>
+    <string name="status_syncing">جاري مزامنة العمليات المحفوظة...</string>
+    <string name="unassigned_block_title">بدون بلوك (أسماء جديدة)</string>
+    <string name="search_results_title">نتائج البحث</string>
+    <string name="duplicate_alerts_title">تنبيهات الكروت المكررة</string>
+    <string name="month_week_tree_title">اختر السنة والشهر والأسبوع</string>
+    <string name="add_student">إضافة طفل</string>
+    <string name="bulk_import_students">استيراد قائمة أسماء</string>
+    <string name="add_block">إضافة بلوك خادم</string>
+    <string name="retry">إعادة المحاولة</string>
+</resources>

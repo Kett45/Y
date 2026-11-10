@@ -1,0 +1,507 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Personal profile and personal display/card/block visibility preferences for a signed-in user (Admin or Servant).",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name in Arabic or English."
+        },
+        "email": {
+          "type": "string",
+          "description": "Verified Google account email (owner-isolated PII)."
+        },
+        "groupId": {
+          "type": "string",
+          "description": "ID of the currently active group the user is viewing, or empty string if unassigned."
+        },
+        "joinedGroupIds": {
+          "type": "array",
+          "description": "Optional bounded list of group IDs this user is a member of for switching between groups."
+        },
+        "enabledCards": {
+          "type": "array",
+          "description": "List of enabled card type IDs for this servant's main screen view."
+        },
+        "collapsedBlockIds": {
+          "type": "array",
+          "description": "Personal list of block IDs collapsed on this user's screen only."
+        },
+        "hiddenBlockIds": {
+          "type": "array",
+          "description": "Personal list of block IDs hidden on this user's screen only."
+        },
+        "compactViewMode": {
+          "type": "boolean",
+          "description": "Personal display mode preference for this user only."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "email",
+        "groupId",
+        "enabledCards",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Group": {
+      "title": "Group",
+      "description": "A Sunday school class group managed by one Admin (الأمين) and up to 6 Servants (خدام).",
+      "type": "object",
+      "properties": {
+        "inviteCode": {
+          "type": "string",
+          "description": "Unique uppercase alphanumeric group code matching the document ID."
+        },
+        "name": {
+          "type": "string",
+          "description": "Arabic name of the class/group."
+        },
+        "adminId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the Admin (الأمين) who owns the group."
+        },
+        "adminName": {
+          "type": "string",
+          "description": "Display name of the group Admin."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Bounded list (max 10) of member UIDs (Admin + up to 6 Servants)."
+        },
+        "allowServantUndo": {
+          "type": "boolean",
+          "description": "Whether a servant is allowed to undo/delete a card event they recorded by mistake."
+        },
+        "enforceWeeklyCardLimit": {
+          "type": "boolean",
+          "description": "Whether the same card can only be awarded once per child per week."
+        },
+        "maxMonthlyPoints": {
+          "type": "integer",
+          "description": "Optional maximum monthly points cap per child (0 = unlimited)."
+        },
+        "attendanceIsCardOnly": {
+          "type": "boolean",
+          "description": "Whether attendance is tracked exclusively via the 3-point Attendance card."
+        },
+        "showLeaderboard": {
+          "type": "boolean",
+          "description": "Whether to display the monthly points leaderboard."
+        },
+        "autoStudentNumber": {
+          "type": "boolean",
+          "description": "Whether student numbers are assigned sequentially and automatically."
+        },
+        "bannedUids": {
+          "type": "array",
+          "description": "Optional bounded list of UIDs of servants removed and banned from rejoining this group."
+        },
+        "bannedServantEntries": {
+          "type": "array",
+          "description": "Optional bounded list of 'uid|name' strings for banned servants displayed to the Admin."
+        },
+        "dailyInviteToken": {
+          "type": "string",
+          "description": "Optional 24-hour rotating suffix paired with inviteCode (<inviteCode>-<dailyInviteToken>)."
+        },
+        "inviteCodeUpdatedAtMillis": {
+          "type": "integer",
+          "description": "Optional epoch milliseconds when dailyInviteToken was last generated/rotated (valid for 24 hours)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "inviteCode",
+        "name",
+        "adminId",
+        "adminName",
+        "memberUids",
+        "allowServantUndo",
+        "enforceWeeklyCardLimit",
+        "maxMonthlyPoints",
+        "attendanceIsCardOnly",
+        "showLeaderboard",
+        "autoStudentNumber",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Invitation": {
+      "title": "Invitation",
+      "description": "An invitation issued by the Admin for a Servant to join the group.",
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "description": "ID of the target group."
+        },
+        "groupName": {
+          "type": "string",
+          "description": "Name of the target group."
+        },
+        "adminId": {
+          "type": "string",
+          "description": "UID of the Admin who created the invitation."
+        },
+        "inviteeName": {
+          "type": "string",
+          "description": "Name or label of the invited servant."
+        },
+        "inviteCode": {
+          "type": "string",
+          "description": "Group invite code."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "ACCEPTED", "REJECTED"],
+          "description": "Invitation status."
+        },
+        "acceptedByUid": {
+          "type": "string",
+          "description": "UID of the servant who accepted or responded to the invitation."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Optional bounded list of group member UIDs."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "groupId",
+        "groupName",
+        "adminId",
+        "inviteeName",
+        "inviteCode",
+        "status",
+        "acceptedByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ServantBlock": {
+      "title": "ServantBlock",
+      "description": "A shared colored block in the group assigned to a Servant.",
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "description": "Parent group ID (sole query filter)."
+        },
+        "servantId": {
+          "type": "string",
+          "description": "UID of the responsible servant (or empty if unassigned placeholder)."
+        },
+        "servantName": {
+          "type": "string",
+          "description": "Display name of the responsible servant."
+        },
+        "colorHex": {
+          "type": "string",
+          "description": "Theme color key or hex code for the block."
+        },
+        "sortOrder": {
+          "type": "integer",
+          "description": "Display order of the block."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Optional bounded list of group member UIDs."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "groupId",
+        "servantId",
+        "servantName",
+        "colorHex",
+        "sortOrder",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "A shared child record in the group with fractional position ordering.",
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "description": "Parent group ID (sole query filter)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Full name of the child."
+        },
+        "studentNumber": {
+          "type": "integer",
+          "description": "Sequential or custom number of the child."
+        },
+        "blockId": {
+          "type": "string",
+          "description": "Assigned ServantBlock ID, or empty string for 'بدون بلوك'."
+        },
+        "sortOrder": {
+          "type": "integer",
+          "description": "Legacy integer ordering position inside the block."
+        },
+        "position": {
+          "type": "number",
+          "description": "Shared fractional position inside the block so concurrent moves never overwrite each other."
+        },
+        "avatarInitials": {
+          "type": "string",
+          "description": "Arabic/English initials displayed on the child's badge."
+        },
+        "avatarBase64": {
+          "type": "string",
+          "description": "Optional compressed 1:1 square JPEG thumbnail stored as Base64 (<= 50,000 chars)."
+        },
+        "createdByUid": {
+          "type": "string",
+          "description": "UID of the group member who added the student."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Optional bounded list of group member UIDs."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "groupId",
+        "name",
+        "studentNumber",
+        "blockId",
+        "sortOrder",
+        "position",
+        "avatarInitials",
+        "createdByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CardEvent": {
+      "title": "CardEvent",
+      "description": "Shared audit log entry for awarding one of the 7 cards to a child in the group.",
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "description": "Parent group ID (sole query filter)."
+        },
+        "studentId": {
+          "type": "string",
+          "description": "Target student document ID."
+        },
+        "studentName": {
+          "type": "string",
+          "description": "Target student name for audit display."
+        },
+        "cardType": {
+          "type": "string",
+          "enum": [
+            "ATTENDANCE",
+            "QUIET",
+            "PARTICIPATION",
+            "PRAISE",
+            "GOLD",
+            "MEMORIZATION",
+            "CONFESSION"
+          ],
+          "description": "One of the 7 approved card types."
+        },
+        "points": {
+          "type": "integer",
+          "description": "Points value awarded (3, 5, 2, 10, 20, 6, or 4)."
+        },
+        "servantId": {
+          "type": "string",
+          "description": "UID of the servant who tapped the card."
+        },
+        "servantName": {
+          "type": "string",
+          "description": "Name of the servant who tapped the card."
+        },
+        "monthKey": {
+          "type": "string",
+          "description": "Year-month partition in YYYY-MM format."
+        },
+        "weekKey": {
+          "type": "string",
+          "description": "Year-week identifier (e.g., 2026-11-W1)."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Optional bounded list of group member UIDs."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "groupId",
+        "studentId",
+        "studentName",
+        "cardType",
+        "points",
+        "servantId",
+        "servantName",
+        "monthKey",
+        "weekKey",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MonthlyBalance": {
+      "title": "MonthlyBalance",
+      "description": "Shared monthly points balance summary for a child in a specific YYYY-MM month.",
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "description": "Parent group ID (sole query filter)."
+        },
+        "studentId": {
+          "type": "string",
+          "description": "Student document ID."
+        },
+        "studentName": {
+          "type": "string",
+          "description": "Student name."
+        },
+        "monthKey": {
+          "type": "string",
+          "description": "Month key in YYYY-MM format."
+        },
+        "totalPoints": {
+          "type": "integer",
+          "description": "Total points accumulated in this month."
+        },
+        "eventsCount": {
+          "type": "integer",
+          "description": "Total cards awarded in this month."
+        },
+        "lastUpdatedByUid": {
+          "type": "string",
+          "description": "UID of the member who last updated the balance."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Optional bounded list of group member UIDs."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "groupId",
+        "studentId",
+        "studentName",
+        "monthKey",
+        "totalPoints",
+        "eventsCount",
+        "lastUpdatedByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-isolated user profile and personal card/block visibility preferences."
+    },
+    "/groups/{groupId}": {
+      "schema": { "$ref": "#/entities/Group" },
+      "description": "Sunday school class group document keyed by inviteCode."
+    },
+    "/groups/{groupId}/invitations/{invitationId}": {
+      "schema": { "$ref": "#/entities/Invitation" },
+      "description": "Group invitations created by the Admin."
+    },
+    "/groups/{groupId}/blocks/{blockId}": {
+      "schema": { "$ref": "#/entities/ServantBlock" },
+      "description": "Shared colored servant blocks within a group."
+    },
+    "/groups/{groupId}/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Shared children records assigned to blocks or unassigned within a group."
+    },
+    "/groups/{groupId}/cardEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/CardEvent" },
+      "description": "Shared idempotent card award events for children in the group."
+    },
+    "/groups/{groupId}/monthlyBalances/{balanceId}": {
+      "schema": { "$ref": "#/entities/MonthlyBalance" },
+      "description": "Shared per-month points balance summaries per student."
+    }
+  }
+}

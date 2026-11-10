@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Golden Ring -->
+    <path
+        android:fillColor="#33F59E0B"
+        android:pathData="M54,22A32,32 0,1 1,22 54A32,32 0,0 1,54 22ZM54,26A28,28 0,1 0,82 54A28,28 0,0 0,54 26Z" />
+    <!-- Coptic Cross Main Body (Gold) -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M50,24h8v26h26v8h-26v26h-8v-26h-26v-8h26z" />
+    <!-- Coptic Cross Trefoil Buds (Top, Bottom, Left, Right) -->
+    <path
+        android:fillColor="#FDE68A"
+        android:pathData="M54,19a5,5 0,1 1,0 10a5,5 0,1 1,0 -10zM54,79a5,5 0,1 1,0 10a5,5 0,1 1,0 -10zM24,49a5,5 0,1 1,0 10a5,5 0,1 1,0 -10zM84,49a5,5 0,1 1,0 10a5,5 0,1 1,0 -10z" />
+    <!-- Center Jewel -->
+    <path
+        android:fillColor="#FFFBEB"
+        android:pathData="M54,48l6,6l-6,6l-6,-6z" />
+</vector>
