@@ -17,9 +17,9 @@ android {
     applicationId = "com.aistudio.kamlite.rtyxqp"
     minSdk = 24
     targetSdk = 36
-    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 2
-    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.2.0"
-    val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "fkk7777k/kAM-Lite"
+    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 3
+    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.3.0"
+    val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
     versionCode = propVersionCode
     versionName = propVersionName
     buildConfigField("String", "GITHUB_REPO", "\"$propGithubRepo\"")
