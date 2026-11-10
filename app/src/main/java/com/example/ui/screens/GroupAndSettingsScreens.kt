@@ -1337,12 +1337,7 @@ private fun GitHubAutoSyncSettingsCard() {
             HorizontalDivider()
 
             Text(
-                text = "• التحديثات الدورية الخفيفة: يتم سحب التطورات فقط (Delta Sync) وتطبيقها تلقائياً بالخلفية بدون إزعاج وبدون تنزيل التطبيق بالكامل.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = "• سيناريو الفرق الكبير بين النسختين: إذا زاد الفارق عن ${GitHubSmartSyncEngine.DEFAULT_MAX_DELTA_GAP} إصدارات أو وُجد تحديث جذري، يتحول النظام تلقائياً لرابط الحزمة الكاملة المحدّثة.",
+                text = "• التحديث التلقائي المباشر داخل التطبيق: عند توفر إصدار جديد على GitHub، يقوم التطبيق بتنزيل ملف الـ APK داخلياً وفتح شاشة التثبيت مباشرة بضغطة واحدة بدون الحاجة للمتصفح.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1352,6 +1347,33 @@ private fun GitHubAutoSyncSettingsCard() {
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold
             )
+
+            if (syncState.isDownloadingApk) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "جاري تنزيل التحديث داخل التطبيق... (${syncState.downloadProgressPercent}%)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { (syncState.downloadProgressPercent / 100f).coerceIn(0.02f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                    )
+                }
+            }
+
+            if (!syncState.downloadErrorArabic.isNullOrBlank()) {
+                Text(
+                    text = syncState.downloadErrorArabic.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1363,7 +1385,7 @@ private fun GitHubAutoSyncSettingsCard() {
                             GitHubSmartSyncEngine.checkAndSyncSilently(context, forceManualCheck = true)
                         }
                     },
-                    enabled = !syncState.isCheckingInBackground,
+                    enabled = !syncState.isCheckingInBackground && !syncState.isDownloadingApk,
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .weight(1f)
@@ -1377,7 +1399,7 @@ private fun GitHubAutoSyncSettingsCard() {
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (syncState.isCheckingInBackground) "جاري الفحص..." else "مزامنة التطورات الآن",
+                        text = if (syncState.isCheckingInBackground) "جاري الفحص..." else "فحص وتحديث الآن",
                         maxLines = 1
                     )
                 }
@@ -1388,8 +1410,9 @@ private fun GitHubAutoSyncSettingsCard() {
                         clipboard?.setPrimaryClip(
                             ClipData.newPlainText("kAM Lite Latest APK", syncState.latestDirectApkUrl)
                         )
-                        GitHubSmartSyncEngine.openLatestFullApkDownload(context)
+                        GitHubSmartSyncEngine.startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
                     },
+                    enabled = !syncState.isDownloadingApk,
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .weight(1f)
@@ -1402,7 +1425,10 @@ private fun GitHubAutoSyncSettingsCard() {
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("رابط أحدث APK", maxLines = 1)
+                    Text(
+                        text = if (syncState.downloadedApkReady) "تثبيت التحديث الآن" else "تنزيل وتثبيت APK",
+                        maxLines = 1
+                    )
                 }
             }
         }

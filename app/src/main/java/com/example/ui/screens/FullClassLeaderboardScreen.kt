@@ -50,9 +50,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -136,8 +139,15 @@ fun FullClassLeaderboardScreen(
         null
     }
 
-    // Compute full-class rankings and per-card breakdowns for 100% of students
-    val allRankedEntries = remember(
+    // Compute full-class rankings and per-card breakdowns on Dispatchers.Default to keep UI 60fps
+    val initialEntries = remember {
+        state.computeClassLeaderboardEntries(
+            selectedMonths = selectedMonths,
+            selectedWeekOverride = activeWeekKeyOverride
+        )
+    }
+    val allRankedEntries by produceState(
+        initialValue = initialEntries,
         state.students,
         state.effectiveAllCardEvents,
         state.effectiveAllMonthlyBalances,
@@ -145,10 +155,12 @@ fun FullClassLeaderboardScreen(
         selectedMonths,
         activeWeekKeyOverride
     ) {
-        state.computeClassLeaderboardEntries(
-            selectedMonths = selectedMonths,
-            selectedWeekOverride = activeWeekKeyOverride
-        )
+        value = withContext(Dispatchers.Default) {
+            state.computeClassLeaderboardEntries(
+                selectedMonths = selectedMonths,
+                selectedWeekOverride = activeWeekKeyOverride
+            )
+        }
     }
 
     // Classroom-wide summary counts

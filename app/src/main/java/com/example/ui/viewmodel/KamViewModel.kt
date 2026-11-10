@@ -22,6 +22,7 @@ import com.example.data.model.ServantBlock
 import com.example.data.model.Student
 import com.example.data.model.UserProfile
 import com.example.data.repository.KamRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelChildren
@@ -38,6 +39,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -632,15 +634,17 @@ class KamViewModel(
             dismissedDuplicateNames = dismissedDuplicates,
             previousGroupId = fallbackPrevGroup
         )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000L),
-        initialValue = KamScreenState(
-            selectedMonthKey = currentYearMonth(),
-            selectedWeekKey = currentYearWeek(),
-            currentWeekKey = currentYearWeek()
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000L),
+            initialValue = KamScreenState(
+                selectedMonthKey = currentYearMonth(),
+                selectedWeekKey = currentYearWeek(),
+                currentWeekKey = currentYearWeek()
+            )
         )
-    )
 
     /**
      * Immediately stops all active Firestore snapshot listeners and background jobs for this session

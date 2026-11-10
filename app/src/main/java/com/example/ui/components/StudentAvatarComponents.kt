@@ -160,8 +160,8 @@ object StudentAvatarImageHelper {
     private const val MAX_FIRESTORE_AVATAR_CHARS = 45_000
     private const val MAX_LOCAL_ALBUM_PHOTOS = 20
 
-    private val framedAvatarCache = object : LruCache<Int, ImageBitmap>(160) {}
-    private val fullPhotoCache = object : LruCache<Int, ImageBitmap>(120) {}
+    private val framedAvatarCache = object : LruCache<Int, ImageBitmap>(220) {}
+    private val fullPhotoCache = object : LruCache<Int, ImageBitmap>(80) {}
 
     /**
      * Parses a photo entry of the form `<rawBase64>#crop=zoom,panX,panY,rot`
@@ -786,22 +786,24 @@ fun StudentAvatarCircle(
         }
     }
 
-    // Preload both the framed circular avatar AND the full uncropped photo in background
-    // so press-and-hold opens in 0ms without any decoding delay.
+    // Decode ONLY the lightweight 220x220 circular avatar thumbnail for list items
+    // so scrolling through 150 students stays 60fps without decoding 1080p full photos.
     LaunchedEffect(mainBase64) {
         if (mainBase64.isBlank()) {
             imageBitmap = null
             fullImageBitmap = null
-        } else {
-            if (imageBitmap == null) {
-                imageBitmap = withContext(Dispatchers.Default) {
-                    StudentAvatarImageHelper.decodeBase64ToImageBitmap(mainBase64)
-                }
+        } else if (imageBitmap == null) {
+            imageBitmap = withContext(Dispatchers.Default) {
+                StudentAvatarImageHelper.decodeBase64ToImageBitmap(mainBase64)
             }
-            if (fullImageBitmap == null) {
-                fullImageBitmap = withContext(Dispatchers.Default) {
-                    StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainBase64)
-                }
+        }
+    }
+
+    // Decode the full 1080p uncropped photo on-demand ONLY when the user presses and holds
+    LaunchedEffect(isHoldPreviewVisible, mainBase64) {
+        if (isHoldPreviewVisible && mainBase64.isNotBlank() && fullImageBitmap == null) {
+            fullImageBitmap = withContext(Dispatchers.Default) {
+                StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainBase64)
             }
         }
     }

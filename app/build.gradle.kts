@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.kamlite.rtyxqp"
     minSdk = 24
     targetSdk = 36
-    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 3
-    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.3.0"
+    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 5
+    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.5.0"
     val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
     versionCode = propVersionCode
     versionName = propVersionName
@@ -86,6 +86,13 @@ tasks.withType<Test> {
   testLogging {
     events("passed", "failed", "skipped")
   }
+}
+
+tasks.register<Copy>("syncReleaseApk") {
+  dependsOn("assembleDebug")
+  from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
+  into(rootProject.layout.projectDirectory.dir("releases"))
+  rename { "kAM-Lite.apk" }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files

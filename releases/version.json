@@ -1,13 +1,13 @@
 {
-  "versionCode": 3,
-  "versionName": "1.3.0",
-  "minDeltaBaseVersionCode": 1,
+  "versionCode": 5,
+  "versionName": "1.5.0",
+  "minDeltaBaseVersionCode": 5,
   "maxDeltaGap": 3,
-  "requiresFullInstall": false,
+  "requiresFullInstall": true,
   "commitSha": "latest",
-  "updatedAt": "2026-11-10T01:00:00Z",
-  "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
-  "backupApkUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/kAM-Lite.apk",
+  "updatedAt": "2026-11-10T13:30:00Z",
+  "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk?v=1.5.0",
+  "backupApkUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/kAM-Lite.apk?v=1.5.0",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.3.0: ميزة المعاينة السريعة لصورة الطفل بالضغط المطوّل، وتوحيد روابط التحميل والمزامنة التلقائية على مستودع Kett45/Y."
+  "releaseNotesArabic": "الإصدار 1.5.0: تسريع شامل للتطبيق والتمرير (60fps) + فك تشفير الصور المصغرة فقط وتأجيل الصورة الكاملة للضغط المطول + تنزيل وتثبيت التحديثات تلقائياً داخل التطبيق."
 }

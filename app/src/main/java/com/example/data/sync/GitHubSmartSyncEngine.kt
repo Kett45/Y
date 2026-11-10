@@ -3,14 +3,23 @@ package com.example.data.sync
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import com.example.BuildConfig
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.BufferedReader
+import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
@@ -52,11 +61,11 @@ data class GitHubDeltaPayload(
 /**
  * Decision returned by [GitHubSmartSyncEngine.evaluateSyncStrategy]:
  * 1. [UpToDate]: Local app + applied delta are already at the latest GitHub commit/version.
- * 2. [DeltaOnlySync]: Version difference is small (`<= maxDeltaGap`) and compatible -> download ONLY
- *    the few-KB `delta-sync.json` and apply updates silently in-place without downloading full APK.
+ * 2. [DeltaOnlySync]: Version difference is small (`<= maxDeltaGap`) and compatible -> download
+ *    the few-KB `delta-sync.json` AND if `manifest.versionCode > installedBinaryVersionCode`, offer/start
+ *    in-app APK update download & installation.
  * 3. [FullPackageUpgradeRequired]: Version difference is large (`> maxDeltaGap` or `installed < minDeltaBaseVersionCode`
- *    or `requiresFullInstall == true`) -> apply safe config delta AND surface a non-intrusive 1-tap bar
- *    to install the full updated APK from the repo's direct `latest` release link.
+ *    or `requiresFullInstall == true`) -> apply safe config delta AND download/install the updated APK in-app.
  */
 sealed class GitHubSyncDecision {
     data class UpToDate(
@@ -87,6 +96,10 @@ data class GitHubSyncUiState(
     val latestDirectApkUrl: String = GitHubSmartSyncEngine.defaultDirectApkUrl(),
     val backupApkUrl: String = GitHubSmartSyncEngine.defaultRawApkUrl(),
     val isCheckingInBackground: Boolean = false,
+    val isDownloadingApk: Boolean = false,
+    val downloadProgressPercent: Int = 0,
+    val downloadedApkReady: Boolean = false,
+    val downloadErrorArabic: String? = null,
     val silentDeltaBannerMessage: String? = null,
     val majorUpdatePrompt: GitHubVersionManifest? = null,
     val majorUpdateReasonArabic: String? = null
@@ -103,6 +116,10 @@ object GitHubSmartSyncEngine {
     private const val KEY_LATEST_DIRECT_APK_URL = "latest_direct_apk_url"
     private const val KEY_BACKUP_APK_URL = "backup_apk_url"
     private const val KEY_DISMISSED_MAJOR_VERSION = "dismissed_major_version_code"
+    private const val APK_UPDATE_DIR = "updates"
+    private const val APK_UPDATE_FILENAME = "kAM-Lite-update.apk"
+
+    private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * Fixed GitHub repository slug baked into BuildConfig (automatically updated by GitHub Actions on build).
@@ -117,10 +134,10 @@ object GitHubSmartSyncEngine {
         "https://raw.githubusercontent.com/$repoSlug/$branch/releases/delta-sync.json"
 
     fun defaultDirectApkUrl(repoSlug: String = FIXED_GITHUB_REPO): String =
-        "https://github.com/$repoSlug/raw/main/releases/kAM-Lite.apk"
+        "https://github.com/$repoSlug/raw/main/releases/kAM-Lite.apk?v=${BuildConfig.VERSION_NAME}"
 
     fun defaultRawApkUrl(repoSlug: String = FIXED_GITHUB_REPO, branch: String = "main"): String =
-        "https://raw.githubusercontent.com/$repoSlug/$branch/releases/kAM-Lite.apk"
+        "https://raw.githubusercontent.com/$repoSlug/$branch/releases/kAM-Lite.apk?v=${BuildConfig.VERSION_NAME}"
 
     fun defaultReleaseTagApkUrl(repoSlug: String = FIXED_GITHUB_REPO): String =
         "https://github.com/$repoSlug/releases/download/latest/kAM-Lite.apk"
@@ -142,7 +159,7 @@ object GitHubSmartSyncEngine {
     /**
      * Pure, deterministic strategy evaluator:
      * - Decides whether to do nothing ([GitHubSyncDecision.UpToDate]),
-     * - Apply a lightweight delta-only update without downloading the full APK ([GitHubSyncDecision.DeltaOnlySync]),
+     * - Apply a lightweight delta-only update ([GitHubSyncDecision.DeltaOnlySync]),
      * - Or trigger the Full APK Upgrade fallback when the version gap between installed and remote is large
      *   ([GitHubSyncDecision.FullPackageUpgradeRequired]).
      */
@@ -166,9 +183,9 @@ object GitHubSmartSyncEngine {
 
         if (exceedsMaxDeltaGap || belowMinBaseVersion || forceFull) {
             val reason = when {
-                forceFull -> "يحتوي الإصدار ${remoteManifest.versionName} على تغييرات جذرية في النظام تتطلب تثبيت الحزمة الكاملة"
-                exceedsMaxDeltaGap -> "الفارق بين نسختك الحالية وأحدث إصدار كبير ($binaryGap إصدارات)؛ يلزم التحديث الكامل لمرة واحدة"
-                else -> "نسختك الحالية أقدم من الحد الأدنى للتحديث الجزئي؛ يلزم تثبيت أحدث حزمة كاملة"
+                forceFull -> "يحتوي الإصدار ${remoteManifest.versionName} على تحديثات جديدة في التطبيق؛ جاري تنزيل وتثبيت التحديث"
+                exceedsMaxDeltaGap -> "الفارق بين نسختك الحالية وأحدث إصدار كبير ($binaryGap إصدارات)؛ جاري تنزيل الحزمة المحدّثة"
+                else -> "نسختك الحالية أقدم من الحد الأدنى للتحديث الجزئي؛ جاري تنزيل أحدث حزمة كاملة"
             }
             return GitHubSyncDecision.FullPackageUpgradeRequired(
                 manifest = remoteManifest,
@@ -271,6 +288,9 @@ object GitHubSmartSyncEngine {
             .putString(KEY_BACKUP_APK_URL, cachedBackupUrl)
             .apply()
 
+        val apkFile = getLocalApkUpdateFile(context.applicationContext)
+        val isReady = apkFile.exists() && apkFile.length() > 100_000L
+
         _syncState.value = _syncState.value.copy(
             repositorySlug = FIXED_GITHUB_REPO,
             installedBinaryVersionCode = BuildConfig.VERSION_CODE,
@@ -280,16 +300,20 @@ object GitHubSmartSyncEngine {
             lastSyncedCommitSha = cachedSha,
             lastSyncSummaryArabic = cachedSummary,
             latestDirectApkUrl = cachedDirectUrl,
-            backupApkUrl = cachedBackupUrl
+            backupApkUrl = cachedBackupUrl,
+            downloadedApkReady = isReady
         )
     }
 
+    private fun getLocalApkUpdateFile(context: Context): File {
+        val updateDir = File(context.cacheDir, APK_UPDATE_DIR).apply { mkdirs() }
+        return File(updateDir, APK_UPDATE_FILENAME)
+    }
+
     /**
-     * Performs a silent background check against the GitHub repository:
-     * - If a small incremental update exists (`DeltaOnlySync`), downloads ONLY `delta-sync.json` (a few KB)
-     *   and applies it in-place without downloading the full APK.
-     * - If the version difference is large (`FullPackageUpgradeRequired`), updates the direct links
-     *   and displays a compact non-intrusive 1-tap bar so the user can install the full APK.
+     * Performs a background check against the GitHub repository:
+     * - Whenever `manifest.versionCode > BuildConfig.VERSION_CODE` (a newer APK binary exists on GitHub),
+     *   automatically downloads the updated APK inside the app and triggers the Android Package Installer!
      */
     suspend fun checkAndSyncSilently(
         context: Context,
@@ -299,7 +323,10 @@ object GitHubSmartSyncEngine {
         initializeFromLocalCache(appContext)
         val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-        _syncState.value = _syncState.value.copy(isCheckingInBackground = true)
+        _syncState.value = _syncState.value.copy(
+            isCheckingInBackground = true,
+            downloadErrorArabic = null
+        )
 
         try {
             val manifestJson = fetchTextFromUrl(defaultVersionManifestUrl(FIXED_GITHUB_REPO, "main"))
@@ -334,29 +361,42 @@ object GitHubSmartSyncEngine {
                 remoteManifest = manifest
             )
 
+            val hasNewerApkBinary = manifest.versionCode > BuildConfig.VERSION_CODE
+            val shouldPromptBinaryUpgrade = hasNewerApkBinary &&
+                (forceManualCheck || manifest.versionCode != dismissedMajorVersion)
+
             when (decision) {
                 is GitHubSyncDecision.UpToDate -> {
+                    val directUrl = manifest.apkDirectUrl.ifBlank { defaultDirectApkUrl() }
+                    val backupUrl = manifest.backupApkUrl.ifBlank { defaultRawApkUrl() }
                     prefs.edit()
-                        .putString(KEY_LATEST_DIRECT_APK_URL, manifest.apkDirectUrl.ifBlank { defaultDirectApkUrl() })
-                        .putString(KEY_BACKUP_APK_URL, manifest.backupApkUrl.ifBlank { defaultRawApkUrl() })
+                        .putString(KEY_LATEST_DIRECT_APK_URL, directUrl)
+                        .putString(KEY_BACKUP_APK_URL, backupUrl)
                         .apply()
 
                     _syncState.value = _syncState.value.copy(
                         isCheckingInBackground = false,
-                        latestDirectApkUrl = manifest.apkDirectUrl.ifBlank { defaultDirectApkUrl() },
-                        backupApkUrl = manifest.backupApkUrl.ifBlank { defaultRawApkUrl() },
-                        majorUpdatePrompt = null,
-                        majorUpdateReasonArabic = null,
-                        silentDeltaBannerMessage = if (forceManualCheck) {
+                        latestDirectApkUrl = directUrl,
+                        backupApkUrl = backupUrl,
+                        majorUpdatePrompt = if (shouldPromptBinaryUpgrade) manifest else null,
+                        majorUpdateReasonArabic = if (shouldPromptBinaryUpgrade) {
+                            manifest.releaseNotesArabic.ifBlank { "يتوفر إصدار جديد (v${manifest.versionName}) جاهز للتثبيت المباشر داخل التطبيق" }
+                        } else {
+                            null
+                        },
+                        silentDeltaBannerMessage = if (forceManualCheck && !hasNewerApkBinary) {
                             "التطبيق محدّث بالفعل لأعلى إصدار (${_syncState.value.effectiveSyncedVersionName})"
                         } else {
                             null
                         }
                     )
+
+                    if (shouldPromptBinaryUpgrade) {
+                        startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
+                    }
                 }
 
                 is GitHubSyncDecision.DeltaOnlySync -> {
-                    // Download ONLY the lightweight delta JSON (~1 KB) instead of the full APK!
                     val deltaUrl = manifest.deltaSyncUrl.ifBlank { defaultDeltaPayloadUrl(FIXED_GITHUB_REPO, "main") }
                     val deltaJson = fetchTextFromUrl(deltaUrl)
                         ?: fetchTextFromUrl(defaultDeltaPayloadUrl(FIXED_GITHUB_REPO, "master"))
@@ -367,7 +407,7 @@ object GitHubSmartSyncEngine {
                         ?: manifest.versionName
                     val newSha = deltaPayload?.commitSha?.ifBlank { manifest.commitSha } ?: manifest.commitSha
                     val summary = deltaPayload?.deltaSummaryArabic?.ifBlank { manifest.releaseNotesArabic }
-                        ?: manifest.releaseNotesArabic.ifBlank { "تمت مزامنة التحديثات الخفيفة تلقائياً بالخلفية" }
+                        ?: manifest.releaseNotesArabic.ifBlank { "تمت مزامنة التحديثات تلقائياً" }
                     val directUrl = deltaPayload?.latestApkDirectUrl?.ifBlank { manifest.apkDirectUrl }
                         ?: manifest.apkDirectUrl.ifBlank { defaultDirectApkUrl() }
                     val backupUrl = deltaPayload?.backupApkUrl?.ifBlank { manifest.backupApkUrl }
@@ -390,15 +430,25 @@ object GitHubSmartSyncEngine {
                         lastSyncSummaryArabic = summary,
                         latestDirectApkUrl = directUrl,
                         backupApkUrl = backupUrl,
-                        majorUpdatePrompt = null,
-                        majorUpdateReasonArabic = null,
-                        silentDeltaBannerMessage = "تم تحديث آخر التطورات ($newVersionName) تلقائياً بالخلفية بدون تنزيل التطبيق بالكامل"
+                        majorUpdatePrompt = if (shouldPromptBinaryUpgrade) manifest else null,
+                        majorUpdateReasonArabic = if (shouldPromptBinaryUpgrade) {
+                            summary.ifBlank { "يتوفر إصدار جديد (v$newVersionName) جاهز للتثبيت المباشر" }
+                        } else {
+                            null
+                        },
+                        silentDeltaBannerMessage = if (shouldPromptBinaryUpgrade) {
+                            "تم اكتشاف إصدار جديد ($newVersionName)؛ جاري تنزيل التحديث داخل التطبيق..."
+                        } else {
+                            "تم تحديث آخر التطورات ($newVersionName) تلقائياً بالخلفية"
+                        }
                     )
+
+                    if (shouldPromptBinaryUpgrade) {
+                        startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
+                    }
                 }
 
                 is GitHubSyncDecision.FullPackageUpgradeRequired -> {
-                    // Scenario where the version gap between installed and remote is LARGE:
-                    // 1. Update direct download links from the manifest so the user gets the newest full APK.
                     val directUrl = manifest.apkDirectUrl.ifBlank { defaultDirectApkUrl() }
                     val backupUrl = manifest.backupApkUrl.ifBlank { defaultRawApkUrl() }
 
@@ -416,6 +466,10 @@ object GitHubSmartSyncEngine {
                         majorUpdatePrompt = if (shouldShowBar) manifest else null,
                         majorUpdateReasonArabic = if (shouldShowBar) decision.reasonArabic else null
                     )
+
+                    if (shouldShowBar && manifest.versionCode > BuildConfig.VERSION_CODE) {
+                        startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
+                    }
                 }
             }
         } catch (_: Exception) {
@@ -441,25 +495,237 @@ object GitHubSmartSyncEngine {
     }
 
     /**
-     * Opens the always-updated direct GitHub latest APK link (with fallback to the raw repository APK link)
-     * when a major version gap requires a full package upgrade or when the user taps download in Settings.
+     * Starts downloading the latest APK inside the application and automatically opens
+     * the Android Package Installer screen once the download completes.
+     */
+    fun startInAppApkDownloadAndInstall(
+        context: Context,
+        autoLaunchInstaller: Boolean = true
+    ) {
+        if (_syncState.value.isDownloadingApk) return
+        val appContext = context.applicationContext
+        downloadScope.launch {
+            downloadAndInstallLatestApk(appContext, autoLaunchInstaller = autoLaunchInstaller)
+        }
+    }
+
+    /**
+     * Downloads the APK binary directly inside the app cache directory with live progress updates (0%..100%)
+     * and launches the native Android package installer via [FileProvider].
+     */
+    suspend fun downloadAndInstallLatestApk(
+        context: Context,
+        autoLaunchInstaller: Boolean = true
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (_syncState.value.isDownloadingApk) return@withContext false
+        val appContext = context.applicationContext
+        val state = _syncState.value
+
+        val candidateUrls = listOf(
+            state.latestDirectApkUrl.ifBlank { defaultDirectApkUrl() },
+            state.backupApkUrl.ifBlank { defaultRawApkUrl() },
+            defaultReleaseTagApkUrl(),
+            defaultRawApkUrl(FIXED_GITHUB_REPO, "main")
+        ).distinct()
+
+        _syncState.value = _syncState.value.copy(
+            isDownloadingApk = true,
+            downloadProgressPercent = 2,
+            downloadErrorArabic = null
+        )
+
+        val targetFile = getLocalApkUpdateFile(appContext)
+        val tempFile = File(targetFile.parentFile, "$APK_UPDATE_FILENAME.tmp")
+
+        var downloadedSuccess = false
+        for (urlStr in candidateUrls) {
+            if (downloadApkFromCandidateUrl(urlStr, tempFile)) {
+                if (tempFile.exists() && tempFile.length() > 100_000L) {
+                    if (targetFile.exists()) targetFile.delete()
+                    val renamed = tempFile.renameTo(targetFile)
+                    if (!renamed) {
+                        tempFile.copyTo(targetFile, overwrite = true)
+                        tempFile.delete()
+                    }
+                    downloadedSuccess = true
+                    break
+                }
+            }
+        }
+
+        if (downloadedSuccess && targetFile.exists() && targetFile.length() > 100_000L) {
+            _syncState.value = _syncState.value.copy(
+                isDownloadingApk = false,
+                downloadProgressPercent = 100,
+                downloadedApkReady = true,
+                downloadErrorArabic = null,
+                lastSyncSummaryArabic = "اكتمل تنزيل التحديث داخل التطبيق؛ جاري فتح شاشة التثبيت..."
+            )
+            if (autoLaunchInstaller) {
+                withContext(Dispatchers.Main) {
+                    installDownloadedApk(appContext)
+                }
+            }
+            true
+        } else {
+            if (tempFile.exists()) tempFile.delete()
+            _syncState.value = _syncState.value.copy(
+                isDownloadingApk = false,
+                downloadProgressPercent = 0,
+                downloadErrorArabic = "تعذر تنزيل ملف التحديث تلقائياً؛ يمكنك المحاولة مرة أخرى"
+            )
+            false
+        }
+    }
+
+    private fun downloadApkFromCandidateUrl(urlString: String, destinationFile: File): Boolean {
+        var connection: HttpURLConnection? = null
+        return try {
+            val url = URL(urlString)
+            var activeConn: HttpURLConnection = (url.openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                requestMethod = "GET"
+                connectTimeout = 12_000
+                readTimeout = 20_000
+                useCaches = false
+                setRequestProperty("Cache-Control", "no-cache")
+                setRequestProperty("Accept", "application/vnd.android.package-archive, application/octet-stream, */*")
+            }
+            connection = activeConn
+
+            var code = activeConn.responseCode
+            var redirectCount = 0
+            while (code in listOf(
+                    HttpURLConnection.HTTP_MOVED_PERM,
+                    HttpURLConnection.HTTP_MOVED_TEMP,
+                    HttpURLConnection.HTTP_SEE_OTHER,
+                    307,
+                    308
+                ) && redirectCount < 5
+            ) {
+                val newLocation = activeConn.getHeaderField("Location") ?: break
+                activeConn.disconnect()
+                activeConn = (URL(newLocation).openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = true
+                    requestMethod = "GET"
+                    connectTimeout = 12_000
+                    readTimeout = 20_000
+                    useCaches = false
+                }
+                connection = activeConn
+                code = activeConn.responseCode
+                redirectCount++
+            }
+
+            if (code !in 200..299) return false
+
+            val totalBytes = activeConn.contentLengthLong
+            var downloadedBytes = 0L
+            var lastProgressEmitMillis = 0L
+
+            BufferedInputStream(activeConn.inputStream).use { input ->
+                FileOutputStream(destinationFile).use { output ->
+                    val buffer = ByteArray(16 * 1024)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        downloadedBytes += bytesRead
+                        val now = System.currentTimeMillis()
+                        if (now - lastProgressEmitMillis >= 120L) {
+                            lastProgressEmitMillis = now
+                            val percent = if (totalBytes > 0L) {
+                                ((downloadedBytes * 100L) / totalBytes).toInt().coerceIn(5, 99)
+                            } else {
+                                // Estimate against ~12 MB APK when Content-Length is omitted
+                                ((downloadedBytes * 100L) / (12L * 1024L * 1024L)).toInt().coerceIn(5, 95)
+                            }
+                            _syncState.value = _syncState.value.copy(
+                                isDownloadingApk = true,
+                                downloadProgressPercent = percent
+                            )
+                        }
+                    }
+                    output.flush()
+                }
+            }
+            destinationFile.exists() && destinationFile.length() > 100_000L
+        } catch (_: Exception) {
+            false
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    /**
+     * Launches the Android system Package Installer for the downloaded APK using [FileProvider].
+     * If the user hasn't granted "Install unknown apps" permission on Android 8.0+, opens the
+     * system permission screen for this package so they can allow it and tap install immediately.
+     */
+    fun installDownloadedApk(context: Context): Boolean {
+        val appContext = context.applicationContext
+        val apkFile = getLocalApkUpdateFile(appContext)
+        if (!apkFile.exists() || apkFile.length() <= 100_000L) {
+            startInAppApkDownloadAndInstall(appContext, autoLaunchInstaller = true)
+            return false
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val canInstall = runCatching { appContext.packageManager.canRequestPackageInstalls() }.getOrDefault(true)
+            if (!canInstall) {
+                runCatching {
+                    val settingsIntent = Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${appContext.packageName}")
+                    ).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(settingsIntent)
+                    _syncState.value = _syncState.value.copy(
+                        silentDeltaBannerMessage = "يرجى السماح بتثبيت التحديث من هذا المصدر ثم الضغط على 'تثبيت التحديث الآن'"
+                    )
+                }
+                return false
+            }
+        }
+
+        return runCatching {
+            val apkUri = FileProvider.getUriForFile(
+                appContext,
+                "${appContext.packageName}.fileprovider",
+                apkFile
+            )
+            val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(apkUri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(installIntent)
+            true
+        }.getOrElse {
+            false
+        }
+    }
+
+    /**
+     * Triggers the in-app APK download & installer directly (and falls back to browser only if requested).
      */
     fun openLatestFullApkDownload(context: Context, useBackupLink: Boolean = false) {
-        val state = _syncState.value
-        val targetUrl = if (useBackupLink) {
-            state.backupApkUrl.ifBlank { defaultRawApkUrl() }
-        } else {
-            state.latestDirectApkUrl.ifBlank { defaultDirectApkUrl() }
+        val appContext = context.applicationContext
+        val apkFile = getLocalApkUpdateFile(appContext)
+        if (_syncState.value.downloadedApkReady && apkFile.exists() && apkFile.length() > 100_000L && !useBackupLink) {
+            if (installDownloadedApk(context)) return
         }
+        if (!useBackupLink) {
+            startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
+            return
+        }
+        val state = _syncState.value
+        val targetUrl = state.backupApkUrl.ifBlank { defaultRawApkUrl() }
         runCatching {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
-        }.onFailure {
-            if (!useBackupLink) {
-                openLatestFullApkDownload(context, useBackupLink = true)
-            }
         }
     }
 

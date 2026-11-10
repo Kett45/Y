@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -306,47 +307,113 @@ fun HomeScreen(
                     }
                 }
 
-                // 5. Servant Blocks ("بلوك لكل خادم وتحته أطفاله" — shared across all members; collapse/hide is personal)
-                items(
-                    items = visibleBlocks,
-                    key = { "block_${it.id}" },
-                    contentType = { "servant_block" }
-                ) { block ->
+                // 5. Servant Blocks ("بلوك لكل خادم وتحته أطفاله" — flattened into LazyColumn items for 60fps scrolling)
+                visibleBlocks.forEach { block ->
                     val blockStudents = studentsByBlockId[block.id].orEmpty()
                     val isCollapsed = isBlockCollapsed(block.id)
-                    ServantBlockSection(
-                        block = block,
-                        groupName = state.group?.name.orEmpty(),
-                        students = blockStudents,
-                        enabledCards = state.enabledCardTypes,
-                        state = state,
-                        isCollapsed = isCollapsed,
-                        onToggleCollapse = { toggleBlockCollapse(block.id) },
-                        onAwardCard = onAwardCard,
-                        onOpenMoveDialog = { studentForMoveSheet = it },
-                        onOpenDetailsDialog = { studentForDetailsSheet = it },
-                        onOpenPhotoDialog = { studentForPhotoDialog = it },
-                        onReorderStudent = onReorderStudent
+                    val blockAccent = KamSemanticColors.blockColor(block.colorHex)
+
+                    item(
+                        key = "block_header_${block.id}",
+                        contentType = "servant_block_header"
+                    ) {
+                        ServantBlockHeaderCard(
+                            block = block,
+                            groupName = state.group?.name.orEmpty(),
+                            studentsCount = blockStudents.size,
+                            blockAccent = blockAccent,
+                            isCollapsed = isCollapsed,
+                            onToggleCollapse = { toggleBlockCollapse(block.id) }
+                        )
+                    }
+
+                    if (!isCollapsed) {
+                        if (blockStudents.isEmpty()) {
+                            item(
+                                key = "block_empty_${block.id}",
+                                contentType = "servant_block_empty"
+                            ) {
+                                ServantBlockEmptyCard(blockAccent = blockAccent)
+                            }
+                        } else {
+                            itemsIndexed(
+                                items = blockStudents,
+                                key = { _, student -> "blk_${block.id}_stu_${student.id}" },
+                                contentType = { _, _ -> "block_student_row" }
+                            ) { idx, student ->
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(
+                                            width = 1.dp,
+                                            color = blockAccent.copy(alpha = 0.5f),
+                                            shape = RoundedCornerShape(14.dp)
+                                        )
+                                ) {
+                                    StudentFastCardRow(
+                                        student = student,
+                                        blockAccent = blockAccent,
+                                        blockLabel = "بلوك ${block.servantName}",
+                                        monthPoints = state.pointsForStudentInDisplayedScope(student.id),
+                                        enabledCards = state.enabledCardTypes,
+                                        state = state,
+                                        canMoveUp = idx > 0,
+                                        canMoveDown = idx < blockStudents.lastIndex,
+                                        onAwardCard = { cardType -> onAwardCard(student, cardType) },
+                                        onOpenMoveDialog = { studentForMoveSheet = student },
+                                        onOpenDetailsDialog = { studentForDetailsSheet = student },
+                                        onOpenPhotoDialog = { studentForPhotoDialog = student },
+                                        onReorder = { moveUp -> onReorderStudent(student, moveUp) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 6. Unassigned Students ("قسم بدون بلوك في الآخر" — flattened into LazyColumn items for instant rendering)
+                val isUnassignedCollapsed = isBlockCollapsed("UNASSIGNED")
+                item(
+                    key = "unassigned_section_header",
+                    contentType = "unassigned_header"
+                ) {
+                    UnassignedStudentsHeaderCard(
+                        studentsCount = unassignedStudents.size,
+                        isCollapsed = isUnassignedCollapsed,
+                        onToggleCollapse = { toggleBlockCollapse("UNASSIGNED") }
                     )
                 }
 
-                // 6. Unassigned Students ("قسم بدون بلوك في الآخر")
-                item(key = "unassigned_section", contentType = "unassigned_section") {
-                    val isUnassignedCollapsed = isBlockCollapsed("UNASSIGNED")
-                    UnassignedStudentsSection(
-                        students = unassignedStudents,
-                        blocks = state.blocks,
-                        enabledCards = state.enabledCardTypes,
-                        state = state,
-                        isCollapsed = isUnassignedCollapsed,
-                        onToggleCollapse = { toggleBlockCollapse("UNASSIGNED") },
-                        onAwardCard = onAwardCard,
-                        onMoveStudentToBlock = onMoveStudentToBlock,
-                        onOpenMoveDialog = { studentForMoveSheet = it },
-                        onOpenDetailsDialog = { studentForDetailsSheet = it },
-                        onOpenPhotoDialog = { studentForPhotoDialog = it },
-                        onReorderStudent = onReorderStudent
-                    )
+                if (!isUnassignedCollapsed) {
+                    if (unassignedStudents.isEmpty()) {
+                        item(
+                            key = "unassigned_section_empty",
+                            contentType = "unassigned_empty"
+                        ) {
+                            UnassignedStudentsEmptyCard()
+                        }
+                    } else {
+                        itemsIndexed(
+                            items = unassignedStudents,
+                            key = { _, student -> "unassigned_stu_${student.id}" },
+                            contentType = { _, _ -> "unassigned_student_row" }
+                        ) { idx, student ->
+                            UnassignedStudentLazyRow(
+                                student = student,
+                                blocks = state.blocks,
+                                enabledCards = state.enabledCardTypes,
+                                state = state,
+                                canMoveUp = idx > 0,
+                                canMoveDown = idx < unassignedStudents.lastIndex,
+                                onAwardCard = { cardType -> onAwardCard(student, cardType) },
+                                onMoveStudentToBlock = { blkId -> onMoveStudentToBlock(student, blkId) },
+                                onOpenMoveDialog = { studentForMoveSheet = student },
+                                onOpenDetailsDialog = { studentForDetailsSheet = student },
+                                onOpenPhotoDialog = { studentForPhotoDialog = student },
+                                onReorder = { moveUp -> onReorderStudent(student, moveUp) }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -693,28 +760,26 @@ private fun HomeTopControlCard(
                         }
                     }
 
-                    // Leaderboard Icon Button ("صفحة ترتيب ونقاط الفصل بالكامل")
-                    if (state.group?.showLeaderboard != false) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (showLeaderboardExpanded) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            },
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clickable(onClick = onToggleLeaderboard)
-                                .testTag("toggle_leaderboard_button")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.EmojiEvents,
-                                    contentDescription = "ترتيب ونقاط الفصل بالكامل",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
+                    // Leaderboard Icon Button ("صفحة ترتيب ونقاط الفصل بالكامل" — always accessible)
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (showLeaderboardExpanded) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clickable(onClick = onToggleLeaderboard)
+                            .testTag("toggle_leaderboard_button")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.EmojiEvents,
+                                contentDescription = "ترتيب ونقاط الفصل بالكامل",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(19.dp)
+                            )
                         }
                     }
 
@@ -921,22 +986,14 @@ private fun EmptyClassroomPromptCard(
 }
 
 @Composable
-private fun ServantBlockSection(
+private fun ServantBlockHeaderCard(
     block: ServantBlock,
     groupName: String,
-    students: List<Student>,
-    enabledCards: List<CardType>,
-    state: KamScreenState,
+    studentsCount: Int,
+    blockAccent: Color,
     isCollapsed: Boolean,
-    onToggleCollapse: () -> Unit,
-    onAwardCard: (Student, CardType) -> Unit,
-    onOpenMoveDialog: (Student) -> Unit,
-    onOpenDetailsDialog: (Student) -> Unit,
-    onOpenPhotoDialog: (Student) -> Unit,
-    onReorderStudent: (Student, Boolean) -> Unit
+    onToggleCollapse: () -> Unit
 ) {
-    val blockAccent = KamSemanticColors.blockColor(block.colorHex)
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -948,129 +1005,103 @@ private fun ServantBlockSection(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // Colored Block Header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(blockAccent.copy(alpha = 0.22f))
+                .clickable(onClick = onToggleCollapse)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(blockAccent.copy(alpha = 0.22f))
-                    .clickable(onClick = onToggleCollapse)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(14.dp)
-                            .clip(CircleShape)
-                            .background(blockAccent)
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clip(CircleShape)
+                        .background(blockAccent)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                        text = "بلوك ${block.servantName}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "بلوك ${block.servantName}",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "$groupName • ${students.size} طفل",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = blockAccent.copy(alpha = 0.25f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "${students.size}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = blockAccent,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                            contentDescription = if (isCollapsed) "عرض الأطفال" else "طي البلوك",
-                            tint = blockAccent,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    Text(
+                        text = "$groupName • $studentsCount طفل",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
-            AnimatedVisibility(visible = !isCollapsed) {
-                if (students.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "لا يوجد أطفال في هذا البلوك حالياً — انقل أي طفل من قسم 'بدون بلوك' بضغطة واحدة.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                } else {
-                    Column(
-                        modifier = Modifier.padding(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        students.forEachIndexed { idx, student ->
-                            StudentFastCardRow(
-                                student = student,
-                                blockAccent = blockAccent,
-                                blockLabel = "بلوك ${block.servantName}",
-                                monthPoints = state.pointsForStudentInDisplayedScope(student.id),
-                                enabledCards = enabledCards,
-                                state = state,
-                                canMoveUp = idx > 0,
-                                canMoveDown = idx < students.lastIndex,
-                                onAwardCard = { cardType -> onAwardCard(student, cardType) },
-                                onOpenMoveDialog = { onOpenMoveDialog(student) },
-                                onOpenDetailsDialog = { onOpenDetailsDialog(student) },
-                                onOpenPhotoDialog = { onOpenPhotoDialog(student) },
-                                onReorder = { moveUp -> onReorderStudent(student, moveUp) }
-                            )
-                        }
-                    }
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = blockAccent.copy(alpha = 0.25f)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "$studentsCount",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = blockAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                        contentDescription = if (isCollapsed) "عرض الأطفال" else "طي البلوك",
+                        tint = blockAccent,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun UnassignedStudentsSection(
-    students: List<Student>,
-    blocks: List<ServantBlock>,
-    enabledCards: List<CardType>,
-    state: KamScreenState,
+private fun ServantBlockEmptyCard(blockAccent: Color) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = blockAccent.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(14.dp)
+            ),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "لا يوجد أطفال في هذا البلوك حالياً — انقل أي طفل من قسم 'بدون بلوك' بضغطة واحدة.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun UnassignedStudentsHeaderCard(
+    studentsCount: Int,
     isCollapsed: Boolean,
-    onToggleCollapse: () -> Unit,
-    onAwardCard: (Student, CardType) -> Unit,
-    onMoveStudentToBlock: (Student, String) -> Unit,
-    onOpenMoveDialog: (Student) -> Unit,
-    onOpenDetailsDialog: (Student) -> Unit,
-    onOpenPhotoDialog: (Student) -> Unit,
-    onReorderStudent: (Student, Boolean) -> Unit
+    onToggleCollapse: () -> Unit
 ) {
     val unassignedColor = KamSemanticColors.unassignedBlock
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1082,114 +1113,132 @@ private fun UnassignedStudentsSection(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(unassignedColor.copy(alpha = 0.28f))
-                    .clickable(onClick = onToggleCollapse)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "بدون بلوك (الأسماء الجديدة)",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "${students.size} طفل في انتظار التسكين في بلوك",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Icon(
-                    imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                    contentDescription = "طي أو فتح",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(unassignedColor.copy(alpha = 0.28f))
+                .clickable(onClick = onToggleCollapse)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "بدون بلوك (الأسماء الجديدة)",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "$studentsCount طفل في انتظار التسكين في بلوك",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            AnimatedVisibility(visible = !isCollapsed) {
-                if (students.isEmpty()) {
-                    Box(
+            Icon(
+                imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                contentDescription = "طي أو فتح",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun UnassignedStudentsEmptyCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "كل الأطفال موزعين على البلوكات بنجاح!",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun UnassignedStudentLazyRow(
+    student: Student,
+    blocks: List<ServantBlock>,
+    enabledCards: List<CardType>,
+    state: KamScreenState,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onAwardCard: (CardType) -> Unit,
+    onMoveStudentToBlock: (String) -> Unit,
+    onOpenMoveDialog: () -> Unit,
+    onOpenDetailsDialog: () -> Unit,
+    onOpenPhotoDialog: () -> Unit,
+    onReorder: (Boolean) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(KamSemanticColors.elevatedSurface)
+            .border(
+                width = 1.dp,
+                color = KamSemanticColors.unassignedBlock.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(14.dp)
+            )
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        StudentFastCardRow(
+            student = student,
+            blockAccent = MaterialTheme.colorScheme.primary,
+            blockLabel = "بدون بلوك",
+            monthPoints = state.pointsForStudentInDisplayedScope(student.id),
+            enabledCards = enabledCards,
+            state = state,
+            canMoveUp = canMoveUp,
+            canMoveDown = canMoveDown,
+            onAwardCard = onAwardCard,
+            onOpenMoveDialog = onOpenMoveDialog,
+            onOpenDetailsDialog = onOpenDetailsDialog,
+            onOpenPhotoDialog = onOpenPhotoDialog,
+            onReorder = onReorder
+        )
+
+        // One-tap quick transfer chips to any Servant Block
+        if (blocks.isNotEmpty()) {
+            Text(
+                text = "نقل سريع بضغطة واحدة إلى بلوك:",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                blocks.forEach { blk ->
+                    val blkColor = KamSemanticColors.blockColor(blk.colorHex)
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = blkColor.copy(alpha = 0.2f),
+                        border = BorderStroke(1.dp, blkColor),
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        contentAlignment = Alignment.Center
+                            .clickable { onMoveStudentToBlock(blk.id) }
+                            .testTag("quick_move_${student.id}_to_${blk.id}")
                     ) {
                         Text(
-                            text = "كل الأطفال موزعين على البلوكات بنجاح!",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "↗ ${blk.servantName}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
-                    }
-                } else {
-                    Column(
-                        modifier = Modifier.padding(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        students.forEachIndexed { idx, student ->
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(KamSemanticColors.elevatedSurface)
-                                    .padding(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                StudentFastCardRow(
-                                    student = student,
-                                    blockAccent = MaterialTheme.colorScheme.primary,
-                                    blockLabel = "بدون بلوك",
-                                    monthPoints = state.pointsForStudentInDisplayedScope(student.id),
-                                    enabledCards = enabledCards,
-                                    state = state,
-                                    canMoveUp = idx > 0,
-                                    canMoveDown = idx < students.lastIndex,
-                                    onAwardCard = { cardType -> onAwardCard(student, cardType) },
-                                    onOpenMoveDialog = { onOpenMoveDialog(student) },
-                                    onOpenDetailsDialog = { onOpenDetailsDialog(student) },
-                                    onOpenPhotoDialog = { onOpenPhotoDialog(student) },
-                                    onReorder = { moveUp -> onReorderStudent(student, moveUp) }
-                                )
-
-                                // One-tap quick transfer chips to any Servant Block
-                                if (blocks.isNotEmpty()) {
-                                    Text(
-                                        text = "نقل سريع بضغطة واحدة إلى بلوك:",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        blocks.forEach { blk ->
-                                            val blkColor = KamSemanticColors.blockColor(blk.colorHex)
-                                            Surface(
-                                                shape = RoundedCornerShape(10.dp),
-                                                color = blkColor.copy(alpha = 0.2f),
-                                                border = BorderStroke(1.dp, blkColor),
-                                                modifier = Modifier
-                                                    .clickable { onMoveStudentToBlock(student, blk.id) }
-                                                    .testTag("quick_move_${student.id}_to_${blk.id}")
-                                            ) {
-                                                Text(
-                                                    text = "↗ ${blk.servantName}",
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }

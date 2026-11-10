@@ -448,6 +448,9 @@ fun AuthenticatedKamApp(
             errorMessage = state.errorMessage,
             majorUpdatePrompt = githubSyncState.majorUpdatePrompt,
             majorUpdateReasonArabic = githubSyncState.majorUpdateReasonArabic,
+            isDownloadingApk = githubSyncState.isDownloadingApk,
+            downloadProgressPercent = githubSyncState.downloadProgressPercent,
+            downloadedApkReady = githubSyncState.downloadedApkReady,
             onInstallMajorUpdate = { GitHubSmartSyncEngine.openLatestFullApkDownload(context) },
             onDismissMajorUpdate = { GitHubSmartSyncEngine.dismissMajorUpdatePrompt(context) },
             onDismissConnectivityToast = { showConnectivityToast = false },
@@ -472,6 +475,9 @@ private fun FloatingNotificationsOverlay(
     errorMessage: String?,
     majorUpdatePrompt: GitHubVersionManifest? = null,
     majorUpdateReasonArabic: String? = null,
+    isDownloadingApk: Boolean = false,
+    downloadProgressPercent: Int = 0,
+    downloadedApkReady: Boolean = false,
     onInstallMajorUpdate: () -> Unit = {},
     onDismissMajorUpdate: () -> Unit = {},
     onDismissConnectivityToast: () -> Unit,
@@ -487,14 +493,14 @@ private fun FloatingNotificationsOverlay(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 0. Non-intrusive 1-Tap Full Update Pill (ONLY appears when the version gap is large and delta-only sync isn't enough)
+        // 0. Non-intrusive 1-Tap In-App Update Pill with live download progress bar
         AnimatedVisibility(
-            visible = majorUpdatePrompt != null,
+            visible = majorUpdatePrompt != null || isDownloadingApk,
             enter = fadeIn() + slideInVertically { -it },
             exit = fadeOut() + slideOutVertically { -it }
         ) {
             val prompt = majorUpdatePrompt
-            if (prompt != null) {
+            if (prompt != null || isDownloadingApk) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.98f),
@@ -504,43 +510,71 @@ private fun FloatingNotificationsOverlay(
                         .fillMaxWidth()
                         .testTag("github_major_update_pill")
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "تحديث كامل جاهز (v${prompt.versionName})",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = majorUpdateReasonArabic ?: "فارق النسخ كبير؛ اضغط لتحديث الحزمة الكاملة بضغطة واحدة",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = when {
+                                        isDownloadingApk -> "جاري تنزيل التحديث داخل التطبيق ($downloadProgressPercent%)"
+                                        downloadedApkReady -> "التحديث جاهز للتثبيت المباشر (v${prompt?.versionName.orEmpty()})"
+                                        else -> "تحديث جديد متاح (v${prompt?.versionName.orEmpty()})"
+                                    },
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = majorUpdateReasonArabic ?: "يتم تنزيل التحديث وتثبيته مباشرة داخل التطبيق",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Button(
+                                    onClick = onInstallMajorUpdate,
+                                    enabled = !isDownloadingApk,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.testTag("github_install_update_button")
+                                ) {
+                                    Text(
+                                        text = when {
+                                            isDownloadingApk -> "$downloadProgressPercent%"
+                                            downloadedApkReady -> "تثبيت الآن"
+                                            else -> "تحديث الآن"
+                                        },
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                if (!isDownloadingApk) {
+                                    TextButton(
+                                        onClick = onDismissMajorUpdate,
+                                        modifier = Modifier.testTag("github_dismiss_update_button")
+                                    ) {
+                                        Text("لاحقاً")
+                                    }
+                                }
+                            }
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Button(
-                                onClick = onInstallMajorUpdate,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.testTag("github_install_update_button")
-                            ) {
-                                Text("تحديث الآن", fontWeight = FontWeight.Bold)
-                            }
-                            TextButton(
-                                onClick = onDismissMajorUpdate,
-                                modifier = Modifier.testTag("github_dismiss_update_button")
-                            ) {
-                                Text("لاحقاً")
-                            }
+                        if (isDownloadingApk) {
+                            androidx.compose.material3.LinearProgressIndicator(
+                                progress = { (downloadProgressPercent / 100f).coerceIn(0.02f, 1f) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                            )
                         }
                     }
                 }
