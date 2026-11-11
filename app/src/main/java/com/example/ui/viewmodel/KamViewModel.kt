@@ -1797,8 +1797,9 @@ class KamViewModel(
             val greeting = if (inviteeName.isNotBlank()) "أهلاً $inviteeName،\n" else "أهلاً بك،\n"
             return buildString {
                 append(greeting)
-                append("تمت دعوتك للانضمام كخادم في مجموعة «$groupName» على تطبيق كارت المذبح (kAM Lite).\n\n")
+                append("تمت دعوتك للانضمام كخادم في مجموعة «$groupName» على تطبيق نجم الكارت v1.6.\n\n")
                 append("🔑 رمز الدخول اليومي للمجموعة (صالح لمدة ٢٤ ساعة فقط): $inviteCode\n\n")
+                append("📲 رابط تحميل أحدث نسخة من التطبيق:\nhttps://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk\n\n")
                 append("خطوات الانضمام:\n")
                 append("1. افتح التطبيق واختر «أنا خادم (لدي رمز)».\n")
                 append("2. اكتب اسمك وأدخل الرمز الكامل: $inviteCode\n")

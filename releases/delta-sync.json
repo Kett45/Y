@@ -1,18 +1,17 @@
 {
-  "targetVersionCode": 5,
-  "targetVersionName": "1.5.0",
-  "minCompatibleBaseVersion": 5,
+  "targetVersionCode": 6,
+  "targetVersionName": "1.6",
+  "minCompatibleBaseVersion": 3,
   "commitSha": "latest",
-  "updatedAt": "2026-11-10T13:30:00Z",
-  "deltaSummaryArabic": "الإصدار 1.5.0: تسريع شامل للتمرير والفتح + تنزيل وتثبيت التحديث تلقائياً داخل التطبيق",
-  "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk?v=1.5.0",
-  "backupApkUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/kAM-Lite.apk?v=1.5.0",
+  "updatedAt": "2026-11-10T18:05:00Z",
+  "deltaSummaryArabic": "الإصدار 1.6 (نجم الكارت v1.6): فتح فوري بالتخزين المحلي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + مزامنة تفضيلات الحساب على السحابة",
+  "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "changedModules": [
-    "flattened_lazy_column_60fps",
-    "on_demand_full_photo_decode",
-    "background_state_combine",
-    "in_app_apk_auto_installer",
-    "github_delta_sync_kett45"
+    "instant_0ms_local_classroom_cache",
+    "sunlight_high_contrast_light_theme",
+    "dedicated_appearance_screen_star_icon",
+    "cloud_and_local_user_preferences_sync",
+    "single_auto_updating_github_apk_link"
   ],
   "dynamicConfig": {
     "maxStudentsPerGroup": 150,

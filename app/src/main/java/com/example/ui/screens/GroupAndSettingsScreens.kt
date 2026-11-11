@@ -1348,6 +1348,56 @@ private fun GitHubAutoSyncSettingsCard() {
                 fontWeight = FontWeight.Bold
             )
 
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "الرابط الوحيد للتحديث التلقائي المباشر:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = syncState.latestDirectApkUrl,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                clipboard?.setPrimaryClip(
+                                    ClipData.newPlainText("نجم الكارت APK", syncState.latestDirectApkUrl)
+                                )
+                            },
+                            modifier = Modifier.testTag("copy_github_direct_apk_url_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "نسخ رابط GitHub",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             if (syncState.isDownloadingApk) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
@@ -1408,7 +1458,7 @@ private fun GitHubAutoSyncSettingsCard() {
                     onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                         clipboard?.setPrimaryClip(
-                            ClipData.newPlainText("نجم الكارت v1.6 Latest APK", syncState.latestDirectApkUrl)
+                            ClipData.newPlainText("نجم الكارت v${syncState.effectiveSyncedVersionName} Latest APK", syncState.latestDirectApkUrl)
                         )
                         GitHubSmartSyncEngine.startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
                     },

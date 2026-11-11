@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "نجم الكارت v1.6"
+rootProject.name = "NajmElKart"
 
 include(":app")

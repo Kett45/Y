@@ -133,24 +133,44 @@ object GitHubSmartSyncEngine {
     fun defaultDeltaPayloadUrl(repoSlug: String = FIXED_GITHUB_REPO, branch: String = "main"): String =
         "https://raw.githubusercontent.com/$repoSlug/$branch/releases/delta-sync.json"
 
-    fun defaultDirectApkUrl(repoSlug: String = FIXED_GITHUB_REPO): String =
-        "https://github.com/$repoSlug/raw/main/releases/kAM-Lite.apk?v=${BuildConfig.VERSION_NAME}"
+    fun defaultDirectApkUrl(
+        repoSlug: String = FIXED_GITHUB_REPO,
+        @Suppress("UNUSED_PARAMETER") versionName: String = BuildConfig.VERSION_NAME
+    ): String =
+        "https://github.com/$repoSlug/raw/main/releases/kAM-Lite.apk"
 
-    fun defaultRawApkUrl(repoSlug: String = FIXED_GITHUB_REPO, branch: String = "main"): String =
-        "https://raw.githubusercontent.com/$repoSlug/$branch/releases/kAM-Lite.apk?v=${BuildConfig.VERSION_NAME}"
+    fun defaultRawApkUrl(
+        repoSlug: String = FIXED_GITHUB_REPO,
+        branch: String = "main",
+        @Suppress("UNUSED_PARAMETER") versionName: String = BuildConfig.VERSION_NAME
+    ): String =
+        "https://github.com/$repoSlug/raw/$branch/releases/kAM-Lite.apk"
 
     fun defaultReleaseTagApkUrl(repoSlug: String = FIXED_GITHUB_REPO): String =
-        "https://github.com/$repoSlug/releases/download/latest/kAM-Lite.apk"
+        "https://github.com/$repoSlug/raw/main/releases/kAM-Lite.apk"
 
-    private fun sanitizeLegacyRepoUrl(url: String?, fallbackUrl: String): String {
+    /**
+     * Normalizes any APK link to the single permanent auto-updating GitHub URL
+     * (`https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk`) without extra query suffixes.
+     */
+    internal fun sanitizeAndRefreshApkUrl(
+        url: String?,
+        fallbackUrl: String,
+        @Suppress("UNUSED_PARAMETER") activeVersionName: String = BuildConfig.VERSION_NAME
+    ): String {
         val trimmed = url?.trim().orEmpty()
         if (trimmed.isBlank() ||
             trimmed.contains("fkk7777k/kAM-Lite", ignoreCase = true) ||
             trimmed.contains("kappa.lol", ignoreCase = true)
         ) {
-            return fallbackUrl
+            return fallbackUrl.substringBefore("?")
         }
-        return trimmed
+        val baseWithoutQuery = trimmed.substringBefore("?")
+        return if (baseWithoutQuery.endsWith(".apk", ignoreCase = true)) {
+            defaultDirectApkUrl(FIXED_GITHUB_REPO)
+        } else {
+            trimmed
+        }
     }
 
     private val _syncState = MutableStateFlow(GitHubSyncUiState())
@@ -221,9 +241,21 @@ object GitHubSmartSyncEngine {
                 requiresFullInstall = obj.optBoolean("requiresFullInstall", false),
                 commitSha = obj.optString("commitSha", ""),
                 updatedAt = obj.optString("updatedAt", ""),
-                apkDirectUrl = sanitizeLegacyRepoUrl(obj.optString("apkDirectUrl", ""), defaultDirectApkUrl()),
-                backupApkUrl = sanitizeLegacyRepoUrl(obj.optString("backupApkUrl", ""), defaultRawApkUrl()),
-                deltaSyncUrl = sanitizeLegacyRepoUrl(obj.optString("deltaSyncUrl", ""), defaultDeltaPayloadUrl()),
+                apkDirectUrl = sanitizeAndRefreshApkUrl(
+                    obj.optString("apkDirectUrl", ""),
+                    defaultDirectApkUrl(FIXED_GITHUB_REPO, versionName),
+                    versionName
+                ),
+                backupApkUrl = sanitizeAndRefreshApkUrl(
+                    obj.optString("backupApkUrl", ""),
+                    defaultRawApkUrl(FIXED_GITHUB_REPO, "main", versionName),
+                    versionName
+                ),
+                deltaSyncUrl = sanitizeAndRefreshApkUrl(
+                    obj.optString("deltaSyncUrl", ""),
+                    defaultDeltaPayloadUrl(),
+                    versionName
+                ),
                 releaseNotesArabic = obj.optString("releaseNotesArabic", "")
             )
         }.getOrNull()
@@ -234,6 +266,7 @@ object GitHubSmartSyncEngine {
             val obj = JSONObject(jsonString)
             val targetCode = obj.optInt("targetVersionCode", 0)
             if (targetCode <= 0) return null
+            val targetName = obj.optString("targetVersionName", "1.0.$targetCode")
             val modulesArr = obj.optJSONArray("changedModules")
             val modules = buildList {
                 if (modulesArr != null) {
@@ -246,13 +279,21 @@ object GitHubSmartSyncEngine {
             val dynConfig = obj.optJSONObject("dynamicConfig")
             GitHubDeltaPayload(
                 targetVersionCode = targetCode,
-                targetVersionName = obj.optString("targetVersionName", "1.0.$targetCode"),
+                targetVersionName = targetName,
                 minCompatibleBaseVersion = obj.optInt("minCompatibleBaseVersion", 1),
                 commitSha = obj.optString("commitSha", ""),
                 updatedAt = obj.optString("updatedAt", ""),
                 deltaSummaryArabic = obj.optString("deltaSummaryArabic", "تم تحديث آخر التطورات تلقائياً بالخلفية"),
-                latestApkDirectUrl = sanitizeLegacyRepoUrl(obj.optString("latestApkDirectUrl", ""), defaultDirectApkUrl()),
-                backupApkUrl = sanitizeLegacyRepoUrl(obj.optString("backupApkUrl", ""), defaultRawApkUrl()),
+                latestApkDirectUrl = sanitizeAndRefreshApkUrl(
+                    obj.optString("latestApkDirectUrl", ""),
+                    defaultDirectApkUrl(FIXED_GITHUB_REPO, targetName),
+                    targetName
+                ),
+                backupApkUrl = sanitizeAndRefreshApkUrl(
+                    obj.optString("backupApkUrl", ""),
+                    defaultRawApkUrl(FIXED_GITHUB_REPO, "main", targetName),
+                    targetName
+                ),
                 changedModules = modules,
                 announcementBanner = dynConfig?.optString("announcementBanner", "").orEmpty()
             )
@@ -261,31 +302,53 @@ object GitHubSmartSyncEngine {
 
     /**
      * Loads cached delta state from SharedPreferences immediately so startup is 0ms,
-     * and automatically purges any legacy repository URLs.
+     * and automatically refreshes any older version URLs to the current active version.
      */
     fun initializeFromLocalCache(context: Context) {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val cachedCode = prefs.getInt(KEY_SYNCED_VERSION_CODE, BuildConfig.VERSION_CODE)
-            .coerceAtLeast(BuildConfig.VERSION_CODE)
-        val cachedName = prefs.getString(KEY_SYNCED_VERSION_NAME, null)
-            ?.takeIf { it.isNotBlank() && cachedCode > BuildConfig.VERSION_CODE }
-            ?: BuildConfig.VERSION_NAME
+        val rawCachedCode = prefs.getInt(KEY_SYNCED_VERSION_CODE, BuildConfig.VERSION_CODE)
+        val isLocalBinaryNewerOrEqual = BuildConfig.VERSION_CODE >= rawCachedCode
+        val effectiveCode = maxOf(BuildConfig.VERSION_CODE, rawCachedCode)
+        val effectiveName = if (isLocalBinaryNewerOrEqual) {
+            BuildConfig.VERSION_NAME
+        } else {
+            prefs.getString(KEY_SYNCED_VERSION_NAME, null)
+                ?.takeIf { it.isNotBlank() }
+                ?: BuildConfig.VERSION_NAME
+        }
         val cachedSha = prefs.getString(KEY_SYNCED_COMMIT_SHA, "").orEmpty()
-        val cachedSummary = prefs.getString(KEY_LAST_SUMMARY, null)
-            ?.takeIf { it.isNotBlank() }
-            ?: "متزامن تلقائياً مع مستودع GitHub ($FIXED_GITHUB_REPO)"
-        val cachedDirectUrl = sanitizeLegacyRepoUrl(
-            prefs.getString(KEY_LATEST_DIRECT_APK_URL, null),
-            defaultDirectApkUrl()
-        )
-        val cachedBackupUrl = sanitizeLegacyRepoUrl(
-            prefs.getString(KEY_BACKUP_APK_URL, null),
-            defaultRawApkUrl()
-        )
+        val cachedSummary = if (isLocalBinaryNewerOrEqual) {
+            "متزامن تلقائياً مع مستودع GitHub ($FIXED_GITHUB_REPO • v$effectiveName)"
+        } else {
+            prefs.getString(KEY_LAST_SUMMARY, null)
+                ?.takeIf { it.isNotBlank() }
+                ?: "متزامن تلقائياً مع مستودع GitHub ($FIXED_GITHUB_REPO • v$effectiveName)"
+        }
+
+        val refreshedDirectUrl = if (isLocalBinaryNewerOrEqual) {
+            defaultDirectApkUrl(FIXED_GITHUB_REPO, effectiveName)
+        } else {
+            sanitizeAndRefreshApkUrl(
+                prefs.getString(KEY_LATEST_DIRECT_APK_URL, null),
+                defaultDirectApkUrl(FIXED_GITHUB_REPO, effectiveName),
+                effectiveName
+            )
+        }
+        val refreshedBackupUrl = if (isLocalBinaryNewerOrEqual) {
+            defaultRawApkUrl(FIXED_GITHUB_REPO, "main", effectiveName)
+        } else {
+            sanitizeAndRefreshApkUrl(
+                prefs.getString(KEY_BACKUP_APK_URL, null),
+                defaultRawApkUrl(FIXED_GITHUB_REPO, "main", effectiveName),
+                effectiveName
+            )
+        }
 
         prefs.edit()
-            .putString(KEY_LATEST_DIRECT_APK_URL, cachedDirectUrl)
-            .putString(KEY_BACKUP_APK_URL, cachedBackupUrl)
+            .putInt(KEY_SYNCED_VERSION_CODE, effectiveCode)
+            .putString(KEY_SYNCED_VERSION_NAME, effectiveName)
+            .putString(KEY_LATEST_DIRECT_APK_URL, refreshedDirectUrl)
+            .putString(KEY_BACKUP_APK_URL, refreshedBackupUrl)
             .apply()
 
         val apkFile = getLocalApkUpdateFile(context.applicationContext)
@@ -295,12 +358,12 @@ object GitHubSmartSyncEngine {
             repositorySlug = FIXED_GITHUB_REPO,
             installedBinaryVersionCode = BuildConfig.VERSION_CODE,
             installedBinaryVersionName = BuildConfig.VERSION_NAME,
-            effectiveSyncedVersionCode = cachedCode,
-            effectiveSyncedVersionName = cachedName,
+            effectiveSyncedVersionCode = effectiveCode,
+            effectiveSyncedVersionName = effectiveName,
             lastSyncedCommitSha = cachedSha,
             lastSyncSummaryArabic = cachedSummary,
-            latestDirectApkUrl = cachedDirectUrl,
-            backupApkUrl = cachedBackupUrl,
+            latestDirectApkUrl = refreshedDirectUrl,
+            backupApkUrl = refreshedBackupUrl,
             downloadedApkReady = isReady
         )
     }
@@ -367,15 +430,30 @@ object GitHubSmartSyncEngine {
 
             when (decision) {
                 is GitHubSyncDecision.UpToDate -> {
-                    val directUrl = manifest.apkDirectUrl.ifBlank { defaultDirectApkUrl() }
-                    val backupUrl = manifest.backupApkUrl.ifBlank { defaultRawApkUrl() }
+                    val effectiveName = if (manifest.versionCode > BuildConfig.VERSION_CODE) {
+                        manifest.versionName
+                    } else {
+                        BuildConfig.VERSION_NAME
+                    }
+                    val directUrl = if (manifest.versionCode >= BuildConfig.VERSION_CODE && manifest.apkDirectUrl.isNotBlank()) {
+                        sanitizeAndRefreshApkUrl(manifest.apkDirectUrl, defaultDirectApkUrl(FIXED_GITHUB_REPO, effectiveName), effectiveName)
+                    } else {
+                        defaultDirectApkUrl(FIXED_GITHUB_REPO, effectiveName)
+                    }
+                    val backupUrl = if (manifest.versionCode >= BuildConfig.VERSION_CODE && manifest.backupApkUrl.isNotBlank()) {
+                        sanitizeAndRefreshApkUrl(manifest.backupApkUrl, defaultRawApkUrl(FIXED_GITHUB_REPO, "main", effectiveName), effectiveName)
+                    } else {
+                        defaultRawApkUrl(FIXED_GITHUB_REPO, "main", effectiveName)
+                    }
                     prefs.edit()
+                        .putString(KEY_SYNCED_VERSION_NAME, effectiveName)
                         .putString(KEY_LATEST_DIRECT_APK_URL, directUrl)
                         .putString(KEY_BACKUP_APK_URL, backupUrl)
                         .apply()
 
                     _syncState.value = _syncState.value.copy(
                         isCheckingInBackground = false,
+                        effectiveSyncedVersionName = effectiveName,
                         latestDirectApkUrl = directUrl,
                         backupApkUrl = backupUrl,
                         majorUpdatePrompt = if (shouldPromptBinaryUpgrade) manifest else null,
@@ -385,7 +463,7 @@ object GitHubSmartSyncEngine {
                             null
                         },
                         silentDeltaBannerMessage = if (forceManualCheck && !hasNewerApkBinary) {
-                            "التطبيق محدّث بالفعل لأعلى إصدار (${_syncState.value.effectiveSyncedVersionName})"
+                            "تم تحديث روابط GitHub تلقائياً للإصدار (v$effectiveName)"
                         } else {
                             null
                         }

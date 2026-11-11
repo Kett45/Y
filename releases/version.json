@@ -1,13 +1,12 @@
 {
-  "versionCode": 5,
-  "versionName": "1.5.0",
-  "minDeltaBaseVersionCode": 5,
+  "versionCode": 6,
+  "versionName": "1.6",
+  "minDeltaBaseVersionCode": 3,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
   "commitSha": "latest",
-  "updatedAt": "2026-11-10T13:30:00Z",
-  "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk?v=1.5.0",
-  "backupApkUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/kAM-Lite.apk?v=1.5.0",
+  "updatedAt": "2026-11-10T18:05:00Z",
+  "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.5.0: تسريع شامل للتطبيق والتمرير (60fps) + فك تشفير الصور المصغرة فقط وتأجيل الصورة الكاملة للضغط المطول + تنزيل وتثبيت التحديثات تلقائياً داخل التطبيق."
+  "releaseNotesArabic": "الإصدار 1.6 (نجم الكارت v1.6): فتح فوري (0ms) بالتخزين المحلي الذكي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + أيقونة النجمة + مزامنة التفضيلات الشخصية في حساب السحابة."
 }

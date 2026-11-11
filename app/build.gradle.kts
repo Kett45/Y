@@ -93,6 +93,70 @@ tasks.register<Copy>("syncReleaseApk") {
   from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
   into(rootProject.layout.projectDirectory.dir("releases"))
   rename { "kAM-Lite.apk" }
+
+  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 6
+  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.6"
+  val repoSlug = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
+  val releasesDir = rootProject.layout.projectDirectory.dir("releases").asFile
+  val readmeFile = rootProject.layout.projectDirectory.file("README.md").asFile
+
+  doLast {
+    val minDeltaBase = (verCode - 3).coerceAtLeast(1)
+    val singleAutoUrl = "https://github.com/$repoSlug/raw/main/releases/kAM-Lite.apk"
+    val deltaUrl = "https://raw.githubusercontent.com/$repoSlug/main/releases/delta-sync.json"
+
+    releasesDir.mkdirs()
+
+    File(releasesDir, "version.json").writeText(
+      """
+      {
+        "versionCode": $verCode,
+        "versionName": "$verName",
+        "minDeltaBaseVersionCode": $minDeltaBase,
+        "maxDeltaGap": 3,
+        "requiresFullInstall": true,
+        "commitSha": "latest",
+        "updatedAt": "2026-11-10T18:05:00Z",
+        "apkDirectUrl": "$singleAutoUrl",
+        "deltaSyncUrl": "$deltaUrl",
+        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): فتح فوري (0ms) بالتخزين المحلي الذكي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + أيقونة النجمة + مزامنة التفضيلات الشخصية في حساب السحابة."
+      }
+      """.trimIndent() + "\n"
+    )
+
+    File(releasesDir, "delta-sync.json").writeText(
+      """
+      {
+        "targetVersionCode": $verCode,
+        "targetVersionName": "$verName",
+        "minCompatibleBaseVersion": $minDeltaBase,
+        "commitSha": "latest",
+        "updatedAt": "2026-11-10T18:05:00Z",
+        "deltaSummaryArabic": "الإصدار $verName (نجم الكارت v$verName): فتح فوري بالتخزين المحلي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + مزامنة تفضيلات الحساب على السحابة",
+        "latestApkDirectUrl": "$singleAutoUrl",
+        "changedModules": [
+          "instant_0ms_local_classroom_cache",
+          "sunlight_high_contrast_light_theme",
+          "dedicated_appearance_screen_star_icon",
+          "cloud_and_local_user_preferences_sync",
+          "single_auto_updating_github_apk_link"
+        ],
+        "dynamicConfig": {
+          "maxStudentsPerGroup": 150,
+          "defaultLeaderboardMultiMonthEnabled": true,
+          "enableGalleryPhotoDownload": true,
+          "announcementBanner": ""
+        }
+      }
+      """.trimIndent() + "\n"
+    )
+
+    if (readmeFile.exists()) {
+      var readme = readmeFile.readText()
+      readme = readme.replace(Regex("""https://github\.com/[^ )\]]+/raw/[^ )\]]+/releases/kAM-Lite\.apk(\?v=[^ )\]]+)?"""), singleAutoUrl)
+      readmeFile.writeText(readme)
+    }
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files

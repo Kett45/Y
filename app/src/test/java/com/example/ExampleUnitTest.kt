@@ -448,5 +448,13 @@ class ExampleUnitTest {
         val fullReq = fullFallbackDecision as com.example.data.sync.GitHubSyncDecision.FullPackageUpgradeRequired
         assertEquals(7, fullReq.versionGap)
         assertTrue(fullReq.reasonArabic.isNotBlank())
+
+        // 4. Normalization to the single permanent auto-updating GitHub APK link
+        val refreshedDirect = engine.sanitizeAndRefreshApkUrl(
+            url = "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk?v=1.5.0",
+            fallbackUrl = engine.defaultDirectApkUrl("Kett45/Y"),
+            activeVersionName = "1.6"
+        )
+        assertEquals("https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk", refreshedDirect)
     }
 }
