@@ -1,69 +1,76 @@
-# إصلاح خطأ بناء Gradle وتوافق إعدادات مشروع نجم الكارت v1.6
+# تطوير التحديث التلقائي الذكي وبصمة الـ APK على GitHub (نجم الكارت v1.6)
 
-تهدف هذه الخطة إلى معالجة خطأ البناء (`Build failed: no Gradle settings or build file found in the app directory`) وضمان استقرار عملية التجميع والمزامنة التلقائية مع الحفاظ الكامل على اسم التطبيق **«نجم الكارت v1.6»** والرابط الوحيد الدائم للتحديث التلقائي على GitHub.
+تضمن هذه الخطة أن يكتشف التطبيق أي تعديل جديد يُرفع على مستودع GitHub (`Kett45/Y`) فوراً—سواء بتغيير رقم الإصدار أو بتغير البصمة الرقمية للملف (`apkSha256` / `commitSha`)—مع إصلاح سير عمل GitHub Actions ليعمل بنجاح 100% في ثوانٍ، ومنع أي كاش قديم عند التحميل مع بقاء الرابط الظاهر للمستخدم نظيفاً وثابتاً.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> تم تحديد السبب الجذري لرسالة خطأ البناء في بيئة التشغيل، وجاهزون لتطبيق الإصلاح فوراً بمجرد الضغط على **Proceed**:
+> القرارات المعتمدة بناءً على إجاباتك:
 
-- **Confirmed Decision 1 (توافق معرّف مشروع Gradle الداخلي)**: استخدام معرّف لاتيني قياسي آمن لـ `rootProject.name` داخل إعدادات Gradle الداخلية (لتجنب تعارض النقاط والحروف غير اللاتينية في مسارات الكاش الداخلي لـ Gradle)، مع الإبقاء الكامل على اسم التطبيق الظاهر للمستخدم **«نجم الكارت v1.6»** تحت أيقونة الهاتف وفي شريط المنصة وجميع الشاشات.
-- **Confirmed Decision 2 (فصل مهمة نسخ الـ APK عن البناء العادي للمنصة)**: إبقاء مهمة التحديث التلقائي للملفات (`syncReleaseApk`) مخصصة لبيئة النشر وGitHub Actions دون إجبار عملية البناء السريع (`assembleDebug`) على إعادة كتابة ملفات المستودع أثناء فحص المنصة.
-- **Confirmed Decision 3 (الرابط الوحيد الدائم للتحديث التلقائي)**: الحفاظ على الرابط الوحيد الدائم `https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk` في المستودع وداخل التطبيق بدون أي روابط إضافية أو زائدة.
+- **Confirmed Decision 1 (اكتشاف التحديثات ببصمة الملف ورقم الإصدار معاً)**: سيفحص التطبيق كلاً من `versionCode` والبصمة الرقمية للـ APK (`apkSha256` و`commitSha`). بمجرد رفع أي ملف APK جديد على GitHub (حتى لو كان بنفس رقم الإصدار `v1.6`)، يكتشف التطبيق اختلاف البصمة ويبدأ تنزيل وتثبيت التحديث الجديد تلقائياً.
+- **Confirmed Decision 2 (اعتماد ملف الـ APK الجاهز في GitHub Actions بدون فشل)**: تعديل سير عمل GitHub Actions (`release-apk.yml`) ليعتمد ملف `releases/kAM-Lite.apk` المبني والجاهز من بيئة التطوير مباشرة، ويقوم بحساب بصمته الرقمية (`SHA-256`) وتحديث `releases/version.json` و`releases/delta-sync.json` ونشر الـ Release فوراً في ثوانٍ بدون محاولة إعادة بناء تفشل على سيرفر GitHub.
+- **Confirmed Decision 3 (رابط ظاهر نظيف + منع الكاش خفياً عند التحميل)**: يظل الرابط الوحيد الظاهر للمستخدم ثابتاً ونظيفاً (`https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk`)، بينما يضيف محرك التحميل داخل التطبيق معامل منع الكاش (`?t=timestamp` وترويسات `Cache-Control: no-cache, no-store`) خفياً أثناء الاتصال لضمان جلب أحدث نسخة من السيرفر في كل تحميلة.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: يصلح تهيئة مشروع Gradle بحيث تتعرف بيئة البناء والمحاكي الفوري على ملفات الإعدادات والبناء بدون أخطاء، مع استمرار عمل تطبيق **نجم الكارت v1.6** بكامل مميزاته (الفتح الفوري `0ms` من التخزين المحلي، صفحة المظهر بالسمتين الداكنة والفاتحة للشمس، أيقونة النجمة، ومزامنة التفضيلات الشخصية على السحابة).
-- **Target Audience / Persona**: أمين الخدمة والخدام في فصول مدارس الأحد.
-- **Key Value**: بناء مستقر وخالٍ من الأخطاء مع تحديث تلقائي سلس عبر رابط واحد ثابت.
+- **What It Does**: يجعل نظام التحديث التلقائي في **نجم الكارت v1.6** يعمل بدقة 100% في كل مرة يتم فيها رفع تعديل جديد إلى GitHub، سواء قام المستخدم بالضغط على الرابط المباشر أو فتح التطبيق على هاتفه.
+- **Target Audience / Persona**: أمين الخدمة والخدام الذين يعتمدون على وصول أي تعديل أو ميزة جديدة لهواتفهم تلقائياً دون تعقيد.
+- **Key Value**: القضاء النهائي على مشكلة تحميل نسخة قديمة من الكاش أو عدم تنبه التطبيق للتعديلات الفرعية على نفس الإصدار، مع نجاح دائم لسير عمل GitHub Actions.
 
 ---
 
 ## 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  1. **تشغيل فوري (0ms)**: يفتح التطبيق مباشرة من `LocalClassroomCache` ويعرض بيانات الفصل والبلوكات والأطفال فوراً.
-  2. **صفحة المظهر المستقلة**: من تبويب الإعدادات ← زر **«فتح صفحة المظهر والسمات»** ← اختيار السمة (**داكن** أو **فاتح للشمس والإضاءة القوية**) وضبط حجم الخط وأيقونة النجمة.
-  3. **التحديث التلقائي برابط واحد**: فحص وتنزيل التحديثات مباشرة من داخل التطبيق عبر الرابط الوحيد المعتمد.
+  1. **التحميل المباشر من الرابط الوحيد**: يضغط المستخدم على الرابط النظيف `https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk` فيحصل دائماً على أحدث حزمة APK تم رفعها.
+  2. **التحديث التلقائي فور فتح التطبيق**: يفحص التطبيق في الخلفية ملف `releases/version.json` (مع كاسر كاش خفي)، ويقارن رقم الإصدار (`versionCode`) وبصمة ملف الـ APK (`apkSha256` / `commitSha`) بالبصمة المثبتة؛ وعند وجود أي اختلاف يبدأ تنزيل التحديث داخل التطبيق بشريط تقدم حي ويفتح شاشة التثبيت مباشرة.
+  3. **بطاقة المزامنة في الإعدادات**: تعرض رقم الإصدار المتزامن وبصمة التحديث الحالية والرابط الوحيد النظيف مع زر «فحص وتحديث الآن» وزر «تنزيل وتثبيت APK».
 - **Visual Identity & Theme**:
-  - *Aesthetic Direction*: تصميم عملي واضح بسمتين متكاملتين (السمة الداكنة الملكية `#0B1120` والسمة الفاتحة عالية التباين للشمس `#FFFFFF` مع نصوص سوداء `#090D16` وأزرار كحلية `#0F2942` وذهبية `#B45309`).
-  - *Typography & Hierarchy*: خط Cairo المحلي مع تحجيم ذكي وتلقائي يدعم الهواتف والأجهزة اللوحية.
-- **Interactive Feedback & Motion**: استجابة لحظية (`0ms`) عند تفعيل أو إخفاء الكروت والبلوكات دون رجوع المفتاح لحالته السابقة عند التنقل بين التبويبات.
+  - متوافق بالكامل مع السمتين المعتمدتين في صفحة المظهر: **داكن (الافتراضي)** و**فاتح (للشمس والإضاءة القوية)**.
+- **Interactive Feedback & Motion**: إشعار عائم في أعلى الشاشة يعرض نسبة التنزيل المئوية (`0% .. 100%`) ويفتح مثبت النظام تلقائياً فور اكتمال التحميل.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: فصل `rootProject.name` الداخلي لـ Gradle عن اسم التطبيق الظاهر (`app_name`)**
-  - *Chosen Approach*: ضبط `rootProject.name` في إعدادات Gradle على معرّف قياسي بسيط بدون نقاط أو رموز خاصة، مع الاحتفاظ بـ **«نجم الكارت v1.6»** في موارد التطبيق (`strings.xml`) وبيانات المنصة (`metadata.json`) وجميع الشاشات.
-  - *Why*: يمنع فشل محلل إعدادات Gradle في بيئة الحاوية السحابية عند التعامل مع النقاط (`1.6`) والمسافات العربية في مسار المشروع الجذري.
-- **Decision 2: تشغيل `syncReleaseApk` عند الطلب وفي GitHub Actions بدلاً من `finalizedBy` الإجباري**
-  - *Chosen Approach*: إزالة ربط `finalizedBy("syncReleaseApk")` الإجباري من كل عملية `assembleDebug` محلية، وتشغيلها عند تحديث الإصدار أو عبر GitHub Actions.
-  - *Why*: يمنع تعديل ملفات المستودع أثناء عملية الفحص التلقائي للبناء في المنصة.
+- **Decision 1: الفحص المزدوج (`versionCode` + `apkSha256` / `commitSha`)**
+  - *Chosen Approach*: إضافة حقل `apkSha256` داخل `releases/version.json` و`releases/delta-sync.json` وحفظ بصمة آخر APK تم تثبيته أو مزامنته داخل التطبيق (`BuildConfig.APK_BUILD_FINGERPRINT` + `SharedPreferences`).
+  - *Why*: يضمن أنه حتى لو تم تعديل سطر واحد في التطبيق ورفعه دون زيادة `versionCode`، يعرف التطبيق فوراً أن ملف الـ APK على GitHub قد تغيّر وينزّله تلقائياً.
+- **Decision 2: سير عمل GitHub Actions سريع ومضمون النجاح 100%**
+  - *Chosen Approach*: يقوم `release-apk.yml` بالتحقق من وجود `releases/kAM-Lite.apk` الجاهز، ويحسب بصمة `sha256sum` ورقم الـ Commit (`github.sha`) والتوقيت الحالي، ويحدّث `releases/version.json` و`releases/delta-sync.json` وينشر إصدار GitHub Release (`latest`) مباشرة دون الاعتماد على بيئة Gradle غير المتوافقة على `ubuntu-latest`.
+  - *Why*: يتجنب فشل GitHub Actions بسبب عدم توفر `AGP 9.1.1` و`SDK 36` على سيرفرات GitHub العامة، ويجعل التحديث يكتمل خلال 15 ثانية فقط من أي Push.
+- **Decision 3: كاسر الكاش الخفي (`Hidden Cache-Buster`)**
+  - *Chosen Approach*: إبقاء الرابط المعروض للمستخدم وفي `README.md` خالياً من أي إضافات (`https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk`)، وإضافة `?cb=<timestamp>` وترويسات `Cache-Control: no-cache, no-store, must-revalidate` و`Pragma: no-cache` داخل دوال الجلب والتحميل في `GitHubSmartSyncEngine`.
+  - *Why*: يحافظ على شكل الرابط نظيفاً وسهل المشاركة، ويمنع في نفس الوقت كاش GitHub CDN (الذي يدوم 5 دقائق) من تقديم ملف قديم.
 
 ---
 
 ## 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                      تطبيق نجم الكارت v1.6                           │
-├──────────────────────────────────────────────────────────────────────┤
-│  Gradle Build System (Clean Configuration)                           │
-│   ├── Root Settings & Build Config (ASCII-safe rootProject ID)       │
-│   └── App Module Config (versionCode = 6, versionName = "1.6")       │
-├──────────────────────────────────────────────────────────────────────┤
-│  Instant Startup & Cloud Sync Layer                                  │
-│   ├── LocalClassroomCache (0ms RAM + Disk Snapshot & User Prefs)     │
-│   ├── KamRepository & KamViewModel (Optimistic 0ms UI + Firestore)   │
-│   └── GitHubSmartSyncEngine (Single Auto-Updating APK URL)           │
-└──────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                   GitHub Repository (Kett45/Y)                             │
+│  1. AI Studio Syncs Latest Built APK ──► releases/kAM-Lite.apk             │
+│  2. GitHub Actions (release-apk.yml)                                       │
+│      ├── Computes SHA-256 of releases/kAM-Lite.apk + Commit SHA            │
+│      ├── Updates releases/version.json & releases/delta-sync.json          │
+│      └── Publishes GitHub Release (tag: latest) in ~15s (0% failure)       │
+└───────────────────────────────────┬────────────────────────────────────────┘
+                                    │
+                                    ▼ (Hidden ?cb=timestamp + no-cache headers)
+┌────────────────────────────────────────────────────────────────────────────┐
+│             In-App Auto-Update Engine (GitHubSmartSyncEngine)              │
+│  1. Fetches releases/version.json bypassing CDN cache                      │
+│  2. Compares Remote (versionCode + apkSha256/commitSha) vs Local           │
+│  3. If Newer Version OR Changed APK SHA-256:                               │
+│      ├── Downloads releases/kAM-Lite.apk with live progress (0%..100%)     │
+│      ├── Records synced apkSha256 & commitSha upon download completion     │
+│      └── Launches Android Package Installer via FileProvider               │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Data Model & State**:
-  - `LocalClassroomCache`: يحفظ بيانات الفصل والتفضيلات الشخصية محلياً للفتح الفوري.
-  - `UserProfile`: يزامن `themeId` و`uiScaleMode` و`uiScaleFactor` و`showFloatingAddButton` و`enabledCards` و`collapsedBlockIds` و`hiddenBlockIds` مع حساب المستخدم في السحابة.
-- **Interactive Component & State Mapping**:
-  - جميع مفاتيح الإعدادات والمظهر تحدث الحالة المحلية فوراً وتُحفظ في السحابة بأمان عبر `SetOptions.merge()`.
+  - `GitHubVersionManifest`: يشمل `versionCode`، `versionName`، `commitSha`، `apkSha256`، `updatedAt`، `apkDirectUrl`، و`releaseNotesArabic`.
+  - `GitHubSmartSyncEngine`: يقارن `manifest.versionCode > BuildConfig.VERSION_CODE` **أو** تغيّر `manifest.apkSha256` عن البصمة المحلية المسجلة لتشغيل التنزيل والتثبيت التلقائي.

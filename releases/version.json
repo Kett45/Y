@@ -4,8 +4,9 @@
   "minDeltaBaseVersionCode": 3,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
-  "commitSha": "latest",
-  "updatedAt": "2026-11-10T18:05:00Z",
+  "commitSha": "9f63b1b47dee",
+  "apkSha256": "9f63b1b47dee033ee40d319ca2752ebfabab8392683ac0877217930339a77ed6",
+  "updatedAt": "2026-11-11T11:35:00Z",
   "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
   "releaseNotesArabic": "الإصدار 1.6 (نجم الكارت v1.6): فتح فوري (0ms) بالتخزين المحلي الذكي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + أيقونة النجمة + مزامنة التفضيلات الشخصية في حساب السحابة."

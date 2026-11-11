@@ -456,5 +456,34 @@ class ExampleUnitTest {
             activeVersionName = "1.6"
         )
         assertEquals("https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk", refreshedDirect)
+
+        // 5. Hidden cache-buster appends ?cb=timestamp for network calls while keeping visible link clean
+        val cacheBusted = engine.appendHiddenCacheBuster(refreshedDirect, timestampMillis = 1762800000123L)
+        assertEquals("https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk?cb=1762800000123", cacheBusted)
+
+        // 6. Dual check (versionCode + apkSha256): detects modified APK even when versionCode is unchanged (6 == 6)
+        val sameVersionModifiedHashManifest = com.example.data.sync.GitHubVersionManifest(
+            versionCode = 6,
+            versionName = "1.6",
+            requiresFullInstall = true,
+            commitSha = "998877665544",
+            apkSha256 = "99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa"
+        )
+        assertTrue(
+            engine.hasNewerOrModifiedApkBinary(
+                installedVersionCode = 6,
+                installedApkSha256 = "5ab9b8ab54841f9ff32c269e8dc1f64cba091a5dcc1ed3152e08bf35026a5e7f",
+                lastSyncedApkSha256 = "5ab9b8ab54841f9ff32c269e8dc1f64cba091a5dcc1ed3152e08bf35026a5e7f",
+                remoteManifest = sameVersionModifiedHashManifest
+            )
+        )
+        assertFalse(
+            engine.hasNewerOrModifiedApkBinary(
+                installedVersionCode = 6,
+                installedApkSha256 = "99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa",
+                lastSyncedApkSha256 = "99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa",
+                remoteManifest = sameVersionModifiedHashManifest
+            )
+        )
     }
 }

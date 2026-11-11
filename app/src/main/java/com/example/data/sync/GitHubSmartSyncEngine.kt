@@ -19,10 +19,12 @@ import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedReader
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 /**
  * Represents the parsed `releases/version.json` manifest from the GitHub repository.
@@ -34,6 +36,7 @@ data class GitHubVersionManifest(
     val maxDeltaGap: Int = GitHubSmartSyncEngine.DEFAULT_MAX_DELTA_GAP,
     val requiresFullInstall: Boolean = false,
     val commitSha: String = "",
+    val apkSha256: String = "",
     val updatedAt: String = "",
     val apkDirectUrl: String = "",
     val backupApkUrl: String = "",
@@ -50,6 +53,7 @@ data class GitHubDeltaPayload(
     val targetVersionName: String,
     val minCompatibleBaseVersion: Int = 1,
     val commitSha: String = "",
+    val apkSha256: String = "",
     val updatedAt: String = "",
     val deltaSummaryArabic: String = "",
     val latestApkDirectUrl: String = "",
@@ -60,12 +64,12 @@ data class GitHubDeltaPayload(
 
 /**
  * Decision returned by [GitHubSmartSyncEngine.evaluateSyncStrategy]:
- * 1. [UpToDate]: Local app + applied delta are already at the latest GitHub commit/version.
+ * 1. [UpToDate]: Local app + applied delta + APK SHA-256 are already at the latest GitHub commit/version.
  * 2. [DeltaOnlySync]: Version difference is small (`<= maxDeltaGap`) and compatible -> download
- *    the few-KB `delta-sync.json` AND if `manifest.versionCode > installedBinaryVersionCode`, offer/start
- *    in-app APK update download & installation.
+ *    the few-KB `delta-sync.json` AND if a newer binary (`versionCode` or `apkSha256`) exists,
+ *    start in-app APK update download & installation.
  * 3. [FullPackageUpgradeRequired]: Version difference is large (`> maxDeltaGap` or `installed < minDeltaBaseVersionCode`
- *    or `requiresFullInstall == true`) -> apply safe config delta AND download/install the updated APK in-app.
+ *    or `requiresFullInstall == true` with a newer binary) -> download/install the updated APK in-app.
  */
 sealed class GitHubSyncDecision {
     data class UpToDate(
@@ -92,6 +96,7 @@ data class GitHubSyncUiState(
     val effectiveSyncedVersionCode: Int = BuildConfig.VERSION_CODE,
     val effectiveSyncedVersionName: String = BuildConfig.VERSION_NAME,
     val lastSyncedCommitSha: String = "",
+    val lastSyncedApkSha256: String = "",
     val lastSyncSummaryArabic: String = "متزامن تلقائياً مع آخر تحديث على GitHub",
     val latestDirectApkUrl: String = GitHubSmartSyncEngine.defaultDirectApkUrl(),
     val backupApkUrl: String = GitHubSmartSyncEngine.defaultRawApkUrl(),
@@ -112,17 +117,21 @@ object GitHubSmartSyncEngine {
     private const val KEY_SYNCED_VERSION_CODE = "synced_delta_version_code"
     private const val KEY_SYNCED_VERSION_NAME = "synced_delta_version_name"
     private const val KEY_SYNCED_COMMIT_SHA = "synced_commit_sha"
+    private const val KEY_SYNCED_APK_SHA256 = "synced_apk_sha256"
+    private const val KEY_INSTALLED_APK_SHA256 = "installed_apk_sha256"
+    private const val KEY_INSTALLED_APK_MTIME = "installed_apk_mtime"
     private const val KEY_LAST_SUMMARY = "last_sync_summary_arabic"
     private const val KEY_LATEST_DIRECT_APK_URL = "latest_direct_apk_url"
     private const val KEY_BACKUP_APK_URL = "backup_apk_url"
     private const val KEY_DISMISSED_MAJOR_VERSION = "dismissed_major_version_code"
+    private const val KEY_DISMISSED_APK_SHA256 = "dismissed_apk_sha256"
     private const val APK_UPDATE_DIR = "updates"
     private const val APK_UPDATE_FILENAME = "kAM-Lite-update.apk"
 
     private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
-     * Fixed GitHub repository slug baked into BuildConfig (automatically updated by GitHub Actions on build).
+     * Fixed GitHub repository slug baked into BuildConfig.
      */
     val FIXED_GITHUB_REPO: String
         get() = BuildConfig.GITHUB_REPO.trim().ifBlank { "Kett45/Y" }
@@ -173,6 +182,49 @@ object GitHubSmartSyncEngine {
         }
     }
 
+    /**
+     * Appends a hidden cache-buster parameter (`?cb=<timestamp>`) for network requests
+     * so GitHub CDN and HTTP caches never serve a stale manifest or stale APK binary,
+     * while keeping the user-visible link clean.
+     */
+    internal fun appendHiddenCacheBuster(
+        urlString: String,
+        timestampMillis: Long = System.currentTimeMillis()
+    ): String {
+        val clean = urlString.trim()
+        if (clean.isBlank()) return clean
+        val separator = if (clean.contains("?")) "&" else "?"
+        return "${clean}${separator}cb=$timestampMillis"
+    }
+
+    /**
+     * Determines whether the remote manifest represents a newer or modified APK binary compared to
+     * what is currently installed on the device (checks both `versionCode` AND `apkSha256`).
+     */
+    internal fun hasNewerOrModifiedApkBinary(
+        installedVersionCode: Int,
+        installedApkSha256: String,
+        lastSyncedApkSha256: String,
+        remoteManifest: GitHubVersionManifest
+    ): Boolean {
+        if (remoteManifest.versionCode > installedVersionCode) {
+            return true
+        }
+        if (remoteManifest.versionCode == installedVersionCode && remoteManifest.apkSha256.length >= 16) {
+            val remoteHash = remoteManifest.apkSha256.trim()
+            val matchesInstalled = installedApkSha256.isNotBlank() &&
+                installedApkSha256.equals(remoteHash, ignoreCase = true)
+            val matchesLastSynced = lastSyncedApkSha256.isNotBlank() &&
+                lastSyncedApkSha256.equals(remoteHash, ignoreCase = true)
+            if (!matchesInstalled && !matchesLastSynced &&
+                (installedApkSha256.isNotBlank() || lastSyncedApkSha256.isNotBlank())
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
     private val _syncState = MutableStateFlow(GitHubSyncUiState())
     val syncState: StateFlow<GitHubSyncUiState> = _syncState.asStateFlow()
 
@@ -180,36 +232,45 @@ object GitHubSmartSyncEngine {
      * Pure, deterministic strategy evaluator:
      * - Decides whether to do nothing ([GitHubSyncDecision.UpToDate]),
      * - Apply a lightweight delta-only update ([GitHubSyncDecision.DeltaOnlySync]),
-     * - Or trigger the Full APK Upgrade fallback when the version gap between installed and remote is large
-     *   ([GitHubSyncDecision.FullPackageUpgradeRequired]).
+     * - Or trigger the Full APK Upgrade fallback ([GitHubSyncDecision.FullPackageUpgradeRequired]).
      */
     fun evaluateSyncStrategy(
         installedBinaryVersionCode: Int,
         lastSyncedDeltaVersionCode: Int,
         lastSyncedCommitSha: String,
-        remoteManifest: GitHubVersionManifest
+        remoteManifest: GitHubVersionManifest,
+        installedApkSha256: String = "",
+        lastSyncedApkSha256: String = ""
     ): GitHubSyncDecision {
         val effectiveLocalVersion = maxOf(installedBinaryVersionCode, lastSyncedDeltaVersionCode)
         val binaryGap = (remoteManifest.versionCode - installedBinaryVersionCode).coerceAtLeast(0)
-        val isSameVersionAndCommit = remoteManifest.versionCode <= effectiveLocalVersion &&
+
+        val apkSha256Mismatch = remoteManifest.versionCode >= installedBinaryVersionCode &&
+            remoteManifest.apkSha256.length >= 16 &&
+            (installedApkSha256.isNotBlank() || lastSyncedApkSha256.isNotBlank()) &&
+            !(installedApkSha256.isNotBlank() && installedApkSha256.equals(remoteManifest.apkSha256.trim(), ignoreCase = true)) &&
+            !(lastSyncedApkSha256.isNotBlank() && lastSyncedApkSha256.equals(remoteManifest.apkSha256.trim(), ignoreCase = true))
+
+        val isSameVersionAndCommit = !apkSha256Mismatch &&
+            remoteManifest.versionCode <= effectiveLocalVersion &&
             (remoteManifest.commitSha.isBlank() ||
                 remoteManifest.commitSha == "latest" ||
                 remoteManifest.commitSha == lastSyncedCommitSha)
 
-        // Check if the installed binary is too far behind (Large Version Gap Scenario)
         val exceedsMaxDeltaGap = binaryGap > remoteManifest.maxDeltaGap.coerceAtLeast(1)
         val belowMinBaseVersion = installedBinaryVersionCode < remoteManifest.minDeltaBaseVersionCode
-        val forceFull = remoteManifest.requiresFullInstall && remoteManifest.versionCode > installedBinaryVersionCode
+        val forceFull = (remoteManifest.requiresFullInstall && remoteManifest.versionCode > installedBinaryVersionCode) ||
+            apkSha256Mismatch
 
         if (exceedsMaxDeltaGap || belowMinBaseVersion || forceFull) {
             val reason = when {
-                forceFull -> "يحتوي الإصدار ${remoteManifest.versionName} على تحديثات جديدة في التطبيق؛ جاري تنزيل وتثبيت التحديث"
+                forceFull -> "يتوفر تحديث جديد للتطبيق (${remoteManifest.versionName}) على GitHub؛ جاري التنزيل والتثبيت المباشر"
                 exceedsMaxDeltaGap -> "الفارق بين نسختك الحالية وأحدث إصدار كبير ($binaryGap إصدارات)؛ جاري تنزيل الحزمة المحدّثة"
                 else -> "نسختك الحالية أقدم من الحد الأدنى للتحديث الجزئي؛ جاري تنزيل أحدث حزمة كاملة"
             }
             return GitHubSyncDecision.FullPackageUpgradeRequired(
                 manifest = remoteManifest,
-                versionGap = binaryGap,
+                versionGap = binaryGap.coerceAtLeast(if (apkSha256Mismatch) 1 else 0),
                 reasonArabic = reason
             )
         }
@@ -233,13 +294,21 @@ object GitHubSmartSyncEngine {
             val versionCode = obj.optInt("versionCode", 0)
             if (versionCode <= 0) return null
             val versionName = obj.optString("versionName", "1.0.$versionCode")
+            val apkSha256 = obj.optString("apkSha256", "").trim()
+            val rawCommitSha = obj.optString("commitSha", "").trim()
+            val effectiveCommitSha = if (rawCommitSha.isBlank() || rawCommitSha == "latest") {
+                if (apkSha256.length >= 12) apkSha256.take(12) else rawCommitSha
+            } else {
+                rawCommitSha
+            }
             GitHubVersionManifest(
                 versionCode = versionCode,
                 versionName = versionName,
                 minDeltaBaseVersionCode = obj.optInt("minDeltaBaseVersionCode", 1),
                 maxDeltaGap = obj.optInt("maxDeltaGap", DEFAULT_MAX_DELTA_GAP).coerceAtLeast(1),
                 requiresFullInstall = obj.optBoolean("requiresFullInstall", false),
-                commitSha = obj.optString("commitSha", ""),
+                commitSha = effectiveCommitSha,
+                apkSha256 = apkSha256,
                 updatedAt = obj.optString("updatedAt", ""),
                 apkDirectUrl = sanitizeAndRefreshApkUrl(
                     obj.optString("apkDirectUrl", ""),
@@ -267,6 +336,13 @@ object GitHubSmartSyncEngine {
             val targetCode = obj.optInt("targetVersionCode", 0)
             if (targetCode <= 0) return null
             val targetName = obj.optString("targetVersionName", "1.0.$targetCode")
+            val apkSha256 = obj.optString("apkSha256", "").trim()
+            val rawCommitSha = obj.optString("commitSha", "").trim()
+            val effectiveCommitSha = if (rawCommitSha.isBlank() || rawCommitSha == "latest") {
+                if (apkSha256.length >= 12) apkSha256.take(12) else rawCommitSha
+            } else {
+                rawCommitSha
+            }
             val modulesArr = obj.optJSONArray("changedModules")
             val modules = buildList {
                 if (modulesArr != null) {
@@ -281,7 +357,8 @@ object GitHubSmartSyncEngine {
                 targetVersionCode = targetCode,
                 targetVersionName = targetName,
                 minCompatibleBaseVersion = obj.optInt("minCompatibleBaseVersion", 1),
-                commitSha = obj.optString("commitSha", ""),
+                commitSha = effectiveCommitSha,
+                apkSha256 = apkSha256,
                 updatedAt = obj.optString("updatedAt", ""),
                 deltaSummaryArabic = obj.optString("deltaSummaryArabic", "تم تحديث آخر التطورات تلقائياً بالخلفية"),
                 latestApkDirectUrl = sanitizeAndRefreshApkUrl(
@@ -300,9 +377,47 @@ object GitHubSmartSyncEngine {
         }.getOrNull()
     }
 
+    internal fun computeFileSha256(file: File): String {
+        if (!file.exists() || !file.isFile) return ""
+        return runCatching {
+            val digest = MessageDigest.getInstance("SHA-256")
+            FileInputStream(file).use { fis ->
+                val buffer = ByteArray(32 * 1024)
+                var read: Int
+                while (fis.read(buffer).also { read = it } != -1) {
+                    digest.update(buffer, 0, read)
+                }
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        }.getOrDefault("")
+    }
+
+    private fun getOrComputeInstalledApkSha256(context: Context): String {
+        return runCatching {
+            val appContext = context.applicationContext
+            val sourceApk = File(appContext.applicationInfo.sourceDir ?: return "")
+            if (!sourceApk.exists()) return ""
+            val mtime = sourceApk.lastModified()
+            val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val cachedMtime = prefs.getLong(KEY_INSTALLED_APK_MTIME, -1L)
+            val cachedHash = prefs.getString(KEY_INSTALLED_APK_SHA256, "").orEmpty()
+            if (cachedMtime == mtime && cachedHash.length == 64) {
+                return cachedHash
+            }
+            val computed = computeFileSha256(sourceApk)
+            if (computed.length == 64) {
+                prefs.edit()
+                    .putLong(KEY_INSTALLED_APK_MTIME, mtime)
+                    .putString(KEY_INSTALLED_APK_SHA256, computed)
+                    .apply()
+            }
+            computed
+        }.getOrDefault("")
+    }
+
     /**
      * Loads cached delta state from SharedPreferences immediately so startup is 0ms,
-     * and automatically refreshes any older version URLs to the current active version.
+     * and normalizes links to the single permanent auto-updating GitHub URL.
      */
     fun initializeFromLocalCache(context: Context) {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -317,6 +432,7 @@ object GitHubSmartSyncEngine {
                 ?: BuildConfig.VERSION_NAME
         }
         val cachedSha = prefs.getString(KEY_SYNCED_COMMIT_SHA, "").orEmpty()
+        val cachedApkSha256 = prefs.getString(KEY_SYNCED_APK_SHA256, "").orEmpty()
         val cachedSummary = if (isLocalBinaryNewerOrEqual) {
             "متزامن تلقائياً مع مستودع GitHub ($FIXED_GITHUB_REPO • v$effectiveName)"
         } else {
@@ -325,30 +441,13 @@ object GitHubSmartSyncEngine {
                 ?: "متزامن تلقائياً مع مستودع GitHub ($FIXED_GITHUB_REPO • v$effectiveName)"
         }
 
-        val refreshedDirectUrl = if (isLocalBinaryNewerOrEqual) {
-            defaultDirectApkUrl(FIXED_GITHUB_REPO, effectiveName)
-        } else {
-            sanitizeAndRefreshApkUrl(
-                prefs.getString(KEY_LATEST_DIRECT_APK_URL, null),
-                defaultDirectApkUrl(FIXED_GITHUB_REPO, effectiveName),
-                effectiveName
-            )
-        }
-        val refreshedBackupUrl = if (isLocalBinaryNewerOrEqual) {
-            defaultRawApkUrl(FIXED_GITHUB_REPO, "main", effectiveName)
-        } else {
-            sanitizeAndRefreshApkUrl(
-                prefs.getString(KEY_BACKUP_APK_URL, null),
-                defaultRawApkUrl(FIXED_GITHUB_REPO, "main", effectiveName),
-                effectiveName
-            )
-        }
+        val singleCleanUrl = defaultDirectApkUrl(FIXED_GITHUB_REPO, effectiveName)
 
         prefs.edit()
             .putInt(KEY_SYNCED_VERSION_CODE, effectiveCode)
             .putString(KEY_SYNCED_VERSION_NAME, effectiveName)
-            .putString(KEY_LATEST_DIRECT_APK_URL, refreshedDirectUrl)
-            .putString(KEY_BACKUP_APK_URL, refreshedBackupUrl)
+            .putString(KEY_LATEST_DIRECT_APK_URL, singleCleanUrl)
+            .putString(KEY_BACKUP_APK_URL, singleCleanUrl)
             .apply()
 
         val apkFile = getLocalApkUpdateFile(context.applicationContext)
@@ -361,9 +460,10 @@ object GitHubSmartSyncEngine {
             effectiveSyncedVersionCode = effectiveCode,
             effectiveSyncedVersionName = effectiveName,
             lastSyncedCommitSha = cachedSha,
+            lastSyncedApkSha256 = cachedApkSha256,
             lastSyncSummaryArabic = cachedSummary,
-            latestDirectApkUrl = refreshedDirectUrl,
-            backupApkUrl = refreshedBackupUrl,
+            latestDirectApkUrl = singleCleanUrl,
+            backupApkUrl = singleCleanUrl,
             downloadedApkReady = isReady
         )
     }
@@ -375,8 +475,9 @@ object GitHubSmartSyncEngine {
 
     /**
      * Performs a background check against the GitHub repository:
-     * - Whenever `manifest.versionCode > BuildConfig.VERSION_CODE` (a newer APK binary exists on GitHub),
-     *   automatically downloads the updated APK inside the app and triggers the Android Package Installer!
+     * - Checks BOTH `manifest.versionCode` AND `manifest.apkSha256` against the installed binary.
+     * - Whenever a newer version or modified APK fingerprint exists on GitHub,
+     *   automatically downloads the updated APK (bypassing cache) and opens the Android Package Installer!
      */
     suspend fun checkAndSyncSilently(
         context: Context,
@@ -392,6 +493,7 @@ object GitHubSmartSyncEngine {
         )
 
         try {
+            val installedApkSha256 = getOrComputeInstalledApkSha256(appContext)
             val manifestJson = fetchTextFromUrl(defaultVersionManifestUrl(FIXED_GITHUB_REPO, "main"))
                 ?: fetchTextFromUrl(defaultVersionManifestUrl(FIXED_GITHUB_REPO, "master"))
 
@@ -415,18 +517,38 @@ object GitHubSmartSyncEngine {
             val currentSyncedCode = prefs.getInt(KEY_SYNCED_VERSION_CODE, BuildConfig.VERSION_CODE)
                 .coerceAtLeast(BuildConfig.VERSION_CODE)
             val currentSyncedSha = prefs.getString(KEY_SYNCED_COMMIT_SHA, "").orEmpty()
+            var currentSyncedApkSha256 = prefs.getString(KEY_SYNCED_APK_SHA256, "").orEmpty()
+
+            // Seed baseline SHA-256 on first run if installed binary matches the remote versionCode
+            if (currentSyncedApkSha256.isBlank() && installedApkSha256.isNotBlank()) {
+                currentSyncedApkSha256 = installedApkSha256
+                prefs.edit().putString(KEY_SYNCED_APK_SHA256, installedApkSha256).apply()
+            }
+
             val dismissedMajorVersion = prefs.getInt(KEY_DISMISSED_MAJOR_VERSION, -1)
+            val dismissedApkSha256 = prefs.getString(KEY_DISMISSED_APK_SHA256, "").orEmpty()
 
             val decision = evaluateSyncStrategy(
                 installedBinaryVersionCode = BuildConfig.VERSION_CODE,
                 lastSyncedDeltaVersionCode = currentSyncedCode,
                 lastSyncedCommitSha = currentSyncedSha,
+                remoteManifest = manifest,
+                installedApkSha256 = installedApkSha256,
+                lastSyncedApkSha256 = currentSyncedApkSha256
+            )
+
+            val hasNewerApkBinary = hasNewerOrModifiedApkBinary(
+                installedVersionCode = BuildConfig.VERSION_CODE,
+                installedApkSha256 = installedApkSha256,
+                lastSyncedApkSha256 = currentSyncedApkSha256,
                 remoteManifest = manifest
             )
 
-            val hasNewerApkBinary = manifest.versionCode > BuildConfig.VERSION_CODE
-            val shouldPromptBinaryUpgrade = hasNewerApkBinary &&
-                (forceManualCheck || manifest.versionCode != dismissedMajorVersion)
+            val isDismissed = manifest.versionCode == dismissedMajorVersion &&
+                (manifest.apkSha256.isBlank() || manifest.apkSha256.equals(dismissedApkSha256, ignoreCase = true))
+            val shouldPromptBinaryUpgrade = hasNewerApkBinary && (forceManualCheck || !isDismissed)
+
+            val singleCleanUrl = defaultDirectApkUrl(FIXED_GITHUB_REPO, manifest.versionName)
 
             when (decision) {
                 is GitHubSyncDecision.UpToDate -> {
@@ -435,35 +557,31 @@ object GitHubSmartSyncEngine {
                     } else {
                         BuildConfig.VERSION_NAME
                     }
-                    val directUrl = if (manifest.versionCode >= BuildConfig.VERSION_CODE && manifest.apkDirectUrl.isNotBlank()) {
-                        sanitizeAndRefreshApkUrl(manifest.apkDirectUrl, defaultDirectApkUrl(FIXED_GITHUB_REPO, effectiveName), effectiveName)
-                    } else {
-                        defaultDirectApkUrl(FIXED_GITHUB_REPO, effectiveName)
-                    }
-                    val backupUrl = if (manifest.versionCode >= BuildConfig.VERSION_CODE && manifest.backupApkUrl.isNotBlank()) {
-                        sanitizeAndRefreshApkUrl(manifest.backupApkUrl, defaultRawApkUrl(FIXED_GITHUB_REPO, "main", effectiveName), effectiveName)
-                    } else {
-                        defaultRawApkUrl(FIXED_GITHUB_REPO, "main", effectiveName)
-                    }
                     prefs.edit()
                         .putString(KEY_SYNCED_VERSION_NAME, effectiveName)
-                        .putString(KEY_LATEST_DIRECT_APK_URL, directUrl)
-                        .putString(KEY_BACKUP_APK_URL, backupUrl)
+                        .putString(KEY_LATEST_DIRECT_APK_URL, singleCleanUrl)
+                        .putString(KEY_BACKUP_APK_URL, singleCleanUrl)
+                        .apply {
+                            if (manifest.apkSha256.isNotBlank() && !hasNewerApkBinary) {
+                                putString(KEY_SYNCED_APK_SHA256, manifest.apkSha256)
+                            }
+                        }
                         .apply()
 
                     _syncState.value = _syncState.value.copy(
                         isCheckingInBackground = false,
                         effectiveSyncedVersionName = effectiveName,
-                        latestDirectApkUrl = directUrl,
-                        backupApkUrl = backupUrl,
+                        lastSyncedApkSha256 = manifest.apkSha256.ifBlank { currentSyncedApkSha256 },
+                        latestDirectApkUrl = singleCleanUrl,
+                        backupApkUrl = singleCleanUrl,
                         majorUpdatePrompt = if (shouldPromptBinaryUpgrade) manifest else null,
                         majorUpdateReasonArabic = if (shouldPromptBinaryUpgrade) {
-                            manifest.releaseNotesArabic.ifBlank { "يتوفر إصدار جديد (v${manifest.versionName}) جاهز للتثبيت المباشر داخل التطبيق" }
+                            manifest.releaseNotesArabic.ifBlank { "يتوفر تحديث جديد (v${manifest.versionName}) جاهز للتثبيت المباشر داخل التطبيق" }
                         } else {
                             null
                         },
                         silentDeltaBannerMessage = if (forceManualCheck && !hasNewerApkBinary) {
-                            "تم تحديث روابط GitHub تلقائياً للإصدار (v$effectiveName)"
+                            "التطبيق محدّث بالفعل لأحدث نسخة على GitHub (v$effectiveName)"
                         } else {
                             null
                         }
@@ -484,20 +602,22 @@ object GitHubSmartSyncEngine {
                     val newVersionName = deltaPayload?.targetVersionName?.ifBlank { manifest.versionName }
                         ?: manifest.versionName
                     val newSha = deltaPayload?.commitSha?.ifBlank { manifest.commitSha } ?: manifest.commitSha
+                    val newApkSha256 = deltaPayload?.apkSha256?.ifBlank { manifest.apkSha256 } ?: manifest.apkSha256
                     val summary = deltaPayload?.deltaSummaryArabic?.ifBlank { manifest.releaseNotesArabic }
                         ?: manifest.releaseNotesArabic.ifBlank { "تمت مزامنة التحديثات تلقائياً" }
-                    val directUrl = deltaPayload?.latestApkDirectUrl?.ifBlank { manifest.apkDirectUrl }
-                        ?: manifest.apkDirectUrl.ifBlank { defaultDirectApkUrl() }
-                    val backupUrl = deltaPayload?.backupApkUrl?.ifBlank { manifest.backupApkUrl }
-                        ?: manifest.backupApkUrl.ifBlank { defaultRawApkUrl() }
 
                     prefs.edit()
                         .putInt(KEY_SYNCED_VERSION_CODE, newVersionCode)
                         .putString(KEY_SYNCED_VERSION_NAME, newVersionName)
                         .putString(KEY_SYNCED_COMMIT_SHA, newSha)
                         .putString(KEY_LAST_SUMMARY, summary)
-                        .putString(KEY_LATEST_DIRECT_APK_URL, directUrl)
-                        .putString(KEY_BACKUP_APK_URL, backupUrl)
+                        .putString(KEY_LATEST_DIRECT_APK_URL, singleCleanUrl)
+                        .putString(KEY_BACKUP_APK_URL, singleCleanUrl)
+                        .apply {
+                            if (!hasNewerApkBinary && newApkSha256.isNotBlank()) {
+                                putString(KEY_SYNCED_APK_SHA256, newApkSha256)
+                            }
+                        }
                         .apply()
 
                     _syncState.value = _syncState.value.copy(
@@ -505,17 +625,18 @@ object GitHubSmartSyncEngine {
                         effectiveSyncedVersionCode = newVersionCode,
                         effectiveSyncedVersionName = newVersionName,
                         lastSyncedCommitSha = newSha,
+                        lastSyncedApkSha256 = if (!hasNewerApkBinary) newApkSha256 else currentSyncedApkSha256,
                         lastSyncSummaryArabic = summary,
-                        latestDirectApkUrl = directUrl,
-                        backupApkUrl = backupUrl,
+                        latestDirectApkUrl = singleCleanUrl,
+                        backupApkUrl = singleCleanUrl,
                         majorUpdatePrompt = if (shouldPromptBinaryUpgrade) manifest else null,
                         majorUpdateReasonArabic = if (shouldPromptBinaryUpgrade) {
-                            summary.ifBlank { "يتوفر إصدار جديد (v$newVersionName) جاهز للتثبيت المباشر" }
+                            summary.ifBlank { "يتوفر تحديث جديد (v$newVersionName) جاهز للتثبيت المباشر" }
                         } else {
                             null
                         },
                         silentDeltaBannerMessage = if (shouldPromptBinaryUpgrade) {
-                            "تم اكتشاف إصدار جديد ($newVersionName)؛ جاري تنزيل التحديث داخل التطبيق..."
+                            "تم اكتشاف تحديث جديد ($newVersionName)؛ جاري تنزيل التحديث داخل التطبيق..."
                         } else {
                             "تم تحديث آخر التطورات ($newVersionName) تلقائياً بالخلفية"
                         }
@@ -527,25 +648,22 @@ object GitHubSmartSyncEngine {
                 }
 
                 is GitHubSyncDecision.FullPackageUpgradeRequired -> {
-                    val directUrl = manifest.apkDirectUrl.ifBlank { defaultDirectApkUrl() }
-                    val backupUrl = manifest.backupApkUrl.ifBlank { defaultRawApkUrl() }
-
                     prefs.edit()
-                        .putString(KEY_LATEST_DIRECT_APK_URL, directUrl)
-                        .putString(KEY_BACKUP_APK_URL, backupUrl)
+                        .putString(KEY_LATEST_DIRECT_APK_URL, singleCleanUrl)
+                        .putString(KEY_BACKUP_APK_URL, singleCleanUrl)
                         .apply()
 
-                    val shouldShowBar = forceManualCheck || manifest.versionCode != dismissedMajorVersion
+                    val shouldShowBar = forceManualCheck || !isDismissed
                     _syncState.value = _syncState.value.copy(
                         isCheckingInBackground = false,
-                        latestDirectApkUrl = directUrl,
-                        backupApkUrl = backupUrl,
+                        latestDirectApkUrl = singleCleanUrl,
+                        backupApkUrl = singleCleanUrl,
                         lastSyncSummaryArabic = decision.reasonArabic,
                         majorUpdatePrompt = if (shouldShowBar) manifest else null,
                         majorUpdateReasonArabic = if (shouldShowBar) decision.reasonArabic else null
                     )
 
-                    if (shouldShowBar && manifest.versionCode > BuildConfig.VERSION_CODE) {
+                    if (shouldShowBar && hasNewerApkBinary) {
                         startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
                     }
                 }
@@ -560,11 +678,12 @@ object GitHubSmartSyncEngine {
     }
 
     fun dismissMajorUpdatePrompt(context: Context) {
-        val promptVersion = _syncState.value.majorUpdatePrompt?.versionCode ?: return
+        val prompt = _syncState.value.majorUpdatePrompt ?: return
         context.applicationContext
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putInt(KEY_DISMISSED_MAJOR_VERSION, promptVersion)
+            .putInt(KEY_DISMISSED_MAJOR_VERSION, prompt.versionCode)
+            .putString(KEY_DISMISSED_APK_SHA256, prompt.apkSha256)
             .apply()
         _syncState.value = _syncState.value.copy(
             majorUpdatePrompt = null,
@@ -588,8 +707,8 @@ object GitHubSmartSyncEngine {
     }
 
     /**
-     * Downloads the APK binary directly inside the app cache directory with live progress updates (0%..100%)
-     * and launches the native Android package installer via [FileProvider].
+     * Downloads the APK binary directly inside the app cache directory with live progress updates (0%..100%),
+     * records its SHA-256 fingerprint, and launches the native Android package installer via [FileProvider].
      */
     suspend fun downloadAndInstallLatestApk(
         context: Context,
@@ -601,9 +720,7 @@ object GitHubSmartSyncEngine {
 
         val candidateUrls = listOf(
             state.latestDirectApkUrl.ifBlank { defaultDirectApkUrl() },
-            state.backupApkUrl.ifBlank { defaultRawApkUrl() },
-            defaultReleaseTagApkUrl(),
-            defaultRawApkUrl(FIXED_GITHUB_REPO, "main")
+            "https://raw.githubusercontent.com/$FIXED_GITHUB_REPO/main/releases/kAM-Lite.apk"
         ).distinct()
 
         _syncState.value = _syncState.value.copy(
@@ -632,12 +749,21 @@ object GitHubSmartSyncEngine {
         }
 
         if (downloadedSuccess && targetFile.exists() && targetFile.length() > 100_000L) {
+            val downloadedSha256 = computeFileSha256(targetFile)
+            if (downloadedSha256.isNotBlank()) {
+                appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_SYNCED_APK_SHA256, downloadedSha256)
+                    .apply()
+            }
+
             _syncState.value = _syncState.value.copy(
                 isDownloadingApk = false,
                 downloadProgressPercent = 100,
                 downloadedApkReady = true,
+                lastSyncedApkSha256 = downloadedSha256.ifBlank { state.lastSyncedApkSha256 },
                 downloadErrorArabic = null,
-                lastSyncSummaryArabic = "اكتمل تنزيل التحديث داخل التطبيق؛ جاري فتح شاشة التثبيت..."
+                lastSyncSummaryArabic = "اكتمل تنزيل أحدث نسخة داخل التطبيق؛ جاري فتح شاشة التثبيت..."
             )
             if (autoLaunchInstaller) {
                 withContext(Dispatchers.Main) {
@@ -659,14 +785,17 @@ object GitHubSmartSyncEngine {
     private fun downloadApkFromCandidateUrl(urlString: String, destinationFile: File): Boolean {
         var connection: HttpURLConnection? = null
         return try {
-            val url = URL(urlString)
+            val cacheBustedUrl = appendHiddenCacheBuster(urlString)
+            val url = URL(cacheBustedUrl)
             var activeConn: HttpURLConnection = (url.openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true
                 requestMethod = "GET"
                 connectTimeout = 12_000
                 readTimeout = 20_000
                 useCaches = false
-                setRequestProperty("Cache-Control", "no-cache")
+                setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
+                setRequestProperty("Pragma", "no-cache")
+                setRequestProperty("Expires", "0")
                 setRequestProperty("Accept", "application/vnd.android.package-archive, application/octet-stream, */*")
             }
             connection = activeConn
@@ -683,12 +812,15 @@ object GitHubSmartSyncEngine {
             ) {
                 val newLocation = activeConn.getHeaderField("Location") ?: break
                 activeConn.disconnect()
-                activeConn = (URL(newLocation).openConnection() as HttpURLConnection).apply {
+                activeConn = (URL(appendHiddenCacheBuster(newLocation)).openConnection() as HttpURLConnection).apply {
                     instanceFollowRedirects = true
                     requestMethod = "GET"
                     connectTimeout = 12_000
                     readTimeout = 20_000
                     useCaches = false
+                    setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
+                    setRequestProperty("Pragma", "no-cache")
+                    setRequestProperty("Expires", "0")
                 }
                 connection = activeConn
                 code = activeConn.responseCode
@@ -714,8 +846,7 @@ object GitHubSmartSyncEngine {
                             val percent = if (totalBytes > 0L) {
                                 ((downloadedBytes * 100L) / totalBytes).toInt().coerceIn(5, 99)
                             } else {
-                                // Estimate against ~12 MB APK when Content-Length is omitted
-                                ((downloadedBytes * 100L) / (12L * 1024L * 1024L)).toInt().coerceIn(5, 95)
+                                ((downloadedBytes * 100L) / (17L * 1024L * 1024L)).toInt().coerceIn(5, 95)
                             }
                             _syncState.value = _syncState.value.copy(
                                 isDownloadingApk = true,
@@ -736,8 +867,6 @@ object GitHubSmartSyncEngine {
 
     /**
      * Launches the Android system Package Installer for the downloaded APK using [FileProvider].
-     * If the user hasn't granted "Install unknown apps" permission on Android 8.0+, opens the
-     * system permission screen for this package so they can allow it and tap install immediately.
      */
     fun installDownloadedApk(context: Context): Boolean {
         val appContext = context.applicationContext
@@ -785,7 +914,7 @@ object GitHubSmartSyncEngine {
     }
 
     /**
-     * Triggers the in-app APK download & installer directly (and falls back to browser only if requested).
+     * Triggers the in-app APK download & installer directly.
      */
     fun openLatestFullApkDownload(context: Context, useBackupLink: Boolean = false) {
         val appContext = context.applicationContext
@@ -793,30 +922,22 @@ object GitHubSmartSyncEngine {
         if (_syncState.value.downloadedApkReady && apkFile.exists() && apkFile.length() > 100_000L && !useBackupLink) {
             if (installDownloadedApk(context)) return
         }
-        if (!useBackupLink) {
-            startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
-            return
-        }
-        val state = _syncState.value
-        val targetUrl = state.backupApkUrl.ifBlank { defaultRawApkUrl() }
-        runCatching {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-        }
+        startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
     }
 
     private fun fetchTextFromUrl(urlString: String): String? {
         var connection: HttpURLConnection? = null
         return try {
-            val url = URL(urlString)
+            val cacheBustedUrl = appendHiddenCacheBuster(urlString)
+            val url = URL(cacheBustedUrl)
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 6000
                 readTimeout = 6000
                 useCaches = false
-                setRequestProperty("Cache-Control", "no-cache")
+                setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
+                setRequestProperty("Pragma", "no-cache")
+                setRequestProperty("Expires", "0")
                 setRequestProperty("Accept", "application/json, text/plain, */*")
             }
             if (connection.responseCode in 200..299) {

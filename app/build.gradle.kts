@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.security.MessageDigest
 import java.time.Duration
 
 plugins {
@@ -106,6 +107,21 @@ tasks.register<Copy>("syncReleaseApk") {
     val deltaUrl = "https://raw.githubusercontent.com/$repoSlug/main/releases/delta-sync.json"
 
     releasesDir.mkdirs()
+    val apkFile = File(releasesDir, "kAM-Lite.apk")
+    val apkSha256 = if (apkFile.exists()) {
+      val digest = MessageDigest.getInstance("SHA-256")
+      apkFile.inputStream().use { input ->
+        val buffer = ByteArray(32 * 1024)
+        var read: Int
+        while (input.read(buffer).also { read = it } != -1) {
+          digest.update(buffer, 0, read)
+        }
+      }
+      digest.digest().joinToString("") { b -> "%02x".format(b) }
+    } else {
+      ""
+    }
+    val shortCommit = if (apkSha256.length >= 12) apkSha256.take(12) else "latest"
 
     File(releasesDir, "version.json").writeText(
       """
@@ -115,8 +131,9 @@ tasks.register<Copy>("syncReleaseApk") {
         "minDeltaBaseVersionCode": $minDeltaBase,
         "maxDeltaGap": 3,
         "requiresFullInstall": true,
-        "commitSha": "latest",
-        "updatedAt": "2026-11-10T18:05:00Z",
+        "commitSha": "$shortCommit",
+        "apkSha256": "$apkSha256",
+        "updatedAt": "2026-11-11T11:35:00Z",
         "apkDirectUrl": "$singleAutoUrl",
         "deltaSyncUrl": "$deltaUrl",
         "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): فتح فوري (0ms) بالتخزين المحلي الذكي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + أيقونة النجمة + مزامنة التفضيلات الشخصية في حساب السحابة."
@@ -130,8 +147,9 @@ tasks.register<Copy>("syncReleaseApk") {
         "targetVersionCode": $verCode,
         "targetVersionName": "$verName",
         "minCompatibleBaseVersion": $minDeltaBase,
-        "commitSha": "latest",
-        "updatedAt": "2026-11-10T18:05:00Z",
+        "commitSha": "$shortCommit",
+        "apkSha256": "$apkSha256",
+        "updatedAt": "2026-11-11T11:35:00Z",
         "deltaSummaryArabic": "الإصدار $verName (نجم الكارت v$verName): فتح فوري بالتخزين المحلي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + مزامنة تفضيلات الحساب على السحابة",
         "latestApkDirectUrl": "$singleAutoUrl",
         "changedModules": [
