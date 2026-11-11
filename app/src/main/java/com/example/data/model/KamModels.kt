@@ -1,5 +1,6 @@
 package com.example.data.model
 
+import androidx.compose.runtime.Immutable
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.IgnoreExtraProperties
@@ -41,6 +42,7 @@ enum class BlockColorPreset(val hex: String, val arabicName: String) {
     }
 }
 
+@Immutable
 @IgnoreExtraProperties
 data class UserProfile(
     @DocumentId val id: String = "",
@@ -61,11 +63,13 @@ data class UserProfile(
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
+@Immutable
 data class BannedServantInfo(
     val uid: String,
     val name: String
 )
 
+@Immutable
 @IgnoreExtraProperties
 data class Group(
     @DocumentId val id: String = "",
@@ -130,6 +134,7 @@ data class Group(
 
     companion object {
         const val DAILY_INVITE_VALIDITY_MILLIS = 86_400_000L
+        private val INVITE_CODE_CLEAN_REGEX = Regex("[^A-Z0-9\\-]")
 
         fun computeFallbackDailyToken(groupId: String, timestampMillis: Long): String {
             val dayBucket = if (timestampMillis > 0L) {
@@ -143,7 +148,7 @@ data class Group(
         }
 
         fun parseInviteCodeInput(rawCode: String): Pair<String, String> {
-            val cleaned = rawCode.trim().uppercase().replace(Regex("[^A-Z0-9\\-]"), "")
+            val cleaned = rawCode.trim().uppercase().replace(INVITE_CODE_CLEAN_REGEX, "")
             if (cleaned.contains("-")) {
                 val prefix = cleaned.substringBefore("-").trim()
                 val suffix = cleaned.substringAfter("-").replace("-", "").trim()
@@ -157,6 +162,7 @@ data class Group(
     }
 }
 
+@Immutable
 @IgnoreExtraProperties
 data class Invitation(
     @DocumentId val id: String = "",
@@ -172,6 +178,7 @@ data class Invitation(
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
+@Immutable
 @IgnoreExtraProperties
 data class ServantBlock(
     @DocumentId val id: String = "",
@@ -185,6 +192,7 @@ data class ServantBlock(
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
+@Immutable
 @IgnoreExtraProperties
 data class Student(
     @DocumentId val id: String = "",
@@ -196,6 +204,8 @@ data class Student(
     val position: Double = 0.0,
     val avatarInitials: String = "ط",
     val avatarBase64: String = "",
+    val hasAvatar: Boolean = false,
+    val avatarHash: String = "",
     val createdByUid: String = "",
     val memberUids: List<String> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -203,8 +213,44 @@ data class Student(
 ) {
     val effectivePosition: Double
         get() = if (position != 0.0) position else (sortOrder.toDouble() * 1000.0 + studentNumber.toDouble())
+
+    val effectiveHasAvatar: Boolean
+        get() = hasAvatar || avatarHash.isNotBlank() || avatarBase64.isNotBlank()
+
+    val effectiveAvatarKey: String
+        get() = when {
+            avatarHash.isNotBlank() -> avatarHash
+            avatarBase64.isNotBlank() -> computeAvatarHash(avatarBase64)
+            else -> ""
+        }
+
+    companion object {
+        fun computeAvatarHash(rawAvatarBase64: String): String {
+            val trimmed = rawAvatarBase64.trim()
+            if (trimmed.isEmpty()) return ""
+            val primary = trimmed.substringBefore("|||")
+            val h1 = primary.hashCode().toUInt().toString(16)
+            val h2 = trimmed.length.toString(16)
+            return "${h1}_$h2"
+        }
+    }
 }
 
+@Immutable
+@IgnoreExtraProperties
+data class StudentAvatarDoc(
+    @DocumentId val id: String = "",
+    val groupId: String = "",
+    val studentId: String = "",
+    val avatarBase64: String = "",
+    val avatarHash: String = "",
+    val updatedByUid: String = "",
+    val memberUids: List<String> = emptyList(),
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Immutable
 @IgnoreExtraProperties
 data class CardEvent(
     @DocumentId val id: String = "",
@@ -222,6 +268,7 @@ data class CardEvent(
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
+@Immutable
 @IgnoreExtraProperties
 data class MonthlyBalance(
     @DocumentId val id: String = "",
@@ -238,8 +285,10 @@ data class MonthlyBalance(
 )
 
 object ArabicInitialsHelper {
+    private val WHITESPACE_REGEX = Regex("\\s+")
+
     fun extractInitials(fullName: String): String {
-        val parts = fullName.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        val parts = fullName.trim().split(WHITESPACE_REGEX).filter { it.isNotBlank() }
         if (parts.isEmpty()) return "ط"
         val first = parts[0].firstOrNull()?.toString() ?: "ط"
         val second = if (parts.size > 1) parts[1].firstOrNull()?.toString() ?: "" else ""
@@ -248,7 +297,7 @@ object ArabicInitialsHelper {
 
     fun normalizeArabicName(raw: String): String {
         return raw.trim()
-            .replace(Regex("\\s+"), " ")
+            .replace(WHITESPACE_REGEX, " ")
             .replace('أ', 'ا')
             .replace('إ', 'ا')
             .replace('آ', 'ا')
@@ -258,12 +307,14 @@ object ArabicInitialsHelper {
     }
 }
 
+@Immutable
 data class DuplicateStudentNameGroup(
     val normalizedName: String,
     val displayName: String,
     val records: List<Student>
 )
 
+@Immutable
 data class DuplicateCardAlert(
     val id: String,
     val studentId: String,
@@ -279,6 +330,7 @@ data class DuplicateCardAlert(
 
 const val MAX_STUDENTS_PER_GROUP = 150
 
+@Immutable
 data class CopticDate(
     val year: Int,
     val month: Int, // 1..13
@@ -287,6 +339,7 @@ data class CopticDate(
     val weekInMonth: Int // 1..5
 )
 
+@Immutable
 data class WeekTreeNode(
     val weekKey: String,
     val monthKey: String,
@@ -302,6 +355,7 @@ data class WeekTreeNode(
     val copticTransitionBadge: String? = null
 )
 
+@Immutable
 data class MonthTreeNode(
     val year: Int,
     val monthNumber: Int, // 1..12
@@ -313,6 +367,7 @@ data class MonthTreeNode(
     val copticMonthsLabel: String = ""
 )
 
+@Immutable
 data class YearTreeNode(
     val year: Int,
     val arabicYearLabel: String,

@@ -447,3 +447,63 @@ test("7. CardEvents enforce exact points per cardType and shared group visibilit
       .delete()
   );
 });
+
+test("8. Decoupled student avatars collection (groups/{groupId}/avatars/{studentId}) allows group members and rejects outsiders", async () => {
+  await seedGroupWithMembers();
+  const now = new Date();
+  const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
+  const outsiderDb = testEnv.authenticatedContext(OUTSIDER_UID).firestore();
+
+  const studentRef = servantDb
+    .collection("groups")
+    .doc(GROUP_ID)
+    .collection("students")
+    .doc("stu_avatar_1");
+
+  await assertSucceeds(
+    studentRef.set({
+      groupId: GROUP_ID,
+      name: "مينا سمير",
+      studentNumber: 1,
+      blockId: "",
+      sortOrder: 0,
+      position: 1000.0,
+      avatarInitials: "م س",
+      avatarBase64: "",
+      hasAvatar: true,
+      avatarHash: "hash_abc123",
+      createdByUid: SERVANT_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  const avatarRef = servantDb
+    .collection("groups")
+    .doc(GROUP_ID)
+    .collection("avatars")
+    .doc("stu_avatar_1");
+
+  await assertSucceeds(
+    avatarRef.set({
+      groupId: GROUP_ID,
+      studentId: "stu_avatar_1",
+      avatarBase64: "F3|0|0.0|0.0|1.0|/9j/4AAQSkZJRgABAQAAAQABAAD/",
+      avatarHash: "hash_abc123",
+      updatedByUid: SERVANT_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Outsider cannot read decoupled student avatar
+  await assertFails(
+    outsiderDb
+      .collection("groups")
+      .doc(GROUP_ID)
+      .collection("avatars")
+      .doc("stu_avatar_1")
+      .get()
+  );
+});
+

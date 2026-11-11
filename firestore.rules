@@ -184,7 +184,8 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'groupId', 'name', 'studentNumber', 'blockId',
-          'sortOrder', 'position', 'avatarInitials', 'avatarBase64', 'createdByUid',
+          'sortOrder', 'position', 'avatarInitials', 'avatarBase64',
+          'hasAvatar', 'avatarHash', 'createdByUid',
           'memberUids', 'createdAt', 'updatedAt'
         ]) &&
         data.groupId == groupId &&
@@ -195,7 +196,29 @@ service cloud.firestore {
         (!('position' in data) || isValidNumberPos(data.position)) &&
         isOptionalString(data.avatarInitials, 10) &&
         (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 50000)) &&
+        (!('hasAvatar' in data) || data.hasAvatar is bool) &&
+        (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
         isNonEmptyString(data.createdByUid, 64) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStudentAvatar(data, groupId, studentId) {
+      return data.keys().hasAll([
+          'groupId', 'studentId', 'avatarBase64', 'avatarHash',
+          'updatedByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'groupId', 'studentId', 'avatarBase64', 'avatarHash',
+          'updatedByUid', 'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        data.groupId == groupId &&
+        data.studentId == studentId &&
+        isNonEmptyString(data.studentId, 80) &&
+        isOptionalString(data.avatarBase64, 50000) &&
+        isOptionalString(data.avatarHash, 64) &&
+        isNonEmptyString(data.updatedByUid, 64) &&
         (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -362,7 +385,6 @@ service cloud.firestore {
         allow update: if isGroupMember(groupId) &&
           isValidCardEvent(incoming(), groupId) &&
           incoming().groupId == existing().groupId &&
-          incoming().studentId == existing().studentId &&
           incoming().cardType == existing().cardType &&
           incoming().points == existing().points;
         allow delete: if isGroupAdmin(groupId) ||
@@ -384,6 +406,18 @@ service cloud.firestore {
           incoming().studentId == existing().studentId &&
           incoming().monthKey == existing().monthKey;
         allow delete: if isGroupAdmin(groupId);
+      }
+
+      // 2f. Student Avatars (Lazy-loaded separate collection per child)
+      match /avatars/{studentId} {
+        allow get, list: if isGroupMember(groupId);
+        allow create: if isGroupMember(groupId) &&
+          isValidStudentAvatar(incoming(), groupId, studentId);
+        allow update: if isGroupMember(groupId) &&
+          isValidStudentAvatar(incoming(), groupId, studentId) &&
+          incoming().groupId == existing().groupId &&
+          incoming().studentId == existing().studentId;
+        allow delete: if isGroupMember(groupId);
       }
     }
   }

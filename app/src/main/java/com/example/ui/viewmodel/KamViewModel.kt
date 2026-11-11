@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.util.Log
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.cache.CachedClassroomSnapshot
@@ -25,8 +26,11 @@ import com.example.data.model.ServantBlock
 import com.example.data.model.Student
 import com.example.data.model.UserProfile
 import com.example.data.repository.KamRepository
+import com.example.ui.components.StudentAvatarImageHelper
+import com.example.util.KamPerformanceTracker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.awaitClose
@@ -39,6 +43,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -46,11 +51,14 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
+@Immutable
 data class BulkImportLinePreview(
     val rawName: String,
     val normalizedName: String,
@@ -58,12 +66,14 @@ data class BulkImportLinePreview(
     val existingSimilarStudentName: String?
 )
 
+@Immutable
 data class StudentCardTypeBreakdown(
     val cardType: CardType,
     val count: Int,
     val points: Long
 )
 
+@Immutable
 data class StudentDetailedLeaderboardEntry(
     val student: Student,
     val rank: Int,
@@ -74,38 +84,15 @@ data class StudentDetailedLeaderboardEntry(
     val breakdownByCard: List<StudentCardTypeBreakdown>
 )
 
-data class KamScreenState(
-    val isLoading: Boolean = true,
-    val errorMessage: String? = null,
-    val actionBannerMessage: String? = null,
-    val userProfile: UserProfile? = null,
-    val group: Group? = null,
-    val userGroups: List<Group> = emptyList(),
-    val isAdmin: Boolean = false,
-    val blocks: List<ServantBlock> = emptyList(),
-    val students: List<Student> = emptyList(),
-    val cardEvents: List<CardEvent> = emptyList(),
-    val monthlyBalances: List<MonthlyBalance> = emptyList(),
-    val allGroupCardEvents: List<CardEvent> = emptyList(),
-    val allGroupMonthlyBalances: List<MonthlyBalance> = emptyList(),
-    val invitations: List<Invitation> = emptyList(),
-    val selectedMonthKey: String = "",
-    val selectedWeekKey: String? = null,
-    val currentWeekKey: String = "",
-    val searchQuery: String = "",
-    val isOnline: Boolean = true,
-    val hasPendingWrites: Boolean = false,
-    val dismissedDuplicateNames: Set<String> = emptySet(),
-    val previousGroupId: String = ""
+@Immutable
+class PrecomputedClassroomIndices(
+    val userProfile: UserProfile?,
+    val students: List<Student>,
+    val cardEvents: List<CardEvent>,
+    val monthlyBalances: List<MonthlyBalance>,
+    val selectedWeekKey: String?,
+    val dismissedDuplicateNames: Set<String>
 ) {
-    val remainingStudentCapacity: Int
-        get() = (MAX_STUDENTS_PER_GROUP - students.size).coerceAtLeast(0)
-
-    val canReturnToPreviousGroup: Boolean
-        get() = previousGroupId.isNotBlank() ||
-            !userProfile?.joinedGroupIds.isNullOrEmpty() ||
-            userGroups.isNotEmpty()
-
     val enabledCardTypes: List<CardType> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         val ids = userProfile?.enabledCards ?: CardType.defaultEnabledIds
         CardType.entries.filter { it.id in ids }
@@ -135,7 +122,7 @@ data class KamScreenState(
         monthlyBalances.associate { it.studentId to it.totalPoints }
     }
 
-    private val monthlyPointsByStudentId: Map<String, Long> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+    val monthlyPointsByStudentId: Map<String, Long> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         buildMap(students.size + monthlyEventsByStudentId.size + monthlyBalanceByStudentId.size) {
             monthlyBalanceByStudentId.forEach { (stuId, pts) ->
                 put(stuId, pts)
@@ -146,11 +133,11 @@ data class KamScreenState(
         }
     }
 
-    private val displayedEventsByStudentId: Map<String, List<CardEvent>> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+    val displayedEventsByStudentId: Map<String, List<CardEvent>> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         displayedCardEvents.groupBy { it.studentId }
     }
 
-    private val displayedPointsByStudentId: Map<String, Long> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+    val displayedPointsByStudentId: Map<String, Long> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         if (!selectedWeekKey.isNullOrBlank()) {
             displayedEventsByStudentId.mapValues { (_, evs) -> evs.sumOf { it.points } }
         } else {
@@ -158,7 +145,7 @@ data class KamScreenState(
         }
     }
 
-    private val displayedCardCountsByStudentAndType: Map<Pair<String, String>, Int> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+    val displayedCardCountsByStudentAndType: Map<Pair<String, String>, Int> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         val counts = HashMap<Pair<String, String>, Int>(displayedCardEvents.size.coerceAtLeast(16))
         displayedCardEvents.forEach { ev ->
             val key = ev.studentId to ev.cardType
@@ -167,10 +154,30 @@ data class KamScreenState(
         counts
     }
 
-    /**
-     * Detects duplicate student records with the same normalized Arabic name inside the active group
-     * (from migration or simultaneous offline additions) so the user can compare and decide manually.
-     */
+    val packedCardCountsByStudentId: Map<String, Long> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        if (displayedCardEvents.isEmpty()) {
+            emptyMap()
+        } else {
+            val packedMap = HashMap<String, Long>(displayedEventsByStudentId.size.coerceAtLeast(16))
+            displayedEventsByStudentId.forEach { (stuId, evs) ->
+                var packed = 0L
+                for (i in 0 until evs.size) {
+                    val ct = CardType.fromId(evs[i].cardType) ?: continue
+                    val shift = ct.ordinal * 8
+                    val current = ((packed ushr shift) and 0xFFL).toInt()
+                    if (current < 255) {
+                        val cleared = packed and (0xFFL shl shift).inv()
+                        packed = cleared or ((current + 1).toLong() shl shift)
+                    }
+                }
+                if (packed != 0L) {
+                    packedMap[stuId] = packed
+                }
+            }
+            packedMap
+        }
+    }
+
     val duplicateStudentsByName: List<DuplicateStudentNameGroup> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         if (students.size < 2) {
             emptyList()
@@ -192,10 +199,6 @@ data class KamScreenState(
         }
     }
 
-    /**
-     * Detects duplicate cards where the SAME child received the SAME card type in the SAME week
-     * from 2 or more DIFFERENT servants.
-     */
     val duplicateAlerts: List<DuplicateCardAlert> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         if (displayedCardEvents.size < 2) {
             emptyList()
@@ -233,20 +236,152 @@ data class KamScreenState(
         }
     }
 
+    val leaderboardCache: ConcurrentHashMap<String, List<StudentDetailedLeaderboardEntry>> =
+        ConcurrentHashMap()
+
+    fun matchesState(
+        profile: UserProfile?,
+        stuList: List<Student>,
+        evList: List<CardEvent>,
+        balList: List<MonthlyBalance>,
+        weekKey: String?,
+        dismissed: Set<String>
+    ): Boolean {
+        return userProfile === profile &&
+            students === stuList &&
+            cardEvents === evList &&
+            monthlyBalances === balList &&
+            selectedWeekKey == weekKey &&
+            dismissedDuplicateNames === dismissed
+    }
+
+    fun prewarmAll() {
+        enabledCardTypes
+        collapsedBlockIds
+        hiddenBlockIds
+        displayedCardEvents
+        monthlyPointsByStudentId
+        displayedPointsByStudentId
+        displayedCardCountsByStudentAndType
+        packedCardCountsByStudentId
+        duplicateStudentsByName
+        duplicateAlerts
+    }
+}
+
+@Immutable
+data class KamScreenState(
+    val isLoading: Boolean = true,
+    val errorMessage: String? = null,
+    val actionBannerMessage: String? = null,
+    val userProfile: UserProfile? = null,
+    val group: Group? = null,
+    val userGroups: List<Group> = emptyList(),
+    val isAdmin: Boolean = false,
+    val blocks: List<ServantBlock> = emptyList(),
+    val students: List<Student> = emptyList(),
+    val cardEvents: List<CardEvent> = emptyList(),
+    val monthlyBalances: List<MonthlyBalance> = emptyList(),
+    val allGroupCardEvents: List<CardEvent> = emptyList(),
+    val allGroupMonthlyBalances: List<MonthlyBalance> = emptyList(),
+    val invitations: List<Invitation> = emptyList(),
+    val selectedMonthKey: String = "",
+    val selectedWeekKey: String? = null,
+    val currentWeekKey: String = "",
+    val searchQuery: String = "",
+    val isOnline: Boolean = true,
+    val hasPendingWrites: Boolean = false,
+    val dismissedDuplicateNames: Set<String> = emptySet(),
+    val previousGroupId: String = "",
+    val precomputedIndices: PrecomputedClassroomIndices? = null
+) {
+    private val indices: PrecomputedClassroomIndices by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        val existing = precomputedIndices
+        if (existing != null && existing.matchesState(
+                profile = userProfile,
+                stuList = students,
+                evList = cardEvents,
+                balList = monthlyBalances,
+                weekKey = selectedWeekKey,
+                dismissed = dismissedDuplicateNames
+            )
+        ) {
+            existing
+        } else {
+            PrecomputedClassroomIndices(
+                userProfile = userProfile,
+                students = students,
+                cardEvents = cardEvents,
+                monthlyBalances = monthlyBalances,
+                selectedWeekKey = selectedWeekKey,
+                dismissedDuplicateNames = dismissedDuplicateNames
+            )
+        }
+    }
+
+    val remainingStudentCapacity: Int
+        get() = (MAX_STUDENTS_PER_GROUP - students.size).coerceAtLeast(0)
+
+    val canReturnToPreviousGroup: Boolean
+        get() = previousGroupId.isNotBlank() ||
+            !userProfile?.joinedGroupIds.isNullOrEmpty() ||
+            userGroups.isNotEmpty()
+
+    val enabledCardTypes: List<CardType>
+        get() = indices.enabledCardTypes
+
+    val collapsedBlockIds: Set<String>
+        get() = indices.collapsedBlockIds
+
+    val hiddenBlockIds: Set<String>
+        get() = indices.hiddenBlockIds
+
+    val displayedCardEvents: List<CardEvent>
+        get() = indices.displayedCardEvents
+
+    /**
+     * Detects duplicate student records with the same normalized Arabic name inside the active group
+     * (from migration or simultaneous offline additions) so the user can compare and decide manually.
+     */
+    val duplicateStudentsByName: List<DuplicateStudentNameGroup>
+        get() = indices.duplicateStudentsByName
+
+    /**
+     * Detects duplicate cards where the SAME child received the SAME card type in the SAME week
+     * from 2 or more DIFFERENT servants.
+     */
+    val duplicateAlerts: List<DuplicateCardAlert>
+        get() = indices.duplicateAlerts
+
     fun pointsForStudentInSelectedMonth(studentId: String): Long {
-        return monthlyPointsByStudentId[studentId] ?: 0L
+        return indices.monthlyPointsByStudentId[studentId] ?: 0L
     }
 
     fun pointsForStudentInDisplayedScope(studentId: String): Long {
-        return displayedPointsByStudentId[studentId] ?: 0L
+        return indices.displayedPointsByStudentId[studentId] ?: 0L
     }
 
     fun cardCountForStudent(studentId: String, cardType: CardType): Int {
-        return displayedCardCountsByStudentAndType[studentId to cardType.id] ?: 0
+        return indices.displayedCardCountsByStudentAndType[studentId to cardType.id] ?: 0
+    }
+
+    /**
+     * Returns all 7 [CardType] counts for [studentId] packed into a single 64-bit primitive `Long`
+     * (8 bits per [CardType.ordinal]). Enables O(1) Compose recomposition skipping per student row.
+     */
+    fun packedCardCountsForStudent(studentId: String): Long {
+        return indices.packedCardCountsByStudentId[studentId] ?: 0L
     }
 
     fun eventsForStudent(studentId: String): List<CardEvent> {
-        return displayedEventsByStudentId[studentId] ?: emptyList()
+        return indices.displayedEventsByStudentId[studentId] ?: emptyList()
+    }
+
+    companion object {
+        fun unpackCardCount(packedCounts: Long, cardType: CardType): Int {
+            if (packedCounts == 0L) return 0
+            return ((packedCounts ushr (cardType.ordinal * 8)) and 0xFFL).toInt()
+        }
     }
 
     val effectiveAllCardEvents: List<CardEvent>
@@ -262,6 +397,29 @@ data class KamScreenState(
      * - One or more selected months ([selectedMonths], defaulting to [selectedMonthKey]).
      * Includes every student (even those with 0 points or 0 attendance) sorted from highest to lowest points.
      */
+    /**
+     * Returns `true` if the leaderboard for [selectedMonths] and [selectedWeekOverride] is already
+     * precomputed and cached in memory for the current classroom data snapshot.
+     */
+    fun isLeaderboardCached(
+        selectedMonths: Set<String> = setOf(selectedMonthKey),
+        selectedWeekOverride: String? = null
+    ): Boolean {
+        val targetMonths = selectedMonths.filter { it.isNotBlank() }.toSortedSet().ifEmpty {
+            if (selectedMonthKey.isNotBlank()) sortedSetOf(selectedMonthKey) else sortedSetOf()
+        }
+        val cacheKey = "${targetMonths.joinToString(",")}|${selectedWeekOverride.orEmpty()}|${enabledCardTypes.size}|${effectiveAllCardEvents.size}|${effectiveAllMonthlyBalances.size}|${students.size}"
+        return indices.leaderboardCache.containsKey(cacheKey)
+    }
+
+    /**
+     * Computes the full-class leaderboard and per-card breakdown for ALL students in the classroom
+     * across either:
+     * - A single week ([selectedWeekOverride] != null), OR
+     * - One or more selected months ([selectedMonths], defaulting to [selectedMonthKey]).
+     * Memoizes the result in [PrecomputedClassroomIndices.leaderboardCache] so repeated opens or
+     * recompositions without actual data changes return in 0ms without recalculating.
+     */
     fun computeClassLeaderboardEntries(
         selectedMonths: Set<String> = setOf(selectedMonthKey),
         selectedWeekOverride: String? = null
@@ -270,8 +428,12 @@ data class KamScreenState(
         val allEvents = effectiveAllCardEvents
         val allBalances = effectiveAllMonthlyBalances
         val activeCards = enabledCardTypes.ifEmpty { CardType.entries }
-        val targetMonths = selectedMonths.filter { it.isNotBlank() }.toSet().ifEmpty {
-            if (selectedMonthKey.isNotBlank()) setOf(selectedMonthKey) else emptySet()
+        val targetMonths = selectedMonths.filter { it.isNotBlank() }.toSortedSet().ifEmpty {
+            if (selectedMonthKey.isNotBlank()) sortedSetOf(selectedMonthKey) else sortedSetOf()
+        }
+        val cacheKey = "${targetMonths.joinToString(",")}|${selectedWeekOverride.orEmpty()}|${activeCards.size}|${allEvents.size}|${allBalances.size}|${students.size}"
+        indices.leaderboardCache[cacheKey]?.let { cached ->
+            return cached
         }
 
         val scopedEvents = if (!selectedWeekOverride.isNullOrBlank()) {
@@ -328,7 +490,7 @@ data class KamScreenState(
             )
         }
 
-        return unsorted
+        val computed = unsorted
             .sortedWith(
                 compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
                     .thenByDescending { it.attendancePoints }
@@ -338,10 +500,12 @@ data class KamScreenState(
             .mapIndexed { idx, entry ->
                 entry.copy(rank = idx + 1)
             }
+        indices.leaderboardCache[cacheKey] = computed
+        return computed
     }
 }
 
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class KamViewModel(
     private val repository: KamRepository,
     private val currentUserId: String,
@@ -366,19 +530,44 @@ class KamViewModel(
     private val _dismissedDuplicateNames = MutableStateFlow<Set<String>>(emptySet())
     private val _previousGroupId = MutableStateFlow("")
 
+    // Instant 0ms optimistic UI overlays applied before Firestore local cache round-trips
+    private val _optimisticAddedEvents = MutableStateFlow<Map<String, CardEvent>>(emptyMap())
+    private val _optimisticRemovedEventIds = MutableStateFlow<Set<String>>(emptySet())
+    private val _optimisticStudentOverrides = MutableStateFlow<Map<String, Student>>(emptyMap())
+
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
-    // In-memory debounce map to prevent accidental rapid double-taps (< 700ms) on the same student + card
+    // In-memory debounce map to prevent accidental rapid double-taps (< 350ms) on the same student + card
     private val recentTapTimestamps = mutableMapOf<String, Long>()
     private var lastMigratedGroupKey: String = ""
-    private var lastSyncedSequenceSignature: String = ""
+    private var lastMigratedInlineAvatarsGroupKey: String = ""
     private var lastSavedCacheSignature: String = ""
     private var lastAutoRotatedGroupKey: String = ""
     private var lastEjectedBannedGroupId: String = ""
     private var hasSeededPrefsFromCloud: Boolean = false
     private var bannerJob: Job? = null
 
+    /**
+     * Emits the first value immediately (0ms delay for cold start cache) and debounces
+     * subsequent rapid cloud listener bursts by [timeoutMs] (200ms) so consecutive Firestore
+     * updates are coalesced into a single UI state pass.
+     */
+    private fun <T> Flow<T>.debounceSubsequentCloudEmissions(timeoutMs: Long = 200L): Flow<T> {
+        var isFirstEmission = true
+        return this.debounce {
+            if (isFirstEmission) {
+                isFirstEmission = false
+                0L
+            } else {
+                timeoutMs
+            }
+        }
+    }
+
     init {
+        StudentAvatarImageHelper.cloudAvatarFetcher = { groupId, studentId ->
+            repository.fetchStudentAvatar(groupId, studentId)
+        }
         ensureProfileInitialized()
     }
 
@@ -466,6 +655,7 @@ class KamViewModel(
             val cachedBlocks = initialCachedSnapshot?.blocks.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeBlocks(groupId, currentUserId)
                 .onStart { emit(cachedBlocks) }
+                .debounceSubsequentCloudEmissions(200L)
                 .catch { err ->
                     Log.w(TAG, "Error observing blocks", err)
                     emit(cachedBlocks)
@@ -480,6 +670,7 @@ class KamViewModel(
             val cachedStudents = initialCachedSnapshot?.students.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeStudents(groupId, currentUserId)
                 .onStart { emit(cachedStudents) }
+                .debounceSubsequentCloudEmissions(200L)
                 .catch { err ->
                     Log.w(TAG, "Error observing students", err)
                     emit(cachedStudents)
@@ -493,6 +684,7 @@ class KamViewModel(
         } else {
             repository.observeInvitations(groupId, currentUserId)
                 .onStart { emit(emptyList()) }
+                .debounceSubsequentCloudEmissions(250L)
                 .catch { err ->
                     Log.w(TAG, "Error observing invitations", err)
                     emit(emptyList())
@@ -507,6 +699,7 @@ class KamViewModel(
             val cachedEvents = initialCachedSnapshot?.cardEvents.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeAllCardEventsForGroup(groupId, currentUserId)
                 .onStart { emit(cachedEvents) }
+                .debounceSubsequentCloudEmissions(200L)
                 .catch { err ->
                     Log.w(TAG, "Error observing allCardEvents", err)
                     emit(cachedEvents)
@@ -530,6 +723,7 @@ class KamViewModel(
             val cachedBalances = initialCachedSnapshot?.monthlyBalances.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeAllMonthlyBalancesForGroup(groupId, currentUserId)
                 .onStart { emit(cachedBalances) }
+                .debounceSubsequentCloudEmissions(200L)
                 .catch { err ->
                     Log.w(TAG, "Error observing allMonthlyBalances", err)
                     emit(cachedBalances)
@@ -537,27 +731,26 @@ class KamViewModel(
         }
     }
 
-    val uiState: StateFlow<KamScreenState> = combine(
+    /**
+     * Heavy classroom data processing flow: runs on [Dispatchers.Default] ONLY when actual
+     * classroom data, selected month/week, or optimistic overlays change.
+     * Pre-warms all [PrecomputedClassroomIndices] on background CPU threads so transient UI updates
+     * (search query, banners, pending-writes indicator, online status) never recompute student/card indices!
+     */
+    private val coreClassroomStateFlow: Flow<KamScreenState> = combine(
         combine(userProfileFlow, groupFlow, userGroupsFlow, blocksFlow, _localPrefsOverride) { profile, group, userGroups, blocks, localPrefs ->
             arrayOf<Any?>(profile, group, userGroups, blocks, localPrefs)
         },
         combine(studentsFlow, allCardEventsFlow, allMonthlyBalancesFlow, invitationsFlow) { students, allEvents, allBalances, invites ->
             arrayOf<Any?>(students, allEvents, allBalances, invites)
         },
-        combine(
-            combine(_selectedMonthKey, _selectedWeekKey, _searchQuery, _dismissedDuplicateNames) { month, week, query, dismissed ->
-                arrayOf<Any?>(month, week, query, dismissed)
-            },
-            combine(isOnlineFlow, hasPendingWritesFlow, _actionBanner, _operationError) { online, pending, banner, error ->
-                arrayOf<Any?>(online, pending, banner, error)
-            }
-        ) { filterArr, netArr ->
-            arrayOf<Any?>(
-                filterArr[0], filterArr[1], filterArr[2], filterArr[3],
-                netArr[0], netArr[1], netArr[2], netArr[3]
-            )
+        combine(_selectedMonthKey, _selectedWeekKey, _dismissedDuplicateNames) { month, week, dismissed ->
+            arrayOf<Any?>(month, week, dismissed)
+        },
+        combine(_optimisticAddedEvents, _optimisticRemovedEventIds, _optimisticStudentOverrides) { optAdd, optRem, optStu ->
+            arrayOf<Any?>(optAdd, optRem, optStu)
         }
-    ) { groupArr, dataArr, metaArr ->
+    ) { groupArr, dataArr, filterArr, optArr ->
         val rawProfile = groupArr[0] as UserProfile?
         val group = groupArr[1] as Group?
         @Suppress("UNCHECKED_CAST")
@@ -583,23 +776,57 @@ class KamViewModel(
         }
 
         @Suppress("UNCHECKED_CAST")
-        val rawStudents = dataArr[0] as List<Student>
+        val cloudStudents = dataArr[0] as List<Student>
         @Suppress("UNCHECKED_CAST")
-        val allEvents = dataArr[1] as List<CardEvent>
+        val cloudEvents = dataArr[1] as List<CardEvent>
         @Suppress("UNCHECKED_CAST")
         val allBalances = dataArr[2] as List<MonthlyBalance>
         @Suppress("UNCHECKED_CAST")
         val invitations = dataArr[3] as List<Invitation>
 
-        val selectedMonth = metaArr[0] as String
-        val selectedWeek = metaArr[1] as String?
-        val searchQuery = metaArr[2] as String
+        val selectedMonth = filterArr[0] as String
+        val selectedWeek = filterArr[1] as String?
         @Suppress("UNCHECKED_CAST")
-        val dismissedDuplicates = metaArr[3] as Set<String>
-        val isOnline = metaArr[4] as Boolean
-        val hasPendingWrites = metaArr[5] as Boolean
-        val banner = metaArr[6] as String?
-        val error = metaArr[7] as String?
+        val dismissedDuplicates = filterArr[2] as Set<String>
+
+        @Suppress("UNCHECKED_CAST")
+        val optimisticAdded = optArr[0] as Map<String, CardEvent>
+        @Suppress("UNCHECKED_CAST")
+        val optimisticRemoved = optArr[1] as Set<String>
+        @Suppress("UNCHECKED_CAST")
+        val optimisticStudents = optArr[2] as Map<String, Student>
+
+        val rawStudents = if (optimisticStudents.isEmpty()) {
+            cloudStudents
+        } else {
+            cloudStudents.map { stu -> optimisticStudents[stu.id] ?: stu }
+        }
+
+        val allEvents = if (optimisticAdded.isEmpty() && optimisticRemoved.isEmpty()) {
+            cloudEvents
+        } else {
+            val cloudIds = HashSet<String>(cloudEvents.size)
+            val filteredCloud = ArrayList<CardEvent>(cloudEvents.size + optimisticAdded.size)
+            for (i in 0 until cloudEvents.size) {
+                val ev = cloudEvents[i]
+                cloudIds.add(ev.id)
+                if (ev.id !in optimisticRemoved) {
+                    filteredCloud.add(ev)
+                }
+            }
+            optimisticAdded.values.forEach { optEv ->
+                val alreadyInCloud = optEv.id in cloudIds || filteredCloud.any {
+                    it.studentId == optEv.studentId &&
+                        it.cardType == optEv.cardType &&
+                        it.weekKey == optEv.weekKey &&
+                        it.servantId == optEv.servantId
+                }
+                if (!alreadyInCloud && optEv.id !in optimisticRemoved) {
+                    filteredCloud.add(0, optEv)
+                }
+            }
+            filteredCloud
+        }
 
         val events = allEvents.filter { it.monthKey == selectedMonth }
         val balances = allBalances.filter { it.monthKey == selectedMonth }
@@ -622,20 +849,6 @@ class KamViewModel(
 
         val activeGroup = if (isBannedOrRemovedFromGroup) null else group
 
-        // Auto-renew the 24-hour daily invite code when the Admin is online and the 24-hour window has expired
-        if (activeGroup != null && activeGroup.adminId == currentUserId && isOnline && activeGroup.isDailyCodeExpired()) {
-            val rotationKey = "${activeGroup.inviteCode}_${activeGroup.inviteCodeUpdatedAtMillis}"
-            if (rotationKey != lastAutoRotatedGroupKey) {
-                lastAutoRotatedGroupKey = rotationKey
-                viewModelScope.launch {
-                    repository.rotateDailyInviteCode(
-                        groupId = activeGroup.inviteCode,
-                        previousToken = activeGroup.dailyInviteToken
-                    )
-                }
-            }
-        }
-
         // Migrate any legacy user-scoped documents & normalize missing groupId/position fields ONCE ever per group
         val migrationKey = "${activeGroup?.inviteCode.orEmpty()}_${activeGroup?.memberUids?.size ?: 0}"
         if (
@@ -653,35 +866,32 @@ class KamViewModel(
             }
         }
 
-        // Compute global sequential student numbering (1, 2, 3, 4...) across the entire group
-        val sequentiallyNumberedStudents = computeSequentiallyNumberedStudents(rawStudents, blocks)
-
-        if (activeGroup != null && currentUserId in activeGroup.memberUids && rawStudents.isNotEmpty()) {
-            val rawById = rawStudents.associateBy { it.id }
-            val mismatchedNumbers = sequentiallyNumberedStudents.mapNotNull { numberedStu ->
-                val rawStu = rawById[numberedStu.id]
-                if (rawStu != null && rawStu.studentNumber != numberedStu.studentNumber) {
-                    numberedStu.id to numberedStu.studentNumber
-                } else {
-                    null
+        // Automatically migrate any unmigrated inline student avatars into groups/{groupId}/avatars/{studentId}
+        if (activeGroup != null && currentUserId in activeGroup.memberUids) {
+            val inlineAvatarStudents = cloudStudents.filter { it.avatarBase64.isNotBlank() }
+            val inlineKey = "${activeGroup.inviteCode}_${inlineAvatarStudents.size}"
+            if (inlineAvatarStudents.isNotEmpty() && inlineKey != lastMigratedInlineAvatarsGroupKey) {
+                lastMigratedInlineAvatarsGroupKey = inlineKey
+                // Cache locally before stripping from cloud student doc
+                inlineAvatarStudents.forEach { stu ->
+                    StudentAvatarImageHelper.writeLocalAlbumRaw(null, stu.id, stu.avatarBase64)
                 }
-            }.toMap()
-            val seqSignature = "${activeGroup.inviteCode}:${sequentiallyNumberedStudents.joinToString(",") { "${it.id}=${it.studentNumber}" }}"
-            if (mismatchedNumbers.isNotEmpty() && seqSignature != lastSyncedSequenceSignature) {
-                lastSyncedSequenceSignature = seqSignature
-                viewModelScope.launch {
-                    repository.syncStudentSequentialNumbers(
+                viewModelScope.launch(Dispatchers.IO) {
+                    repository.migrateInlineStudentAvatars(
                         groupId = activeGroup.inviteCode,
-                        numberUpdates = mismatchedNumbers,
-                        waitForServerAck = false
+                        studentsWithInlineAvatars = inlineAvatarStudents,
+                        memberUids = activeGroup.memberUids
                     )
                 }
             }
         }
 
-        // Save classroom snapshot locally on device whenever data changes so next app launch is 0ms
+        // Compute global sequential student numbering (1, 2, 3, 4...) across the entire group in memory
+        val sequentiallyNumberedStudents = computeSequentiallyNumberedStudents(rawStudents, blocks)
+
+        // Save classroom snapshot locally on device (debounced 3000ms on background IO thread, without photos)
         if (profile != null) {
-            val cacheSig = "${profile.groupId}_${activeGroup?.inviteCode}_${blocks.size}_${sequentiallyNumberedStudents.size}_${allEvents.size}_${profile.enabledCards.joinToString(",")}_${profile.collapsedBlockIds.joinToString(",")}_${profile.hiddenBlockIds.joinToString(",")}_${profile.themeId}_${profile.uiScaleMode}_${profile.uiScaleFactor}_${profile.showFloatingAddButton}"
+            val cacheSig = "${profile.groupId}_${activeGroup?.inviteCode}_${blocks.size}_${sequentiallyNumberedStudents.size}_${cloudEvents.size}_${profile.enabledCards.size}_${profile.collapsedBlockIds.size}_${profile.hiddenBlockIds.size}_${profile.themeId}_${profile.uiScaleMode}_${profile.uiScaleFactor}_${profile.showFloatingAddButton}"
             if (cacheSig != lastSavedCacheSignature) {
                 lastSavedCacheSignature = cacheSig
                 LocalClassroomCache.saveClassroomSnapshot(
@@ -691,7 +901,7 @@ class KamViewModel(
                     userGroups = userGroups,
                     blocks = blocks,
                     students = sequentiallyNumberedStudents,
-                    cardEvents = allEvents,
+                    cardEvents = cloudEvents,
                     monthlyBalances = allBalances
                 )
             }
@@ -702,29 +912,79 @@ class KamViewModel(
                 ?: userGroups.firstOrNull { it.inviteCode != lastEjectedBannedGroupId }?.inviteCode.orEmpty()
         }
 
-        KamScreenState(
-            isLoading = profile == null && error == null,
-            errorMessage = error ?: _operationError.value,
-            actionBannerMessage = banner,
+        val effectiveBlocks = if (activeGroup == null) emptyList() else blocks
+        val effectiveStudents = if (activeGroup == null) emptyList() else sequentiallyNumberedStudents
+        val effectiveEvents = if (activeGroup == null) emptyList() else events
+        val effectiveBalances = if (activeGroup == null) emptyList() else balances
+        val effectiveAllEvents = if (activeGroup == null) emptyList() else allEvents
+        val effectiveAllBalances = if (activeGroup == null) emptyList() else allBalances
+        val effectiveInvitations = if (activeGroup == null) emptyList() else invitations
+
+        val precomputed = PrecomputedClassroomIndices(
+            userProfile = profile,
+            students = effectiveStudents,
+            cardEvents = effectiveEvents,
+            monthlyBalances = effectiveBalances,
+            selectedWeekKey = selectedWeek,
+            dismissedDuplicateNames = dismissedDuplicates
+        ).also { it.prewarmAll() }
+
+        val builtState = KamScreenState(
+            isLoading = profile == null,
             userProfile = profile,
             group = activeGroup,
             userGroups = userGroups.filter { currentUserId !in it.bannedUids },
             isAdmin = activeGroup?.adminId == currentUserId,
-            blocks = if (activeGroup == null) emptyList() else blocks,
-            students = if (activeGroup == null) emptyList() else sequentiallyNumberedStudents,
-            cardEvents = if (activeGroup == null) emptyList() else events,
-            monthlyBalances = if (activeGroup == null) emptyList() else balances,
-            allGroupCardEvents = if (activeGroup == null) emptyList() else allEvents,
-            allGroupMonthlyBalances = if (activeGroup == null) emptyList() else allBalances,
-            invitations = if (activeGroup == null) emptyList() else invitations,
+            blocks = effectiveBlocks,
+            students = effectiveStudents,
+            cardEvents = effectiveEvents,
+            monthlyBalances = effectiveBalances,
+            allGroupCardEvents = effectiveAllEvents,
+            allGroupMonthlyBalances = effectiveAllBalances,
+            invitations = effectiveInvitations,
             selectedMonthKey = selectedMonth,
             selectedWeekKey = selectedWeek,
             currentWeekKey = currentYearWeek(),
+            dismissedDuplicateNames = dismissedDuplicates,
+            previousGroupId = fallbackPrevGroup,
+            precomputedIndices = precomputed
+        )
+        // Prewarm the default current-month leaderboard on Dispatchers.Default so opening the Leaderboard screen is 0ms
+        if (effectiveStudents.isNotEmpty() && selectedMonth.isNotBlank()) {
+            builtState.computeClassLeaderboardEntries(setOf(selectedMonth), null)
+        }
+        builtState
+    }.flowOn(Dispatchers.Default)
+
+    val uiState: StateFlow<KamScreenState> = combine(
+        coreClassroomStateFlow,
+        _searchQuery,
+        isOnlineFlow,
+        hasPendingWritesFlow,
+        combine(_actionBanner, _operationError) { banner, error -> banner to error }
+    ) { coreState, searchQuery, isOnline, hasPendingWrites, (banner, error) ->
+        val activeGroup = coreState.group
+        if (activeGroup != null && activeGroup.adminId == currentUserId && isOnline && activeGroup.isDailyCodeExpired()) {
+            val rotationKey = "${activeGroup.inviteCode}_${activeGroup.inviteCodeUpdatedAtMillis}"
+            if (rotationKey != lastAutoRotatedGroupKey) {
+                lastAutoRotatedGroupKey = rotationKey
+                viewModelScope.launch {
+                    repository.rotateDailyInviteCode(
+                        groupId = activeGroup.inviteCode,
+                        previousToken = activeGroup.dailyInviteToken
+                    )
+                }
+            }
+        }
+
+        val resolvedError = error ?: _operationError.value
+        coreState.copy(
+            isLoading = coreState.userProfile == null && resolvedError == null,
+            errorMessage = resolvedError,
+            actionBannerMessage = banner,
             searchQuery = searchQuery,
             isOnline = isOnline,
-            hasPendingWrites = hasPendingWrites,
-            dismissedDuplicateNames = dismissedDuplicates,
-            previousGroupId = fallbackPrevGroup
+            hasPendingWrites = hasPendingWrites
         )
     }
         .flowOn(Dispatchers.Default)
@@ -747,9 +1007,11 @@ class KamViewModel(
         bannerJob?.cancel()
         recentTapTimestamps.clear()
         lastMigratedGroupKey = ""
-        lastSyncedSequenceSignature = ""
         lastAutoRotatedGroupKey = ""
         lastEjectedBannedGroupId = ""
+        _optimisticAddedEvents.value = emptyMap()
+        _optimisticRemovedEventIds.value = emptySet()
+        _optimisticStudentOverrides.value = emptyMap()
         _operationError.value = null
         _actionBanner.value = null
         _isBusy.value = false
@@ -1270,17 +1532,29 @@ class KamViewModel(
         val targetSiblings = state.students.filter { it.blockId == targetBlockId && it.id != student.id }
         val maxSortInTarget = targetSiblings.maxOfOrNull { it.sortOrder } ?: -1L
         val maxPositionInTarget = targetSiblings.maxOfOrNull { it.effectivePosition } ?: 0.0
+        val newSortOrder = maxSortInTarget + 1L
         val newPosition = maxPositionInTarget + 1000.0
+
+        // Apply 0ms optimistic student update so the UI moves the student immediately
+        _optimisticStudentOverrides.update { current ->
+            current + (student.id to student.copy(
+                blockId = targetBlockId,
+                sortOrder = newSortOrder,
+                position = newPosition
+            ))
+        }
+
         viewModelScope.launch {
             repository.moveStudentToBlock(
                 groupId = group.inviteCode,
                 studentId = student.id,
                 targetBlockId = targetBlockId,
-                newSortOrder = maxSortInTarget + 1L,
+                newSortOrder = newSortOrder,
                 newPosition = newPosition,
                 memberUids = group.memberUids,
                 waitForServerAck = false
             ).onSuccess {
+                _optimisticStudentOverrides.update { it - student.id }
                 val targetName = if (targetBlockId.isBlank()) {
                     "بدون بلوك"
                 } else {
@@ -1288,6 +1562,7 @@ class KamViewModel(
                 }
                 showBanner("تم نقل '${student.name}' إلى $targetName وتحديث التسلسل")
             }.onFailure {
+                _optimisticStudentOverrides.update { it - student.id }
                 _operationError.value = it.localizedMessage ?: "تعذر نقل الطفل"
             }
         }
@@ -1351,6 +1626,13 @@ class KamViewModel(
         val movedNewNumber = neighborStudent.studentNumber
         val neighborNewNumber = student.studentNumber
 
+        // Apply 0ms optimistic reorder so the row swaps immediately on tap
+        _optimisticStudentOverrides.update { current ->
+            current +
+                (student.id to student.copy(position = newPosition, studentNumber = movedNewNumber)) +
+                (neighborStudent.id to neighborStudent.copy(studentNumber = neighborNewNumber))
+        }
+
         viewModelScope.launch {
             repository.updateStudentPosition(
                 groupId = group.inviteCode,
@@ -1367,6 +1649,7 @@ class KamViewModel(
                 ),
                 waitForServerAck = false
             )
+            _optimisticStudentOverrides.update { it - student.id - neighborStudent.id }
         }
     }
 
@@ -1403,15 +1686,27 @@ class KamViewModel(
     fun updateStudentAvatar(student: Student, avatarBase64: String) {
         val state = uiState.value
         val group = state.group ?: return
+        val cleanAvatar = avatarBase64.trim()
+        val hasAvatar = cleanAvatar.isNotBlank()
+        val newHash = Student.computeAvatarHash(cleanAvatar)
+        StudentAvatarImageHelper.writeLocalAlbumRaw(null, student.id, cleanAvatar)
+        _optimisticStudentOverrides.update { current ->
+            current + (student.id to student.copy(
+                avatarBase64 = "",
+                hasAvatar = hasAvatar,
+                avatarHash = newHash
+            ))
+        }
         viewModelScope.launch {
             repository.updateStudentAvatar(
                 groupId = group.inviteCode,
                 studentId = student.id,
-                avatarBase64 = avatarBase64,
+                avatarBase64 = cleanAvatar,
                 memberUids = group.memberUids,
                 waitForServerAck = false
             ).onSuccess {
-                if (avatarBase64.isBlank()) {
+                _optimisticStudentOverrides.update { it - student.id }
+                if (cleanAvatar.isBlank()) {
                     showBanner("تمت إزالة صورة '${student.name}' والعودة للحروف")
                 } else if (!state.isOnline) {
                     showBanner("تم حفظ صورة '${student.name}' محلياً وستتزامن تلقائياً")
@@ -1419,6 +1714,7 @@ class KamViewModel(
                     showBanner("تم تحديث صورة '${student.name}'")
                 }
             }.onFailure {
+                _optimisticStudentOverrides.update { it - student.id }
                 _operationError.value = it.localizedMessage ?: "تعذر تحديث صورة الطفل"
             }
         }
@@ -1440,6 +1736,7 @@ class KamViewModel(
     // --- Cards & Points (Fast 1-Tap with Deterministic ID, Toggle Undo & Duplicate Card Alert) ---
 
     fun awardCardToStudent(student: Student, cardType: CardType) {
+        KamPerformanceTracker.markCardTapStart(student.id, cardType.id)
         val state = uiState.value
         val group = state.group ?: return
         val activeWeekKey = state.selectedWeekKey?.takeIf { it.isNotBlank() }
@@ -1470,6 +1767,7 @@ class KamViewModel(
             if (state.isAdmin || group.allowServantUndo) {
                 recentTapTimestamps[tapKey] = nowMs
                 undoCardEvent(existingBySameServant)
+                KamPerformanceTracker.markCardTapComplete(student.name, "${cardType.arabicTitle} (إلغاء)")
             } else {
                 showBanner("تم تسجيل كارت '${cardType.arabicTitle}' لـ ${student.name} بالفعل هذا الأسبوع")
             }
@@ -1508,6 +1806,26 @@ class KamViewModel(
                 it.servantId != currentUserId
         }
 
+        val deterministicEventId = "ev_${group.inviteCode}_${student.id}_${cardType.id}_${currentUserId}_$slotKey"
+        val optimisticEvent = CardEvent(
+            id = deterministicEventId,
+            groupId = group.inviteCode,
+            studentId = student.id,
+            studentName = student.name,
+            cardType = cardType.id,
+            points = cardType.points.toLong(),
+            servantId = currentUserId,
+            servantName = servantName,
+            monthKey = state.selectedMonthKey,
+            weekKey = activeWeekKey,
+            memberUids = group.memberUids
+        )
+
+        // Apply 0ms optimistic card addition before Firestore local cache round-trip
+        _optimisticRemovedEventIds.update { it - deterministicEventId }
+        _optimisticAddedEvents.update { it + (deterministicEventId to optimisticEvent) }
+        KamPerformanceTracker.markCardTapComplete(student.name, cardType.arabicTitle)
+
         viewModelScope.launch {
             repository.awardCard(
                 groupId = group.inviteCode,
@@ -1522,6 +1840,7 @@ class KamViewModel(
                 memberUids = group.memberUids,
                 waitForServerAck = false
             ).onSuccess {
+                _optimisticAddedEvents.update { it - deterministicEventId }
                 if (otherServantEvent != null) {
                     showBanner(
                         "تنبيه: الطفل ${student.name} أخد كارت ${cardType.arabicTitle} مرتين: ${otherServantEvent.servantName} و$servantName"
@@ -1532,6 +1851,7 @@ class KamViewModel(
                     showBanner("+${cardType.points} (${cardType.arabicTitle}) لـ ${student.name}")
                 }
             }.onFailure { err ->
+                _optimisticAddedEvents.update { it - deterministicEventId }
                 recentTapTimestamps.remove(tapKey)
                 _operationError.value = err.localizedMessage ?: "تعذر تسجيل الكارت"
             }
@@ -1541,14 +1861,21 @@ class KamViewModel(
     fun undoCardEvent(event: CardEvent) {
         val state = uiState.value
         val group = state.group ?: return
+
+        // Apply 0ms optimistic removal before Firestore local cache round-trip
+        _optimisticAddedEvents.update { it - event.id }
+        _optimisticRemovedEventIds.update { it + event.id }
+
         viewModelScope.launch {
             repository.undoCardEvent(
                 groupId = group.inviteCode,
                 event = event,
                 waitForServerAck = false
             ).onSuccess {
+                _optimisticRemovedEventIds.update { it - event.id }
                 showBanner("تم إلغاء كارت من سجل '${event.studentName}'")
             }.onFailure {
+                _optimisticRemovedEventIds.update { it - event.id }
                 _operationError.value = "غير مسموح بإلغاء الكارت إلا للأمين أو للخادم المسجِّل حسب إعدادات المجموعة"
             }
         }

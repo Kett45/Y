@@ -48,6 +48,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -72,6 +74,7 @@ import com.example.ui.theme.KamSemanticColors
 import com.example.ui.viewmodel.KamScreenState
 import com.example.ui.viewmodel.StudentCardTypeBreakdown
 import com.example.ui.viewmodel.StudentDetailedLeaderboardEntry
+import com.example.util.KamPerformanceTracker
 
 enum class LeaderboardSortFilter(val arabicLabel: String) {
     HIGHEST_TO_LOWEST("🏆 الأعلى للأقل"),
@@ -139,15 +142,23 @@ fun FullClassLeaderboardScreen(
         null
     }
 
-    // Compute full-class rankings and per-card breakdowns on Dispatchers.Default to keep UI 60fps
-    val initialEntries = remember {
-        state.computeClassLeaderboardEntries(
-            selectedMonths = selectedMonths,
-            selectedWeekOverride = activeWeekKeyOverride
-        )
+    // Use pre-warmed cached entries immediately if already in memory (0ms Main Thread work);
+    // otherwise compute on Dispatchers.Default and cache for subsequent opens.
+    val initialCachedEntries = remember(selectedMonths, activeWeekKeyOverride, state) {
+        KamPerformanceTracker.markLeaderboardOpenStart()
+        if (state.isLeaderboardCached(selectedMonths, activeWeekKeyOverride)) {
+            val cached = state.computeClassLeaderboardEntries(
+                selectedMonths = selectedMonths,
+                selectedWeekOverride = activeWeekKeyOverride
+            )
+            KamPerformanceTracker.markLeaderboardOpenReady(cached.size, fromCache = true)
+            cached
+        } else {
+            emptyList()
+        }
     }
     val allRankedEntries by produceState(
-        initialValue = initialEntries,
+        initialValue = initialCachedEntries,
         state.students,
         state.effectiveAllCardEvents,
         state.effectiveAllMonthlyBalances,
@@ -155,19 +166,28 @@ fun FullClassLeaderboardScreen(
         selectedMonths,
         activeWeekKeyOverride
     ) {
-        value = withContext(Dispatchers.Default) {
-            state.computeClassLeaderboardEntries(
+        if (state.isLeaderboardCached(selectedMonths, activeWeekKeyOverride)) {
+            value = state.computeClassLeaderboardEntries(
                 selectedMonths = selectedMonths,
                 selectedWeekOverride = activeWeekKeyOverride
             )
+        } else {
+            val computed = withContext(Dispatchers.Default) {
+                state.computeClassLeaderboardEntries(
+                    selectedMonths = selectedMonths,
+                    selectedWeekOverride = activeWeekKeyOverride
+                )
+            }
+            KamPerformanceTracker.markLeaderboardOpenReady(computed.size, fromCache = false)
+            value = computed
         }
     }
 
     // Classroom-wide summary counts
     val totalStudentsCount = allRankedEntries.size
-    val activeStudentsCount = remember(allRankedEntries) { allRankedEntries.count { it.totalPoints > 0L } }
-    val absentStudentsCount = remember(allRankedEntries) { allRankedEntries.count { it.attendanceCount == 0 } }
-    val zeroPointStudentsCount = remember(allRankedEntries) { allRankedEntries.count { it.totalPoints == 0L } }
+    val activeStudentsCount by remember(allRankedEntries) { derivedStateOf { allRankedEntries.count { it.totalPoints > 0L } } }
+    val absentStudentsCount by remember(allRankedEntries) { derivedStateOf { allRankedEntries.count { it.attendanceCount == 0 } } }
+    val zeroPointStudentsCount by remember(allRankedEntries) { derivedStateOf { allRankedEntries.count { it.totalPoints == 0L } } }
 
     // Apply servant filters (Block filter + Search query + Sort/Filter mode)
     val filteredEntries = remember(

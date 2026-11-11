@@ -1,0 +1,29 @@
+# Baseline Profile for kAM-Lite (نجم الكارت)
+# Pre-compiles startup, local snapshot deserialization, Jetpack Compose student rows,
+# card tap handlers, and full-class leaderboard sorting ahead-of-time (AOT).
+HSPLcom/example/MainActivity;->**(**)**
+HSPLcom/example/MainActivityKt;->**(**)**
+HSPLcom/example/data/cache/LocalClassroomCache;->**(**)**
+HSPLcom/example/data/cache/CachedClassroomSnapshot;->**(**)**
+HSPLcom/example/data/cache/LocalUserPreferences;->**(**)**
+HSPLcom/example/data/model/Student;->**(**)**
+HSPLcom/example/data/model/Student$Companion;->**(**)**
+HSPLcom/example/data/model/CardEvent;->**(**)**
+HSPLcom/example/data/model/CardType;->**(**)**
+HSPLcom/example/data/model/ServantBlock;->**(**)**
+HSPLcom/example/data/model/Group;->**(**)**
+HSPLcom/example/data/model/UserProfile;->**(**)**
+HSPLcom/example/data/repository/KamRepository;->**(**)**
+HSPLcom/example/ui/viewmodel/KamViewModel;->**(**)**
+HSPLcom/example/ui/viewmodel/KamViewModel$Companion;->**(**)**
+HSPLcom/example/ui/viewmodel/KamScreenState;->**(**)**
+HSPLcom/example/ui/viewmodel/PrecomputedClassroomIndices;->**(**)**
+HSPLcom/example/ui/screens/HomeScreenKt;->**(**)**
+HSPLcom/example/ui/screens/HomeDialogsAndSectionsKt;->**(**)**
+HSPLcom/example/ui/screens/FullClassLeaderboardScreenKt;->**(**)**
+HSPLcom/example/ui/screens/GroupAndSettingsScreensKt;->**(**)**
+HSPLcom/example/ui/components/CompactCardButtonsRowKt;->**(**)**
+HSPLcom/example/ui/components/StudentAvatarComponentsKt;->**(**)**
+HSPLcom/example/ui/components/StudentAvatarImageHelper;->**(**)**
+HSPLcom/example/util/KamPerformanceTracker;->**(**)**
+Lcom/example/**

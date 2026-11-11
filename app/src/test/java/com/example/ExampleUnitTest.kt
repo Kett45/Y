@@ -234,6 +234,13 @@ class ExampleUnitTest {
         val awardedState = initialState.copy(cardEvents = listOf(recordedEvent))
         assertEquals(1, awardedState.cardCountForStudent("stu_10", CardType.ATTENDANCE))
         assertEquals(3, CardType.ATTENDANCE.points * awardedState.cardCountForStudent("stu_10", CardType.ATTENDANCE))
+
+        // Verify 64-bit packedCardCountsForStudent & unpackCardCount for O(1) row recomposition skipping
+        val packed = awardedState.packedCardCountsForStudent("stu_10")
+        assertNotEquals(0L, packed)
+        assertEquals(1, KamScreenState.unpackCardCount(packed, CardType.ATTENDANCE))
+        assertEquals(0, KamScreenState.unpackCardCount(packed, CardType.QUIET))
+        assertEquals(0L, awardedState.packedCardCountsForStudent("other_student_id"))
     }
 
     @Test

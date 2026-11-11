@@ -316,7 +316,15 @@
         },
         "avatarBase64": {
           "type": "string",
-          "description": "Optional compressed 1:1 square JPEG thumbnail stored as Base64 (<= 50,000 chars)."
+          "description": "Legacy optional compressed 1:1 square JPEG thumbnail stored as Base64 (<= 50,000 chars), migrated to /groups/{groupId}/avatars/{studentId}."
+        },
+        "hasAvatar": {
+          "type": "boolean",
+          "description": "Lightweight boolean flag indicating whether this child has a saved avatar in /groups/{groupId}/avatars/{studentId}."
+        },
+        "avatarHash": {
+          "type": "string",
+          "description": "Short fingerprint hash of the active avatar used for local file cache invalidation without downloading Base64 inside the students listener."
         },
         "createdByUid": {
           "type": "string",
@@ -346,6 +354,56 @@
         "position",
         "avatarInitials",
         "createdByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StudentAvatar": {
+      "title": "StudentAvatar",
+      "description": "Dedicated lazy-loaded student avatar document stored outside the main students collection so student list snapshots stay lightweight.",
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "description": "Parent group ID."
+        },
+        "studentId": {
+          "type": "string",
+          "description": "Student document ID matching the avatar document ID."
+        },
+        "avatarBase64": {
+          "type": "string",
+          "description": "Packed compressed JPEG photo entries (<= 50,000 chars)."
+        },
+        "avatarHash": {
+          "type": "string",
+          "description": "Short hash of the primary avatar entry."
+        },
+        "updatedByUid": {
+          "type": "string",
+          "description": "UID of the member who last updated or migrated the avatar."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Optional bounded list of group member UIDs."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "groupId",
+        "studentId",
+        "avatarBase64",
+        "avatarHash",
+        "updatedByUid",
         "createdAt",
         "updatedAt"
       ]
@@ -510,6 +568,10 @@
     "/groups/{groupId}/students/{studentId}": {
       "schema": { "$ref": "#/entities/Student" },
       "description": "Shared children records assigned to blocks or unassigned within a group."
+    },
+    "/groups/{groupId}/avatars/{studentId}": {
+      "schema": { "$ref": "#/entities/StudentAvatar" },
+      "description": "Dedicated lazy-loaded student avatar documents fetched on demand when visible on screen."
     },
     "/groups/{groupId}/cardEvents/{eventId}": {
       "schema": { "$ref": "#/entities/CardEvent" },

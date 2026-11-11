@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -97,9 +98,11 @@ import com.example.ui.components.StudentPhotoAlbumSection
 import com.example.ui.components.StudentPhotoPickerDialog
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalAppAppearanceController
+import androidx.compose.runtime.LaunchedEffect
 import com.example.ui.viewmodel.BulkImportLinePreview
 import com.example.ui.viewmodel.KamScreenState
 import com.example.ui.viewmodel.KamViewModel
+import com.example.util.KamPerformanceTracker
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -190,9 +193,10 @@ fun HomeScreen(
     }
 
     val listState = rememberLazyListState()
-    val isFabExpanded by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 80
+
+    LaunchedEffect(state.students.isNotEmpty()) {
+        if (state.students.isNotEmpty()) {
+            KamPerformanceTracker.markFirstStudentListRendered(state.students.size)
         }
     }
 
@@ -341,31 +345,31 @@ fun HomeScreen(
                                 key = { _, student -> "blk_${block.id}_stu_${student.id}" },
                                 contentType = { _, _ -> "block_student_row" }
                             ) { idx, student ->
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .border(
-                                            width = 1.dp,
-                                            color = blockAccent.copy(alpha = 0.5f),
-                                            shape = RoundedCornerShape(14.dp)
-                                        )
-                                ) {
-                                    StudentFastCardRow(
-                                        student = student,
-                                        blockAccent = blockAccent,
-                                        blockLabel = "بلوك ${block.servantName}",
-                                        monthPoints = state.pointsForStudentInDisplayedScope(student.id),
-                                        enabledCards = state.enabledCardTypes,
-                                        state = state,
-                                        canMoveUp = idx > 0,
-                                        canMoveDown = idx < blockStudents.lastIndex,
-                                        onAwardCard = { cardType -> onAwardCard(student, cardType) },
-                                        onOpenMoveDialog = { studentForMoveSheet = student },
-                                        onOpenDetailsDialog = { studentForDetailsSheet = student },
-                                        onOpenPhotoDialog = { studentForPhotoDialog = student },
-                                        onReorder = { moveUp -> onReorderStudent(student, moveUp) }
-                                    )
+                                val onAwardRemembered = remember(student, onAwardCard) {
+                                    { cardType: CardType -> onAwardCard(student, cardType) }
                                 }
+                                val onMoveRemembered = remember(student) { { studentForMoveSheet = student } }
+                                val onDetailsRemembered = remember(student) { { studentForDetailsSheet = student } }
+                                val onPhotoRemembered = remember(student) { { studentForPhotoDialog = student } }
+                                val onReorderRemembered = remember(student, onReorderStudent) {
+                                    { moveUp: Boolean -> onReorderStudent(student, moveUp) }
+                                }
+                                StudentFastCardRow(
+                                    student = student,
+                                    blockAccent = blockAccent,
+                                    blockLabel = "بلوك ${block.servantName}",
+                                    monthPoints = state.pointsForStudentInDisplayedScope(student.id),
+                                    enabledCards = state.enabledCardTypes,
+                                    packedCardCounts = state.packedCardCountsForStudent(student.id),
+                                    outerBorderColor = blockAccent.copy(alpha = 0.5f),
+                                    canMoveUp = idx > 0,
+                                    canMoveDown = idx < blockStudents.lastIndex,
+                                    onAwardCard = onAwardRemembered,
+                                    onOpenMoveDialog = onMoveRemembered,
+                                    onOpenDetailsDialog = onDetailsRemembered,
+                                    onOpenPhotoDialog = onPhotoRemembered,
+                                    onReorder = onReorderRemembered
+                                )
                             }
                         }
                     }
@@ -398,64 +402,48 @@ fun HomeScreen(
                             key = { _, student -> "unassigned_stu_${student.id}" },
                             contentType = { _, _ -> "unassigned_student_row" }
                         ) { idx, student ->
+                            val onAwardRemembered = remember(student, onAwardCard) {
+                                { cardType: CardType -> onAwardCard(student, cardType) }
+                            }
+                            val onMoveBlockRemembered = remember(student, onMoveStudentToBlock) {
+                                { blkId: String -> onMoveStudentToBlock(student, blkId) }
+                            }
+                            val onMoveSheetRemembered = remember(student) { { studentForMoveSheet = student } }
+                            val onDetailsRemembered = remember(student) { { studentForDetailsSheet = student } }
+                            val onPhotoRemembered = remember(student) { { studentForPhotoDialog = student } }
+                            val onReorderRemembered = remember(student, onReorderStudent) {
+                                { moveUp: Boolean -> onReorderStudent(student, moveUp) }
+                            }
                             UnassignedStudentLazyRow(
                                 student = student,
                                 blocks = state.blocks,
                                 enabledCards = state.enabledCardTypes,
-                                state = state,
+                                monthPoints = state.pointsForStudentInDisplayedScope(student.id),
+                                packedCardCounts = state.packedCardCountsForStudent(student.id),
                                 canMoveUp = idx > 0,
                                 canMoveDown = idx < unassignedStudents.lastIndex,
-                                onAwardCard = { cardType -> onAwardCard(student, cardType) },
-                                onMoveStudentToBlock = { blkId -> onMoveStudentToBlock(student, blkId) },
-                                onOpenMoveDialog = { studentForMoveSheet = student },
-                                onOpenDetailsDialog = { studentForDetailsSheet = student },
-                                onOpenPhotoDialog = { studentForPhotoDialog = student },
-                                onReorder = { moveUp -> onReorderStudent(student, moveUp) }
+                                onAwardCard = onAwardRemembered,
+                                onMoveStudentToBlock = onMoveBlockRemembered,
+                                onOpenMoveDialog = onMoveSheetRemembered,
+                                onOpenDetailsDialog = onDetailsRemembered,
+                                onOpenPhotoDialog = onPhotoRemembered,
+                                onReorder = onReorderRemembered
                             )
                         }
                     }
                 }
             }
 
-            // Compact Auto-Shrinking Floating Action Button ("زر إضافة عائم ينكمش لأيقونة عند النزول لأسفل القائمة + إظهار وإخفاء من الإعدادات")
+            // Compact Auto-Shrinking Floating Action Button isolated in its own composable so scrolling never recomposes HomeScreen
             val showFloatingAddButton = LocalAppAppearanceController.current.showFloatingAddButton
             if (showFloatingAddButton) {
-                FloatingActionButton(
+                HomeAutoShrinkingFab(
+                    listState = listState,
                     onClick = { showAddMenuDialog = true },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(horizontal = 14.dp, vertical = 12.dp)
-                        .testTag("home_add_fab")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(
-                            horizontal = if (isFabExpanded) 12.dp else 10.dp,
-                            vertical = 10.dp
-                        ),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "إضافة",
-                            modifier = Modifier.size(20.dp)
-                        )
-                        AnimatedVisibility(visible = isFabExpanded) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "إضافة / استيراد",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
-                        }
-                    }
-                }
+                )
             }
         }
     }
@@ -1173,13 +1161,60 @@ private fun UnassignedStudentsEmptyCard() {
     }
 }
 
+@Composable
+private fun HomeAutoShrinkingFab(
+    listState: LazyListState,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isFabExpanded by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 80
+        }
+    }
+    FloatingActionButton(
+        onClick = onClick,
+        containerColor = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.testTag("home_add_fab")
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                horizontal = if (isFabExpanded) 12.dp else 10.dp,
+                vertical = 10.dp
+            ),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "إضافة",
+                modifier = Modifier.size(20.dp)
+            )
+            AnimatedVisibility(visible = isFabExpanded) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "إضافة / استيراد",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UnassignedStudentLazyRow(
     student: Student,
     blocks: List<ServantBlock>,
     enabledCards: List<CardType>,
-    state: KamScreenState,
+    monthPoints: Long,
+    packedCardCounts: Long,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onAwardCard: (CardType) -> Unit,
@@ -1206,9 +1241,10 @@ private fun UnassignedStudentLazyRow(
             student = student,
             blockAccent = MaterialTheme.colorScheme.primary,
             blockLabel = "بدون بلوك",
-            monthPoints = state.pointsForStudentInDisplayedScope(student.id),
+            monthPoints = monthPoints,
             enabledCards = enabledCards,
-            state = state,
+            packedCardCounts = packedCardCounts,
+            outerBorderColor = null,
             canMoveUp = canMoveUp,
             canMoveDown = canMoveDown,
             onAwardCard = onAwardCard,
@@ -1252,6 +1288,9 @@ private fun UnassignedStudentLazyRow(
     }
 }
 
+private val StudentRowCornerShape = RoundedCornerShape(14.dp)
+private val PointsPillCornerShape = RoundedCornerShape(8.dp)
+
 @Composable
 private fun StudentFastCardRow(
     student: Student,
@@ -1259,7 +1298,8 @@ private fun StudentFastCardRow(
     blockLabel: String = "بدون بلوك",
     monthPoints: Long,
     enabledCards: List<CardType>,
-    state: KamScreenState,
+    packedCardCounts: Long,
+    outerBorderColor: Color? = null,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onAwardCard: (CardType) -> Unit,
@@ -1272,8 +1312,9 @@ private fun StudentFastCardRow(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("student_row_${student.id}"),
-        shape = RoundedCornerShape(14.dp),
-        color = KamSemanticColors.elevatedSurface
+        shape = StudentRowCornerShape,
+        color = KamSemanticColors.elevatedSurface,
+        border = if (outerBorderColor != null) BorderStroke(1.dp, outerBorderColor) else null
     ) {
         Column(
             modifier = Modifier
@@ -1328,7 +1369,7 @@ private fun StudentFastCardRow(
                         softWrap = false
                     )
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = PointsPillCornerShape,
                         color = MaterialTheme.colorScheme.primaryContainer
                     ) {
                         Text(
@@ -1405,11 +1446,11 @@ private fun StudentFastCardRow(
                 }
             }
 
-            // Line 3: Compact Card Buttons (Symbol only -> transforms to points number when awarded)
+            // Line 3: Compact Card Buttons (primitive packedCardCounts -> skips 149 rows on single card tap!)
             CompactCardButtonsRow(
                 studentId = student.id,
                 enabledCards = enabledCards,
-                state = state,
+                packedCardCounts = packedCardCounts,
                 tagPrefix = "card_btn",
                 onCardClick = onAwardCard
             )

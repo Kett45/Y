@@ -6,10 +6,13 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.unit.LayoutDirection
 import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardType
@@ -54,17 +57,25 @@ fun KamLiteTheme(
     val (uiScaleController, effectiveDensity) = rememberUiScaleController()
     val appearanceController = rememberAppAppearanceController()
     val resolvedAppearance = rememberResolvedKamAppearance(appearanceController.selectedTheme)
+    val baseViewConfig = LocalViewConfiguration.current
+    val fastHoldViewConfig = remember(baseViewConfig) {
+        object : ViewConfiguration by baseViewConfig {
+            override val longPressTimeoutMillis: Long
+                get() = 210L
+        }
+    }
 
     SideEffect {
         KamSemanticColors.elevatedSurface = resolvedAppearance.elevatedSurfaceColor
     }
 
-    // Enforce RTL and provide adaptive/manual UI density and theme/icon controller across the entire application
+    // Enforce RTL and provide adaptive/manual UI density, theme/icon controller, and fast press-and-hold ViewConfiguration once at the root
     CompositionLocalProvider(
         LocalLayoutDirection provides LayoutDirection.Rtl,
         LocalUiScaleController provides uiScaleController,
         LocalAppAppearanceController provides appearanceController,
-        LocalDensity provides effectiveDensity
+        LocalDensity provides effectiveDensity,
+        LocalViewConfiguration provides fastHoldViewConfig
     ) {
         MaterialTheme(
             colorScheme = resolvedAppearance.colorScheme,
@@ -73,3 +84,4 @@ fun KamLiteTheme(
         )
     }
 }
+

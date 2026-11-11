@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.runtime.Immutable
 import androidx.core.content.FileProvider
 import com.example.BuildConfig
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,7 @@ import java.security.MessageDigest
 /**
  * Represents the parsed `releases/version.json` manifest from the GitHub repository.
  */
+@Immutable
 data class GitHubVersionManifest(
     val versionCode: Int,
     val versionName: String,
@@ -48,6 +50,7 @@ data class GitHubVersionManifest(
  * Represents the lightweight incremental delta payload (`releases/delta-sync.json`)
  * applied silently in-place without downloading the full APK when the version gap is small.
  */
+@Immutable
 data class GitHubDeltaPayload(
     val targetVersionCode: Int,
     val targetVersionName: String,
@@ -89,6 +92,7 @@ sealed class GitHubSyncDecision {
     ) : GitHubSyncDecision()
 }
 
+@Immutable
 data class GitHubSyncUiState(
     val repositorySlug: String = GitHubSmartSyncEngine.FIXED_GITHUB_REPO,
     val installedBinaryVersionCode: Int = BuildConfig.VERSION_CODE,
@@ -451,19 +455,10 @@ object GitHubSmartSyncEngine {
             .putString(KEY_BACKUP_APK_URL, singleCleanUrl)
             .apply()
 
-        val apkFile = getLocalApkUpdateFile(context.applicationContext)
+        val appCtx = context.applicationContext
+        val apkFile = getLocalApkUpdateFile(appCtx)
         val installedSha = prefs.getString(KEY_INSTALLED_APK_SHA256, "").orEmpty()
-        val isReady = if (apkFile.exists() && apkFile.length() > 100_000L) {
-            val cachedApkFileSha = computeFileSha256(apkFile)
-            if (installedSha.isNotBlank() && cachedApkFileSha.equals(installedSha, ignoreCase = true)) {
-                runCatching { apkFile.delete() }
-                false
-            } else {
-                true
-            }
-        } else {
-            false
-        }
+        val hasApkFileOnDisk = apkFile.exists() && apkFile.length() > 100_000L
 
         _syncState.value = _syncState.value.copy(
             repositorySlug = FIXED_GITHUB_REPO,
@@ -476,8 +471,18 @@ object GitHubSmartSyncEngine {
             lastSyncSummaryArabic = cachedSummary,
             latestDirectApkUrl = singleCleanUrl,
             backupApkUrl = singleCleanUrl,
-            downloadedApkReady = isReady
+            downloadedApkReady = hasApkFileOnDisk
         )
+
+        if (hasApkFileOnDisk && installedSha.isNotBlank()) {
+            downloadScope.launch {
+                val cachedApkFileSha = computeFileSha256(apkFile)
+                if (cachedApkFileSha.equals(installedSha, ignoreCase = true)) {
+                    runCatching { apkFile.delete() }
+                    _syncState.value = _syncState.value.copy(downloadedApkReady = false)
+                }
+            }
+        }
     }
 
     private fun getLocalApkUpdateFile(context: Context): File {

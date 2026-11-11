@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.kamlite.rtyxqp"
     minSdk = 24
     targetSdk = 36
-    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 6
-    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.6"
+    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 7
+    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.7"
     val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
     versionCode = propVersionCode
     versionName = propVersionName
@@ -49,7 +49,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
@@ -90,13 +91,13 @@ tasks.withType<Test> {
 }
 
 tasks.register<Copy>("syncReleaseApk") {
-  dependsOn("assembleDebug")
-  from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
+  dependsOn("assembleRelease")
+  from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
   into(rootProject.layout.projectDirectory.dir("releases"))
   rename { "kAM-Lite.apk" }
 
-  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 6
-  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.6"
+  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 7
+  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.7"
   val repoSlug = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
   val releasesDir = rootProject.layout.projectDirectory.dir("releases").asFile
   val readmeFile = rootProject.layout.projectDirectory.file("README.md").asFile
@@ -133,10 +134,10 @@ tasks.register<Copy>("syncReleaseApk") {
         "requiresFullInstall": true,
         "commitSha": "$shortCommit",
         "apkSha256": "$apkSha256",
-        "updatedAt": "2026-11-11T11:35:00Z",
+        "updatedAt": "2026-11-11T16:45:00Z",
         "apkDirectUrl": "$singleAutoUrl",
         "deltaSyncUrl": "$deltaUrl",
-        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): فتح فوري (0ms) بالتخزين المحلي الذكي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + أيقونة النجمة + مزامنة التفضيلات الشخصية في حساب السحابة."
+        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName - نسخة Release مضغوطة بـ R8): فصل صور الأطفال لمجموعة avatars منفصلة وتحميل كسول + تحديثات تفاضلية للـ Listeners مع دمج التحديثات + تخزين لوحة الشرف مسبقاً + لوحة قياس الأوقات (KAM_PERF)."
       }
       """.trimIndent() + "\n"
     )
@@ -149,15 +150,15 @@ tasks.register<Copy>("syncReleaseApk") {
         "minCompatibleBaseVersion": $minDeltaBase,
         "commitSha": "$shortCommit",
         "apkSha256": "$apkSha256",
-        "updatedAt": "2026-11-11T11:35:00Z",
-        "deltaSummaryArabic": "الإصدار $verName (نجم الكارت v$verName): فتح فوري بالتخزين المحلي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + مزامنة تفضيلات الحساب على السحابة",
+        "updatedAt": "2026-11-11T16:45:00Z",
+        "deltaSummaryArabic": "الإصدار $verName (نجم الكارت v$verName - Release R8): فصل صور الأطفال لمجموعة منفصلة + تحديثات Listeners تفاضلية + كاش لوحة الشرف + قياس الأداء KAM_PERF",
         "latestApkDirectUrl": "$singleAutoUrl",
         "changedModules": [
-          "instant_0ms_local_classroom_cache",
-          "sunlight_high_contrast_light_theme",
-          "dedicated_appearance_screen_star_icon",
-          "cloud_and_local_user_preferences_sync",
-          "single_auto_updating_github_apk_link"
+          "r8_minified_shrunk_release_apk",
+          "lazy_avatars_collection_and_local_files",
+          "incremental_firestore_document_changes",
+          "precomputed_leaderboard_cache",
+          "kam_perf_timing_metrics_panel"
         ],
         "dynamicConfig": {
           "maxStudentsPerGroup": 150,

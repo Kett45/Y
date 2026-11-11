@@ -77,7 +77,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -127,6 +127,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.example.data.model.Student
+import com.example.util.KamPerformanceTracker
+import android.os.SystemClock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -134,6 +136,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -144,6 +147,7 @@ import kotlin.math.roundToInt
  * - [panXFraction] & [panYFraction]: translation offset in multiples of the circular frame diameter
  * - [rotationDegrees]: 0, 90, 180, or 270 degrees
  */
+@Immutable
 data class PhotoCropFrame(
     val zoom: Float = 1f,
     val panXFraction: Float = 0f,
@@ -157,11 +161,154 @@ object StudentAvatarImageHelper {
     const val CROP_METADATA_MARKER = "#crop="
     private const val ALBUM_PREFS_NAME = "kam_student_photo_albums"
     private const val HD_PHOTO_PREFS_NAME = "kam_student_full_photos_hd"
+    private const val AVATAR_FILES_ROOT_DIR = "student_avatars"
     private const val MAX_FIRESTORE_AVATAR_CHARS = 45_000
     private const val MAX_LOCAL_ALBUM_PHOTOS = 20
+    private const val THUMBNAIL_TARGET_SIZE_PX = 160
+    private val SAFE_STUDENT_NAME_REGEX = Regex("[^\\p{L}\\p{N}_-]+")
 
-    private val framedAvatarCache = object : LruCache<Int, ImageBitmap>(220) {}
+    private val framedAvatarCache = object : LruCache<Int, ImageBitmap>(240) {}
     private val fullPhotoCache = object : LruCache<Int, ImageBitmap>(80) {}
+    private val localPackedAvatarByStudentId = ConcurrentHashMap<String, String>()
+
+    /**
+     * Hook wired by `KamViewModel` to lazily fetch `groups/{groupId}/avatars/{studentId}`
+     * on demand when a visible student has `hasAvatar == true` and isn't cached on local disk yet.
+     */
+    @Volatile
+    var cloudAvatarFetcher: (suspend (groupId: String, studentId: String) -> String?)? = null
+
+    private fun sanitizeFileKey(raw: String): String {
+        return raw.trim().replace(SAFE_STUDENT_NAME_REGEX, "_").ifBlank { "default" }
+    }
+
+    private fun getStudentAvatarDir(context: Context, studentId: String): File {
+        val safeId = sanitizeFileKey(studentId)
+        return File(File(context.filesDir, AVATAR_FILES_ROOT_DIR), safeId).apply {
+            if (!exists()) mkdirs()
+        }
+    }
+
+    private fun getHdPhotoFile(context: Context, cloudBase64Hash: Int): File {
+        val hdDir = File(File(context.filesDir, AVATAR_FILES_ROOT_DIR), "_hd").apply {
+            if (!exists()) mkdirs()
+        }
+        return File(hdDir, "hd_${cloudBase64Hash}.jpg")
+    }
+
+    private fun getThumbnailFile(context: Context, cacheKey: Int): File {
+        val thumbDir = File(File(context.filesDir, AVATAR_FILES_ROOT_DIR), "_thumbs").apply {
+            if (!exists()) mkdirs()
+        }
+        return File(thumbDir, "thumb_${cacheKey}.jpg")
+    }
+
+    /**
+     * Reads the student's packed album string from local disk (`filesDir/student_avatars/{studentId}/album_entries.txt`),
+     * automatically migrating any legacy `SharedPreferences` entry on first access and freeing RAM.
+     */
+    fun readLocalAlbumRaw(context: Context?, studentId: String): String {
+        if (studentId.isBlank()) return ""
+        localPackedAvatarByStudentId[studentId]?.let { cached ->
+            if (cached.isNotBlank()) return cached
+        }
+        if (context == null) return ""
+        return try {
+            val dir = getStudentAvatarDir(context, studentId)
+            val albumFile = File(dir, "album_entries.txt")
+            if (albumFile.exists() && albumFile.length() > 0L) {
+                val diskRaw = albumFile.readText(Charsets.UTF_8).trim()
+                if (diskRaw.isNotBlank()) {
+                    localPackedAvatarByStudentId[studentId] = diskRaw
+                    return diskRaw
+                }
+            }
+            // One-time automatic migration from legacy SharedPreferences to standalone local file
+            val prefs = context.getSharedPreferences(ALBUM_PREFS_NAME, Context.MODE_PRIVATE)
+            val legacyRaw = prefs.getString("album_$studentId", "").orEmpty().trim()
+            if (legacyRaw.isNotBlank()) {
+                albumFile.writeText(legacyRaw, Charsets.UTF_8)
+                prefs.edit().remove("album_$studentId").apply()
+                localPackedAvatarByStudentId[studentId] = legacyRaw
+                legacyRaw
+            } else {
+                ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /**
+     * Writes the student's packed album string to a standalone local file (`album_entries.txt`)
+     * instead of `SharedPreferences` or the startup JSON snapshot.
+     */
+    fun writeLocalAlbumRaw(context: Context?, studentId: String, rawPacked: String) {
+        if (studentId.isBlank()) return
+        val trimmed = rawPacked.trim()
+        if (trimmed.isBlank()) {
+            localPackedAvatarByStudentId.remove(studentId)
+        } else {
+            localPackedAvatarByStudentId[studentId] = trimmed
+        }
+        if (context == null) return
+        try {
+            val dir = getStudentAvatarDir(context, studentId)
+            val albumFile = File(dir, "album_entries.txt")
+            if (trimmed.isBlank()) {
+                if (albumFile.exists()) albumFile.delete()
+            } else {
+                albumFile.writeText(trimmed, Charsets.UTF_8)
+            }
+            // Ensure legacy SharedPreferences entry is removed if present
+            val prefs = context.getSharedPreferences(ALBUM_PREFS_NAME, Context.MODE_PRIVATE)
+            if (prefs.contains("album_$studentId")) {
+                prefs.edit().remove("album_$studentId").apply()
+            }
+        } catch (_: Exception) {
+            // Best-effort local disk cache
+        }
+    }
+
+    /**
+     * Lazily resolves a student's packed avatar string:
+     * 1. Inline `student.avatarBase64` if present (and persists locally).
+     * 2. Local file `filesDir/student_avatars/{studentId}/album_entries.txt` if present and matching `student.avatarHash`.
+     * 3. On-demand cloud fetch from `groups/{groupId}/avatars/{studentId}` via [cloudAvatarFetcher] if `student.effectiveHasAvatar`.
+     */
+    suspend fun resolveStudentPackedAvatar(context: Context?, student: Student): String {
+        return withContext(Dispatchers.IO) {
+            if (student.avatarBase64.isNotBlank()) {
+                val localExisting = readLocalAlbumRaw(context, student.id)
+                if (localExisting.isBlank()) {
+                    writeLocalAlbumRaw(context, student.id, student.avatarBase64)
+                }
+                return@withContext student.avatarBase64
+            }
+            if (!student.effectiveHasAvatar && student.id.isBlank()) {
+                return@withContext ""
+            }
+            val localRaw = readLocalAlbumRaw(context, student.id)
+            if (localRaw.isNotBlank()) {
+                val expectedHash = student.avatarHash
+                if (expectedHash.isBlank() || Student.computeAvatarHash(localRaw) == expectedHash) {
+                    return@withContext localRaw
+                }
+            }
+            if (student.effectiveHasAvatar && student.groupId.isNotBlank() && student.id.isNotBlank()) {
+                val fetched = try {
+                    cloudAvatarFetcher?.invoke(student.groupId, student.id).orEmpty().trim()
+                } catch (_: Exception) {
+                    ""
+                }
+                if (fetched.isNotBlank()) {
+                    writeLocalAlbumRaw(context, student.id, fetched)
+                    return@withContext fetched
+                }
+            }
+            localRaw
+        }
+    }
 
     /**
      * Parses a photo entry of the form `<rawBase64>#crop=zoom,panX,panY,rot`
@@ -245,9 +392,8 @@ object StudentAvatarImageHelper {
         rawAvatarField: String
     ): List<String> {
         val cloudPhotos = extractAllPhotosFromField(rawAvatarField)
-        val localPhotos = if (context != null && studentId.isNotBlank()) {
-            val prefs = context.getSharedPreferences(ALBUM_PREFS_NAME, Context.MODE_PRIVATE)
-            val savedRaw = prefs.getString("album_$studentId", "").orEmpty()
+        val localPhotos = if (studentId.isNotBlank()) {
+            val savedRaw = readLocalAlbumRaw(context, studentId)
             extractAllPhotosFromField(savedRaw)
         } else {
             emptyList()
@@ -370,11 +516,8 @@ object StudentAvatarImageHelper {
         }
         val cappedList = cleanList.take(MAX_LOCAL_ALBUM_PHOTOS)
 
-        if (context != null && studentId.isNotBlank()) {
-            context.getSharedPreferences(ALBUM_PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putString("album_$studentId", cappedList.joinToString(PHOTO_DELIMITER))
-                .apply()
+        if (studentId.isNotBlank()) {
+            writeLocalAlbumRaw(context, studentId, cappedList.joinToString(PHOTO_DELIMITER))
         }
         if (cappedList.isEmpty()) return ""
 
@@ -435,7 +578,7 @@ object StudentAvatarImageHelper {
 
         val cloudBase64 = Base64.encodeToString(compressedBytes, Base64.NO_WRAP)
 
-        // Also save a higher-definition uncropped copy locally so local viewing/downloading is extra crisp
+        // Save a higher-definition uncropped binary JPEG file locally (instead of Base64 in SharedPreferences)
         if (context != null && cloudBase64.isNotBlank()) {
             try {
                 val hdMaxDim = 1080
@@ -450,13 +593,10 @@ object StudentAvatarImageHelper {
                 } else {
                     source
                 }
-                val hdOut = ByteArrayOutputStream()
-                hdBitmap.compress(Bitmap.CompressFormat.JPEG, 88, hdOut)
-                val hdBase64 = Base64.encodeToString(hdOut.toByteArray(), Base64.NO_WRAP)
-                context.getSharedPreferences(HD_PHOTO_PREFS_NAME, Context.MODE_PRIVATE)
-                    .edit()
-                    .putString("hd_${cloudBase64.hashCode()}", hdBase64)
-                    .apply()
+                val hdFile = getHdPhotoFile(context, cloudBase64.hashCode())
+                FileOutputStream(hdFile).use { outStream ->
+                    hdBitmap.compress(Bitmap.CompressFormat.JPEG, 88, outStream)
+                }
             } catch (_: Exception) {
                 // Ignore if local storage is tight; cloudBase64 still contains the full uncropped photo
             }
@@ -514,12 +654,12 @@ object StudentAvatarImageHelper {
 
     /**
      * Renders the square/circular avatar view from a full uncropped [source] bitmap using [frame].
-     * Matches the Facebook-style full-screen editor 1:1.
+     * Defaults to `160x160` (`THUMBNAIL_TARGET_SIZE_PX`) to minimize RAM footprint (~100 KB per cached avatar).
      */
     fun renderFramedAvatarToBitmap(
         source: Bitmap,
         frame: PhotoCropFrame,
-        targetSizePx: Int = 220
+        targetSizePx: Int = THUMBNAIL_TARGET_SIZE_PX
     ): Bitmap {
         val rot = ((frame.rotationDegrees % 360) + 360) % 360
         val rotated = if (rot != 0) {
@@ -538,8 +678,6 @@ object StudentAvatarImageHelper {
         val canvas = AndroidCanvas(outBitmap)
         canvas.drawColor(android.graphics.Color.rgb(15, 23, 42))
 
-        // At zoom = 1.0f, the shorter dimension fills the circle diameter d.
-        // At zoom = min(d/w, d/h) / max(d/w, d/h), the entire rectangular photo fits inside the circle.
         val baseScale = max(d / w, d / h) * safeZoom
         val scaledW = w * baseScale
         val scaledH = h * baseScale
@@ -565,7 +703,6 @@ object StudentAvatarImageHelper {
         val w = (if (rot == 90 || rot == 270) height else width).toFloat().coerceAtLeast(1f)
         val h = (if (rot == 90 || rot == 270) width else height).toFloat().coerceAtLeast(1f)
         val ratio = min(w, h) / max(w, h)
-        // Multiply by 0.96f so the entire photo is comfortably visible inside the circle border
         return (ratio * 0.96f).coerceIn(0.35f, 1.0f)
     }
 
@@ -602,27 +739,90 @@ object StudentAvatarImageHelper {
     fun getCachedBitmap(base64: String): ImageBitmap? {
         val main = extractMainPhotoBase64(base64)
         if (main.isBlank()) return null
-        return framedAvatarCache.get(main.hashCode())
+        val cached = framedAvatarCache.get(main.hashCode())
+        if (cached != null) {
+            KamPerformanceTracker.recordAvatarMemoryCacheHit()
+        }
+        return cached
+    }
+
+    fun getCachedBitmapForStudent(student: Student): ImageBitmap? {
+        if (student.avatarBase64.isNotBlank()) {
+            getCachedBitmap(student.avatarBase64)?.let { return it }
+        }
+        val localRaw = localPackedAvatarByStudentId[student.id]
+        if (!localRaw.isNullOrBlank()) {
+            getCachedBitmap(localRaw)?.let { return it }
+        }
+        val key = student.effectiveAvatarKey
+        if (key.isNotBlank()) {
+            framedAvatarCache.get("student_${student.id}_$key".hashCode())?.let {
+                KamPerformanceTracker.recordAvatarMemoryCacheHit()
+                return it
+            }
+        }
+        return null
     }
 
     /**
-     * Decodes [base64] and applies its `#crop=zoom,panX,panY,rot` framing so `StudentAvatarCircle`
-     * displays only the user-selected region while the underlying saved photo remains 100% uncropped.
+     * Decodes [base64] on `Dispatchers.Default`, applies its `#crop=zoom,panX,panY,rot` framing at `160x160px`,
+     * and caches the result in `framedAvatarCache` (plus optional binary thumbnail file if [context] is provided).
      */
-    fun decodeBase64ToImageBitmap(base64: String): ImageBitmap? {
+    fun decodeBase64ToImageBitmap(
+        base64: String,
+        context: Context? = null,
+        studentKeyAlias: Int? = null
+    ): ImageBitmap? {
         val main = extractMainPhotoBase64(base64)
         if (main.isBlank()) return null
         val cacheKey = main.hashCode()
-        framedAvatarCache.get(cacheKey)?.let { return it }
+        framedAvatarCache.get(cacheKey)?.let {
+            KamPerformanceTracker.recordAvatarMemoryCacheHit()
+            return it
+        }
 
+        val startNs = SystemClock.elapsedRealtimeNanos()
         return try {
+            // Fast path: check pre-rendered 160x160 binary JPEG thumbnail on local disk first
+            if (context != null) {
+                val thumbFile = getThumbnailFile(context, cacheKey)
+                if (thumbFile.exists() && thumbFile.length() > 0L) {
+                    val diskBmp = BitmapFactory.decodeFile(thumbFile.absolutePath)
+                    if (diskBmp != null) {
+                        val imgBmp = diskBmp.asImageBitmap()
+                        framedAvatarCache.put(cacheKey, imgBmp)
+                        if (studentKeyAlias != null) {
+                            framedAvatarCache.put(studentKeyAlias, imgBmp)
+                        }
+                        val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000.0
+                        KamPerformanceTracker.recordAvatarDiskOrLazyLoad("disk-thumb", elapsedMs)
+                        return imgBmp
+                    }
+                }
+            }
+
             val (rawBase64, frame) = parsePhotoEntry(main)
             val clean = rawBase64.substringAfter("base64,", rawBase64)
             val bytes = Base64.decode(clean, Base64.DEFAULT)
             val fullBmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
-            val framedBmp = renderFramedAvatarToBitmap(fullBmp, frame, targetSizePx = 220)
+            val framedBmp = renderFramedAvatarToBitmap(fullBmp, frame, targetSizePx = THUMBNAIL_TARGET_SIZE_PX)
+            if (context != null) {
+                try {
+                    val thumbFile = getThumbnailFile(context, cacheKey)
+                    FileOutputStream(thumbFile).use { out ->
+                        framedBmp.compress(Bitmap.CompressFormat.JPEG, 86, out)
+                    }
+                } catch (_: Exception) {
+                    // Best-effort disk thumbnail write
+                }
+            }
             val imageBitmap = framedBmp.asImageBitmap()
             framedAvatarCache.put(cacheKey, imageBitmap)
+            if (studentKeyAlias != null) {
+                framedAvatarCache.put(studentKeyAlias, imageBitmap)
+            }
+            val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000.0
+            KamPerformanceTracker.recordAvatarDiskOrLazyLoad("decode-160px", elapsedMs)
             imageBitmap
         } catch (_: Exception) {
             null
@@ -642,7 +842,8 @@ object StudentAvatarImageHelper {
 
     /**
      * Decodes the **FULL, UNCROPPED** photo (applying only 90° rotation if rotated, never cropping!).
-     * Checks local HD storage first for maximum sharpness, falling back to the cloud-synced full photo.
+     * Checks local binary HD file storage first (and migrates legacy SharedPreferences HD entry if present),
+     * falling back to the cloud-synced full photo.
      */
     fun decodeFullUncroppedAndroidBitmap(context: Context?, photoEntry: String): Bitmap? {
         val main = extractMainPhotoBase64(photoEntry)
@@ -650,14 +851,31 @@ object StudentAvatarImageHelper {
         return try {
             val (rawBase64, frame) = parsePhotoEntry(main)
             val cleanCloud = rawBase64.substringAfter("base64,", rawBase64)
-            val hdBase64 = context
-                ?.getSharedPreferences(HD_PHOTO_PREFS_NAME, Context.MODE_PRIVATE)
-                ?.getString("hd_${cleanCloud.hashCode()}", null)
-                ?.takeIf { it.isNotBlank() }
+            val cloudHash = cleanCloud.hashCode()
 
-            val targetBase64 = hdBase64 ?: cleanCloud
-            val bytes = Base64.decode(targetBase64, Base64.DEFAULT)
-            val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+            var decoded: Bitmap? = null
+            if (context != null) {
+                val hdFile = getHdPhotoFile(context, cloudHash)
+                if (hdFile.exists() && hdFile.length() > 0L) {
+                    decoded = BitmapFactory.decodeFile(hdFile.absolutePath)
+                } else {
+                    // One-time migration from legacy SharedPreferences HD storage
+                    val hdPrefs = context.getSharedPreferences(HD_PHOTO_PREFS_NAME, Context.MODE_PRIVATE)
+                    val legacyHdBase64 = hdPrefs.getString("hd_$cloudHash", null)?.takeIf { it.isNotBlank() }
+                    if (legacyHdBase64 != null) {
+                        val hdBytes = Base64.decode(legacyHdBase64, Base64.DEFAULT)
+                        FileOutputStream(hdFile).use { it.write(hdBytes) }
+                        hdPrefs.edit().remove("hd_$cloudHash").apply()
+                        decoded = BitmapFactory.decodeByteArray(hdBytes, 0, hdBytes.size)
+                    }
+                }
+            }
+
+            if (decoded == null) {
+                val bytes = Base64.decode(cleanCloud, Base64.DEFAULT)
+                decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+            }
+
             val rot = ((frame.rotationDegrees % 360) + 360) % 360
             if (rot != 0) {
                 val matrix = Matrix().apply { postRotate(rot.toFloat()) }
@@ -698,7 +916,7 @@ object StudentAvatarImageHelper {
 
             val safeStudentName = studentName
                 .trim()
-                .replace(Regex("[^\\p{L}\\p{N}_-]+"), "_")
+                .replace(SAFE_STUDENT_NAME_REGEX, "_")
                 .ifBlank { "student" }
             val fileName = "kAM_Lite_${safeStudentName}_${System.currentTimeMillis()}.jpg"
 
@@ -769,55 +987,38 @@ fun StudentAvatarCircle(
     val haptic = LocalHapticFeedback.current
     val currentOnClick by rememberUpdatedState(onClick)
 
-    val mainBase64 = remember(student.avatarBase64) {
-        StudentAvatarImageHelper.extractMainPhotoBase64(student.avatarBase64)
+    val avatarIdentityKey = remember(student.id, student.avatarBase64, student.hasAvatar, student.avatarHash) {
+        "${student.id}_${student.effectiveAvatarKey}_${student.effectiveHasAvatar}"
     }
-    var imageBitmap by remember(mainBase64) {
-        mutableStateOf(StudentAvatarImageHelper.getCachedBitmap(mainBase64))
+    var resolvedPackedAvatar by remember(avatarIdentityKey) {
+        mutableStateOf(student.avatarBase64)
     }
-    var fullImageBitmap by remember(mainBase64) {
-        mutableStateOf(StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainBase64))
+    var imageBitmap by remember(avatarIdentityKey) {
+        mutableStateOf(StudentAvatarImageHelper.getCachedBitmapForStudent(student))
     }
-    var isHoldPreviewVisible by remember { mutableStateOf(false) }
+    var isHoldPreviewVisible by remember(student.id) { mutableStateOf(false) }
 
-    DisposableEffect(student.id) {
-        onDispose {
-            isHoldPreviewVisible = false
-        }
-    }
-
-    // Decode ONLY the lightweight 220x220 circular avatar thumbnail for list items
-    // so scrolling through 150 students stays 60fps without decoding 1080p full photos.
-    LaunchedEffect(mainBase64) {
-        if (mainBase64.isBlank()) {
-            imageBitmap = null
-            fullImageBitmap = null
-        } else if (imageBitmap == null) {
-            imageBitmap = withContext(Dispatchers.Default) {
-                StudentAvatarImageHelper.decodeBase64ToImageBitmap(mainBase64)
-            }
-        }
-    }
-
-    // Decode the full 1080p uncropped photo on-demand ONLY when the user presses and holds
-    LaunchedEffect(isHoldPreviewVisible, mainBase64) {
-        if (isHoldPreviewVisible && mainBase64.isNotBlank() && fullImageBitmap == null) {
-            fullImageBitmap = withContext(Dispatchers.Default) {
-                StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainBase64)
+    // Lazily load from local disk or groups/{groupId}/avatars/{studentId} on background thread when visible
+    if ((student.effectiveHasAvatar || student.avatarBase64.isNotBlank()) && imageBitmap == null) {
+        LaunchedEffect(avatarIdentityKey) {
+            val packed = StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
+            if (packed.isNotBlank()) {
+                resolvedPackedAvatar = packed
+                val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(packed)
+                val studentKeyAlias = "student_${student.id}_${student.effectiveAvatarKey}".hashCode()
+                imageBitmap = withContext(Dispatchers.Default) {
+                    StudentAvatarImageHelper.decodeBase64ToImageBitmap(
+                        base64 = mainEntry,
+                        context = context,
+                        studentKeyAlias = studentKeyAlias
+                    )
+                }
             }
         }
     }
 
     val baseViewConfig = LocalViewConfiguration.current
-    val fastHoldViewConfig = remember(baseViewConfig) {
-        object : ViewConfiguration by baseViewConfig {
-            // Fast 210ms press-and-hold trigger so the peek popup opens rapidly
-            override val longPressTimeoutMillis: Long
-                get() = 210L
-        }
-    }
-
-    CompositionLocalProvider(LocalViewConfiguration provides fastHoldViewConfig) {
+    val avatarBoxContent: @Composable () -> Unit = {
         Box(
             modifier = Modifier
                 .size(size)
@@ -861,9 +1062,10 @@ fun StudentAvatarCircle(
                 .testTag(testTag),
             contentAlignment = Alignment.Center
         ) {
-            if (imageBitmap != null) {
+            val bmp = imageBitmap
+            if (bmp != null) {
                 Image(
-                    bitmap = imageBitmap!!,
+                    bitmap = bmp,
                     contentDescription = "صورة ${student.name}",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -881,7 +1083,47 @@ fun StudentAvatarCircle(
         }
     }
 
+    if (baseViewConfig.longPressTimeoutMillis <= 220L) {
+        avatarBoxContent()
+    } else {
+        val fastHoldViewConfig = remember(baseViewConfig) {
+            object : ViewConfiguration by baseViewConfig {
+                override val longPressTimeoutMillis: Long
+                    get() = 210L
+            }
+        }
+        CompositionLocalProvider(LocalViewConfiguration provides fastHoldViewConfig) {
+            avatarBoxContent()
+        }
+    }
+
     if (isHoldPreviewVisible) {
+        val mainBase64 = remember(resolvedPackedAvatar, student.avatarBase64) {
+            StudentAvatarImageHelper.extractMainPhotoBase64(
+                resolvedPackedAvatar.ifBlank { student.avatarBase64 }
+            )
+        }
+        var fullImageBitmap by remember(mainBase64) {
+            mutableStateOf(
+                if (mainBase64.isBlank()) null else StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainBase64)
+            )
+        }
+        if ((mainBase64.isNotBlank() || student.effectiveHasAvatar) && fullImageBitmap == null) {
+            LaunchedEffect(student.id, mainBase64, student.effectiveAvatarKey) {
+                val packed = if (mainBase64.isNotBlank()) {
+                    mainBase64
+                } else {
+                    val fetched = StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
+                    resolvedPackedAvatar = fetched
+                    StudentAvatarImageHelper.extractMainPhotoBase64(fetched)
+                }
+                if (packed.isNotBlank()) {
+                    fullImageBitmap = withContext(Dispatchers.Default) {
+                        StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, packed)
+                    }
+                }
+            }
+        }
         StudentHoldQuickPeekPopup(
             student = student,
             blockAccent = blockAccent,
@@ -1123,7 +1365,21 @@ fun StudentPhotoPickerDialog(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var currentPackedField by remember(student.avatarBase64) { mutableStateOf(student.avatarBase64) }
+    var currentPackedField by remember(student.id, student.avatarBase64, student.effectiveAvatarKey) {
+        mutableStateOf(
+            student.avatarBase64.ifBlank {
+                StudentAvatarImageHelper.readLocalAlbumRaw(context, student.id)
+            }
+        )
+    }
+    LaunchedEffect(student.id, student.avatarBase64, student.effectiveAvatarKey) {
+        if (currentPackedField.isBlank() && (student.effectiveHasAvatar || student.avatarBase64.isNotBlank())) {
+            val resolved = StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
+            if (resolved.isNotBlank()) {
+                currentPackedField = resolved
+            }
+        }
+    }
     var editorSourceBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var editorExistingPhotoEntry by remember { mutableStateOf<String?>(null) }
     var editorInitialFrame by remember { mutableStateOf(PhotoCropFrame()) }
@@ -1985,15 +2241,31 @@ fun StudentPhotoAlbumSection(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val albumPhotos = remember(student.id, student.avatarBase64) {
+    var resolvedAvatarField by remember(student.id, student.avatarBase64, student.effectiveAvatarKey) {
+        mutableStateOf(
+            student.avatarBase64.ifBlank {
+                StudentAvatarImageHelper.readLocalAlbumRaw(context, student.id)
+            }
+        )
+    }
+    LaunchedEffect(student.id, student.avatarBase64, student.effectiveAvatarKey) {
+        if (resolvedAvatarField.isBlank() && (student.effectiveHasAvatar || student.avatarBase64.isNotBlank())) {
+            val resolved = StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
+            if (resolved.isNotBlank()) {
+                resolvedAvatarField = resolved
+            }
+        }
+    }
+
+    val albumPhotos = remember(student.id, resolvedAvatarField) {
         StudentAvatarImageHelper.getMergedStudentPhotoAlbum(
             context = context,
             studentId = student.id,
-            rawAvatarField = student.avatarBase64
+            rawAvatarField = resolvedAvatarField
         )
     }
-    val mainPhoto = remember(student.avatarBase64, albumPhotos) {
-        StudentAvatarImageHelper.extractMainPhotoBase64(student.avatarBase64)
+    val mainPhoto = remember(resolvedAvatarField, albumPhotos) {
+        StudentAvatarImageHelper.extractMainPhotoBase64(resolvedAvatarField)
             .ifBlank { albumPhotos.firstOrNull().orEmpty() }
     }
 
@@ -2061,7 +2333,7 @@ fun StudentPhotoAlbumSection(
                             StudentAvatarImageHelper.updatePhotoFramingInAlbum(
                                 context = context,
                                 studentId = student.id,
-                                currentRawAvatarField = student.avatarBase64,
+                                currentRawAvatarField = resolvedAvatarField,
                                 targetPhotoEntry = existingEntry,
                                 newFrame = chosenFrame,
                                 promoteToMain = localEditorSaveAsMain
@@ -2078,7 +2350,7 @@ fun StudentPhotoAlbumSection(
                             StudentAvatarImageHelper.addPhotoPreservingOldAlbum(
                                 context = context,
                                 studentId = student.id,
-                                currentRawAvatarField = student.avatarBase64,
+                                currentRawAvatarField = resolvedAvatarField,
                                 newPhotoBase64 = encodedFull,
                                 setAsMain = localEditorSaveAsMain
                             )
@@ -2088,6 +2360,7 @@ fun StudentPhotoAlbumSection(
                     localEditorBitmap = null
                     localEditorExistingEntry = null
                     if (updatedField.isNotBlank()) {
+                        resolvedAvatarField = updatedField
                         onUpdatePackedAvatarField(updatedField)
                         downloadStatusMessage = "تم حفظ الصورة كاملة وضبط كادر البروفايل بنجاح ✓"
                     }
@@ -2307,9 +2580,10 @@ fun StudentPhotoAlbumSection(
                 val updated = StudentAvatarImageHelper.promoteAlbumPhotoToMain(
                     context = context,
                     studentId = student.id,
-                    currentRawAvatarField = student.avatarBase64,
+                    currentRawAvatarField = resolvedAvatarField,
                     targetPhotoBase64 = targetPhoto
                 )
+                resolvedAvatarField = updated
                 onUpdatePackedAvatarField(updated)
                 selectedPhotoForViewer = null
             },
@@ -2317,9 +2591,10 @@ fun StudentPhotoAlbumSection(
                 val updated = StudentAvatarImageHelper.removePhotoFromAlbum(
                     context = context,
                     studentId = student.id,
-                    currentRawAvatarField = student.avatarBase64,
+                    currentRawAvatarField = resolvedAvatarField,
                     photoToRemoveBase64 = targetPhoto
                 )
+                resolvedAvatarField = updated
                 onUpdatePackedAvatarField(updated)
                 selectedPhotoForViewer = null
             }

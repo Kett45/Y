@@ -4,8 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
@@ -27,14 +26,13 @@ import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.viewmodel.KamScreenState
 
+private val AwardedPointsTextColor = Color(0xFF090D16)
+private val CardButtonCornerShape = RoundedCornerShape(11.dp)
+
 /**
- * Compact card buttons row displayed under each child:
- * - Normal (unrecorded) state: displays ONLY the card's distinct symbol (`✓`, `🤫`, `✋`, `🎵`, `⭐`, `📖`, `🕊️`)
- *   with a distinct colored border/tint per card. No card title or points text.
- * - Recorded state (`count > 0`): transforms the symbol into the card's points number (e.g. `3`, `5`, `20`)
- *   with a bold filled color indicating the card has been awarded.
+ * Backward-compatible overload that extracts the packed 64-bit card counts for [studentId]
+ * and delegates to the primitive-parameter [CompactCardButtonsRow].
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CompactCardButtonsRow(
     studentId: String,
@@ -43,17 +41,41 @@ fun CompactCardButtonsRow(
     tagPrefix: String = "card_btn",
     onCardClick: (CardType) -> Unit
 ) {
-    val isCompactMobile = LocalUiScaleController.current.isCompactMobile
-    val buttonSize = if (isCompactMobile) 40.dp else 44.dp
+    CompactCardButtonsRow(
+        studentId = studentId,
+        enabledCards = enabledCards,
+        packedCardCounts = state.packedCardCountsForStudent(studentId),
+        tagPrefix = tagPrefix,
+        onCardClick = onCardClick
+    )
+}
 
-    FlowRow(
+/**
+ * Ultra-fast, smart-skippable card buttons row displayed under each child:
+ * - Accepts primitive [packedCardCounts] (`Long`, 8 bits per [CardType.ordinal]) instead of the whole screen state,
+ *   allowing Compose to skip 149 out of 150 rows when a single student's card is tapped.
+ * - Uses a single-pass [Row] instead of multi-pass `FlowRow` to eliminate layout thrashing during scrolling.
+ */
+@Composable
+fun CompactCardButtonsRow(
+    studentId: String,
+    enabledCards: List<CardType>,
+    packedCardCounts: Long,
+    tagPrefix: String = "card_btn",
+    onCardClick: (CardType) -> Unit
+) {
+    val isCompactMobile = LocalUiScaleController.current.isCompactMobile
+    val buttonSize = if (isCompactMobile) 38.dp else 42.dp
+
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        enabledCards.forEach { card ->
+        for (i in 0 until enabledCards.size) {
+            val card = enabledCards[i]
             val cardColor = KamSemanticColors.cardColor(card)
-            val countInScope = state.cardCountForStudent(studentId, card)
+            val countInScope = KamScreenState.unpackCardCount(packedCardCounts, card)
             val isAwarded = countInScope > 0
             val displayedPoints = if (countInScope > 1) {
                 card.points * countInScope
@@ -62,7 +84,7 @@ fun CompactCardButtonsRow(
             }
 
             Surface(
-                shape = RoundedCornerShape(11.dp),
+                shape = CardButtonCornerShape,
                 color = if (isAwarded) {
                     cardColor
                 } else {
@@ -93,7 +115,7 @@ fun CompactCardButtonsRow(
                         Text(
                             text = "$displayedPoints",
                             style = MaterialTheme.typography.titleMedium,
-                            color = Color(0xFF090D16),
+                            color = AwardedPointsTextColor,
                             fontWeight = FontWeight.ExtraBold,
                             maxLines = 1,
                             softWrap = false
@@ -114,3 +136,4 @@ fun CompactCardButtonsRow(
         }
     }
 }
+

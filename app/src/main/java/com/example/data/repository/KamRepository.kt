@@ -16,6 +16,7 @@ import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -764,6 +766,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         }
 
         // Step C: Ensure all existing students in groups/{groupId}/students have a non-zero fractional position
+        // and migrate any inline avatarBase64 into groups/{groupId}/avatars/{studentId}
         try {
             val studentsSnap = groupRef.collection("students")
                 .whereEqualTo("groupId", groupId)
@@ -788,6 +791,47 @@ class KamRepository(private val db: FirebaseFirestore) {
                     )
                 }
                 batch.commit().await()
+            }
+
+            // Step D: Automatically migrate inline avatarBase64 strings from students/{id} to avatars/{id}
+            val docsWithInlineAvatar = studentsSnap.documents.filter { doc ->
+                !doc.getString("avatarBase64").isNullOrBlank()
+            }
+            if (docsWithInlineAvatar.isNotEmpty()) {
+                docsWithInlineAvatar.chunked(20).forEach { chunk ->
+                    val batch = db.batch()
+                    chunk.forEach { doc ->
+                        val rawAvatar = doc.getString("avatarBase64").orEmpty().trim().take(50000)
+                        if (rawAvatar.isNotBlank()) {
+                            val hash = Student.computeAvatarHash(rawAvatar)
+                            val avatarRef = groupRef.collection("avatars").document(doc.id)
+                            batch.set(
+                                avatarRef,
+                                mapOf(
+                                    "groupId" to groupId,
+                                    "studentId" to doc.id,
+                                    "avatarBase64" to rawAvatar,
+                                    "avatarHash" to hash,
+                                    "updatedByUid" to currentUserId,
+                                    "memberUids" to safeMembers,
+                                    "createdAt" to FieldValue.serverTimestamp(),
+                                    "updatedAt" to FieldValue.serverTimestamp()
+                                )
+                            )
+                            batch.update(
+                                doc.reference,
+                                mapOf(
+                                    "avatarBase64" to "",
+                                    "hasAvatar" to true,
+                                    "avatarHash" to hash,
+                                    "updatedAt" to FieldValue.serverTimestamp()
+                                )
+                            )
+                            migratedCount++
+                        }
+                    }
+                    batch.commit().await()
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -940,19 +984,39 @@ class KamRepository(private val db: FirebaseFirestore) {
 
     fun observeBlocks(groupId: String, @Suppress("UNUSED_PARAMETER") currentUserId: String = ""): Flow<List<ServantBlock>> {
         val path = "groups/$groupId/blocks"
-        return db.collection("groups").document(groupId).collection("blocks")
-            .whereEqualTo("groupId", groupId)
-            .snapshots()
-            .map { snapshot ->
-                val cur = pendingWritesBySource.value
-                pendingWritesBySource.value = cur.copy(first = snapshot.metadata.hasPendingWrites())
-                snapshot.toObjects(ServantBlock::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                    .sortedWith(compareBy<ServantBlock> { it.sortOrder }.thenBy { it.id })
-            }
-            .catch { error ->
-                if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
-                throw error
-            }
+        return flow {
+            val blocksById = LinkedHashMap<String, ServantBlock>()
+            db.collection("groups").document(groupId).collection("blocks")
+                .whereEqualTo("groupId", groupId)
+                .snapshots()
+                .collect { snapshot ->
+                    val cur = pendingWritesBySource.value
+                    pendingWritesBySource.value = cur.copy(first = snapshot.metadata.hasPendingWrites())
+                    for (change in snapshot.documentChanges) {
+                        val docId = change.document.id
+                        when (change.type) {
+                            DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                val parsed = change.document.toObject(
+                                    ServantBlock::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                )
+                                blocksById[docId] = parsed
+                            }
+                            DocumentChange.Type.REMOVED -> {
+                                blocksById.remove(docId)
+                            }
+                        }
+                    }
+                    emit(
+                        blocksById.values.sortedWith(
+                            compareBy<ServantBlock> { it.sortOrder }.thenBy { it.id }
+                        )
+                    )
+                }
+        }.catch { error ->
+            if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
+            throw error
+        }
     }
 
     suspend fun createBlock(
@@ -1040,23 +1104,41 @@ class KamRepository(private val db: FirebaseFirestore) {
 
     fun observeStudents(groupId: String, @Suppress("UNUSED_PARAMETER") currentUserId: String = ""): Flow<List<Student>> {
         val path = "groups/$groupId/students"
-        return db.collection("groups").document(groupId).collection("students")
-            .whereEqualTo("groupId", groupId)
-            .snapshots()
-            .map { snapshot ->
-                val cur = pendingWritesBySource.value
-                pendingWritesBySource.value = cur.copy(second = snapshot.metadata.hasPendingWrites())
-                snapshot.toObjects(Student::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                    .sortedWith(
-                        compareBy<Student> { it.effectivePosition }
-                            .thenBy { it.studentNumber }
-                            .thenBy { it.id }
+        return flow {
+            val studentsById = LinkedHashMap<String, Student>()
+            db.collection("groups").document(groupId).collection("students")
+                .whereEqualTo("groupId", groupId)
+                .snapshots()
+                .collect { snapshot ->
+                    val cur = pendingWritesBySource.value
+                    pendingWritesBySource.value = cur.copy(second = snapshot.metadata.hasPendingWrites())
+                    for (change in snapshot.documentChanges) {
+                        val docId = change.document.id
+                        when (change.type) {
+                            DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                val parsed = change.document.toObject(
+                                    Student::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                )
+                                studentsById[docId] = parsed
+                            }
+                            DocumentChange.Type.REMOVED -> {
+                                studentsById.remove(docId)
+                            }
+                        }
+                    }
+                    emit(
+                        studentsById.values.sortedWith(
+                            compareBy<Student> { it.effectivePosition }
+                                .thenBy { it.studentNumber }
+                                .thenBy { it.id }
+                        )
                     )
-            }
-            .catch { error ->
-                if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
-                throw error
-            }
+                }
+        }.catch { error ->
+            if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
+            throw error
+        }
     }
 
     suspend fun addStudent(
@@ -1304,43 +1386,154 @@ class KamRepository(private val db: FirebaseFirestore) {
     }
 
     /**
-     * Updates a child's square-cropped compressed photo (`avatarBase64`, < 30KB) directly in the
-     * student document. Any group member (Admin or Servant) can update it, online or offline.
+     * Stores the child's packed photo (`avatarBase64`, < 45KB) in the dedicated
+     * `groups/{groupId}/avatars/{studentId}` collection so it is loaded lazily on demand,
+     * while updating `groups/{groupId}/students/{studentId}` with lightweight metadata
+     * (`avatarBase64 = ""`, `hasAvatar`, `avatarHash`) so the main student list stays fast and tiny.
      */
     suspend fun updateStudentAvatar(
         groupId: String,
         studentId: String,
         avatarBase64: String,
-        memberUids: List<String>,
+        memberUids: List<String> = emptyList(),
         waitForServerAck: Boolean = true
     ): Result<Unit> = runCatching {
-        requireUserId()
+        val uid = requireUserId()
         val safeAvatar = avatarBase64.trim().take(50000)
-        val docRef = db.collection("groups").document(groupId).collection("students").document(studentId)
+        val hasAvatar = safeAvatar.isNotBlank()
+        val avatarHash = Student.computeAvatarHash(safeAvatar)
+        val safeMembers = memberUids.ifEmpty { listOf(uid) }.distinct().take(10)
+
+        val groupRef = db.collection("groups").document(groupId)
+        val studentRef = groupRef.collection("students").document(studentId)
+        val avatarRef = groupRef.collection("avatars").document(studentId)
         try {
-            val updateTask = docRef.update(
+            val batch = db.batch()
+            if (hasAvatar) {
+                batch.set(
+                    avatarRef,
+                    mapOf(
+                        "groupId" to groupId,
+                        "studentId" to studentId,
+                        "avatarBase64" to safeAvatar,
+                        "avatarHash" to avatarHash,
+                        "updatedByUid" to uid,
+                        "memberUids" to safeMembers,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            } else {
+                batch.delete(avatarRef)
+            }
+            batch.update(
+                studentRef,
                 mapOf(
-                    "avatarBase64" to safeAvatar,
-                    "memberUids" to memberUids.distinct().take(10),
+                    "avatarBase64" to "",
+                    "hasAvatar" to hasAvatar,
+                    "avatarHash" to avatarHash,
+                    "memberUids" to safeMembers,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )
+            val commitTask = batch.commit()
             if (waitForServerAck) {
-                updateTask.await()
+                commitTask.await()
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            handleFirestoreError(e, OperationType.UPDATE, studentRef.path)
             throw e
         }
     }
 
+    /**
+     * Lazily fetches a single student's avatar document (`groups/{groupId}/avatars/{studentId}`)
+     * on demand when the student becomes visible on screen.
+     */
+    suspend fun fetchStudentAvatar(groupId: String, studentId: String): String? {
+        if (groupId.isBlank() || studentId.isBlank()) return null
+        val groupRef = db.collection("groups").document(groupId)
+        return try {
+            val avatarDoc = groupRef.collection("avatars").document(studentId).get().await()
+            val fromAvatarCol = avatarDoc.getString("avatarBase64")?.trim().orEmpty()
+            if (fromAvatarCol.isNotBlank()) {
+                fromAvatarCol
+            } else {
+                // Fallback for any unmigrated legacy student document
+                val stuDoc = groupRef.collection("students").document(studentId).get().await()
+                stuDoc.getString("avatarBase64")?.trim()?.takeIf { it.isNotBlank() }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Background helper to migrate any inline `Student.avatarBase64` strings into
+     * `groups/{groupId}/avatars/{studentId}` and clear them from `groups/{groupId}/students/{studentId}`.
+     */
+    suspend fun migrateInlineStudentAvatars(
+        groupId: String,
+        studentsWithInlineAvatars: List<Student>,
+        memberUids: List<String>
+    ): Result<Int> = runCatching {
+        if (groupId.isBlank() || studentsWithInlineAvatars.isEmpty()) return@runCatching 0
+        val uid = auth.currentUser?.uid ?: return@runCatching 0
+        val groupRef = db.collection("groups").document(groupId)
+        val safeMembers = memberUids.ifEmpty { listOf(uid) }.distinct().take(10)
+        var migrated = 0
+        studentsWithInlineAvatars.chunked(20).forEach { chunk ->
+            val batch = db.batch()
+            chunk.forEach { stu ->
+                val rawAvatar = stu.avatarBase64.trim().take(50000)
+                if (rawAvatar.isNotBlank()) {
+                    val hash = Student.computeAvatarHash(rawAvatar)
+                    val avatarRef = groupRef.collection("avatars").document(stu.id)
+                    val stuRef = groupRef.collection("students").document(stu.id)
+                    batch.set(
+                        avatarRef,
+                        mapOf(
+                            "groupId" to groupId,
+                            "studentId" to stu.id,
+                            "avatarBase64" to rawAvatar,
+                            "avatarHash" to hash,
+                            "updatedByUid" to uid,
+                            "memberUids" to safeMembers,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    batch.update(
+                        stuRef,
+                        mapOf(
+                            "avatarBase64" to "",
+                            "hasAvatar" to true,
+                            "avatarHash" to hash,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    migrated++
+                }
+            }
+            batch.commit().await()
+        }
+        migrated
+    }
+
     suspend fun deleteStudent(groupId: String, studentId: String): Result<Unit> = runCatching {
         requireUserId()
-        val docRef = db.collection("groups").document(groupId).collection("students").document(studentId)
+        val groupRef = db.collection("groups").document(groupId)
+        val docRef = groupRef.collection("students").document(studentId)
+        val avatarRef = groupRef.collection("avatars").document(studentId)
         try {
-            docRef.delete().await()
+            val batch = db.batch()
+            batch.delete(docRef)
+            batch.delete(avatarRef)
+            batch.commit().await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1356,19 +1549,37 @@ class KamRepository(private val db: FirebaseFirestore) {
         @Suppress("UNUSED_PARAMETER") currentUserId: String = ""
     ): Flow<List<CardEvent>> {
         val path = "groups/$groupId/cardEvents"
-        return db.collection("groups").document(groupId).collection("cardEvents")
-            .whereEqualTo("groupId", groupId)
-            .snapshots()
-            .map { snapshot ->
-                val cur = pendingWritesBySource.value
-                pendingWritesBySource.value = cur.copy(third = snapshot.metadata.hasPendingWrites())
-                snapshot.toObjects(CardEvent::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                    .sortedByDescending { it.createdAt?.seconds ?: 0L }
-            }
-            .catch { error ->
-                if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
-                throw error
-            }
+        return flow {
+            val eventsById = LinkedHashMap<String, CardEvent>()
+            db.collection("groups").document(groupId).collection("cardEvents")
+                .whereEqualTo("groupId", groupId)
+                .snapshots()
+                .collect { snapshot ->
+                    val cur = pendingWritesBySource.value
+                    pendingWritesBySource.value = cur.copy(third = snapshot.metadata.hasPendingWrites())
+                    for (change in snapshot.documentChanges) {
+                        val docId = change.document.id
+                        when (change.type) {
+                            DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                val parsed = change.document.toObject(
+                                    CardEvent::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                )
+                                eventsById[docId] = parsed
+                            }
+                            DocumentChange.Type.REMOVED -> {
+                                eventsById.remove(docId)
+                            }
+                        }
+                    }
+                    emit(
+                        eventsById.values.sortedByDescending { it.createdAt?.seconds ?: 0L }
+                    )
+                }
+        }.catch { error ->
+            if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
+            throw error
+        }
     }
 
     fun observeCardEventsForMonth(
@@ -1385,16 +1596,33 @@ class KamRepository(private val db: FirebaseFirestore) {
         @Suppress("UNUSED_PARAMETER") currentUserId: String = ""
     ): Flow<List<MonthlyBalance>> {
         val path = "groups/$groupId/monthlyBalances"
-        return db.collection("groups").document(groupId).collection("monthlyBalances")
-            .whereEqualTo("groupId", groupId)
-            .snapshots()
-            .map { snapshot ->
-                snapshot.toObjects(MonthlyBalance::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-            }
-            .catch { error ->
-                if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
-                throw error
-            }
+        return flow {
+            val balancesById = LinkedHashMap<String, MonthlyBalance>()
+            db.collection("groups").document(groupId).collection("monthlyBalances")
+                .whereEqualTo("groupId", groupId)
+                .snapshots()
+                .collect { snapshot ->
+                    for (change in snapshot.documentChanges) {
+                        val docId = change.document.id
+                        when (change.type) {
+                            DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                val parsed = change.document.toObject(
+                                    MonthlyBalance::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                )
+                                balancesById[docId] = parsed
+                            }
+                            DocumentChange.Type.REMOVED -> {
+                                balancesById.remove(docId)
+                            }
+                        }
+                    }
+                    emit(balancesById.values.toList())
+                }
+        }.catch { error ->
+            if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
+            throw error
+        }
     }
 
     fun observeMonthlyBalances(

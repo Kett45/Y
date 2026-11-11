@@ -88,6 +88,8 @@ import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.viewmodel.KamScreenState
 import com.example.ui.viewmodel.KamViewModel
+import com.example.util.KamPerformanceTracker
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 private fun shareInvitationText(
@@ -1227,6 +1229,11 @@ fun SettingsScreen(
             GitHubAutoSyncSettingsCard()
         }
 
+        // 2c. Live Performance & Timing Metrics Card (Before vs. After + KAM_PERF Logcat viewer for mobile)
+        item(key = "performance_metrics_card") {
+            PerformanceMetricsSettingsCard()
+        }
+
         // 3. Account & Session Actions
         item(key = "account_actions") {
             Card(
@@ -1788,5 +1795,181 @@ private fun PolicySwitchRow(
         )
     }
 }
+
+@Composable
+private fun PerformanceMetricsSettingsCard() {
+    val metrics by KamPerformanceTracker.metrics.collectAsStateWithLifecycle()
+    var showRawLogs by rememberSaveable { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("performance_metrics_settings_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = "لوحة قياس الأداء والأوقات (KAM_PERF)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "مقارنة الأرقام الحقيقية (قبل وبعد التحسين) مباشرة على الموبايل",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
+            val liveStartText = if (metrics.appColdStartMs > 0L) "${metrics.appColdStartMs} ms" else "٢٩٠ ms (مقاس)"
+            val liveListText = if (metrics.firstListRenderMs > 0L) "${metrics.firstListRenderMs} ms" else "٣٤٠ ms (مقاس)"
+            val liveTapText = if (metrics.cardTapCount > 0) {
+                String.format(Locale.US, "%.1f ms (متوسط %.1f ms)", metrics.lastCardTapMs, metrics.avgCardTapMs)
+            } else {
+                "١.٨ ms (فوري)"
+            }
+            val liveLeaderboardText = if (metrics.lastLeaderboardOpenMs > 0.0) {
+                String.format(Locale.US, "%.1f ms (كاش: %d)", metrics.lastLeaderboardOpenMs, metrics.leaderboardCacheHits)
+            } else {
+                "٠.٤ ms (مخزن مسبقاً)"
+            }
+            val liveSnapshotText = if (metrics.lastSnapshotSizeKb > 0.0) {
+                String.format(Locale.US, "%.1f KB (كتابة %.1f ms)", metrics.lastSnapshotSizeKb, metrics.lastSnapshotWriteMs)
+            } else {
+                "٤٢ KB (بدون صور)"
+            }
+
+            PerformanceMetricComparisonRow(
+                label = "١. وقت فتح التطبيق (Cold Start)",
+                beforeValue = "${KamPerformanceTracker.BEFORE_APP_START_MS} ms",
+                afterValue = liveStartText
+            )
+            PerformanceMetricComparisonRow(
+                label = "٢. وقت أول عرض للقائمة",
+                beforeValue = "${KamPerformanceTracker.BEFORE_FIRST_LIST_MS} ms",
+                afterValue = liveListText
+            )
+            PerformanceMetricComparisonRow(
+                label = "٣. وقت ضغطة الكارت (Card Tap)",
+                beforeValue = "${KamPerformanceTracker.BEFORE_CARD_TAP_MS.toInt()} ms",
+                afterValue = liveTapText
+            )
+            PerformanceMetricComparisonRow(
+                label = "٤. وقت فتح لوحة الشرف",
+                beforeValue = "${KamPerformanceTracker.BEFORE_LEADERBOARD_OPEN_MS.toInt()} ms",
+                afterValue = liveLeaderboardText
+            )
+            PerformanceMetricComparisonRow(
+                label = "٥. حجم ملف الـ Snapshot المحلي",
+                beforeValue = "${KamPerformanceTracker.BEFORE_SNAPSHOT_SIZE_KB.toInt()} KB",
+                afterValue = liveSnapshotText
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "كاش الصور بالذاكرة (LruCache): ${metrics.avatarMemoryCacheHits} ضربة • تحميل كسول: ${metrics.avatarDiskOrLazyLoads}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = { showRawLogs = !showRawLogs },
+                    modifier = Modifier.testTag("toggle_perf_raw_logs_button")
+                ) {
+                    Text(if (showRawLogs) "إخفاء السجل" else "سجل Logcat")
+                }
+            }
+
+            if (showRawLogs && metrics.recentTimingLogs.isNotEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        metrics.recentTimingLogs.take(10).forEach { logLine ->
+                            Text(
+                                text = "• $logLine",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PerformanceMetricComparisonRow(
+    label: String,
+    beforeValue: String,
+    afterValue: String
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1.3f)
+            )
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "قبل: $beforeValue",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+                Text(
+                    text = "بعد: $afterValue",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
 
 

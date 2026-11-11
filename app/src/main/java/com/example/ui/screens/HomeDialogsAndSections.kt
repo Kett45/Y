@@ -332,7 +332,7 @@ fun SearchResultsWithBlockOwnerSection(
                                 CompactCardButtonsRow(
                                     studentId = student.id,
                                     enabledCards = enabledCards,
-                                    state = state,
+                                    packedCardCounts = state.packedCardCountsForStudent(student.id),
                                     tagPrefix = "search_card_btn",
                                     onCardClick = { card -> onAwardCard(student, card) }
                                 )

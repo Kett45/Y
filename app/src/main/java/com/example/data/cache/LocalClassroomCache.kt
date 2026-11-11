@@ -2,18 +2,29 @@ package com.example.data.cache
 
 import android.content.Context
 import android.util.Log
+import androidx.compose.runtime.Immutable
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
 import com.example.data.model.Group
 import com.example.data.model.MonthlyBalance
 import com.example.data.model.ServantBlock
 import com.example.data.model.Student
+import android.os.SystemClock
 import com.example.data.model.UserProfile
+import com.example.ui.components.StudentAvatarImageHelper
+import com.example.util.KamPerformanceTracker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
+@Immutable
 data class CachedClassroomSnapshot(
     val userProfile: UserProfile,
     val group: Group?,
@@ -25,6 +36,7 @@ data class CachedClassroomSnapshot(
     val savedAtMillis: Long = System.currentTimeMillis()
 )
 
+@Immutable
 data class LocalUserPreferences(
     val enabledCards: List<String> = CardType.defaultEnabledIds,
     val collapsedBlockIds: List<String> = emptyList(),
@@ -46,6 +58,10 @@ object LocalClassroomCache {
     private const val TAG = "LocalClassroomCache"
     private const val PREFS_NAME = "kam_fast_local_cache_v16"
     private const val SNAPSHOT_DIR = "classroom_snapshots"
+    private val SAFE_USER_ID_REGEX = Regex("[^a-zA-Z0-9_-]")
+
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val pendingDiskWriteJobs = ConcurrentHashMap<String, Job>()
 
     @Volatile
     private var appContext: Context? = null
@@ -97,7 +113,17 @@ object LocalClassroomCache {
             savedAtMillis = System.currentTimeMillis()
         )
         memorySnapshots[userId] = snapshot
-        writeSnapshotToDisk(userId, snapshot)
+        scheduleDebouncedDiskWrite(userId, snapshot)
+    }
+
+    private fun scheduleDebouncedDiskWrite(userId: String, snapshot: CachedClassroomSnapshot) {
+        pendingDiskWriteJobs[userId]?.cancel()
+        pendingDiskWriteJobs[userId] = ioScope.launch {
+            // Wait 3.0 seconds after activity stops before writing lightweight metadata snapshot to disk
+            delay(3000L)
+            val latest = memorySnapshots[userId] ?: snapshot
+            writeSnapshotToDisk(userId, latest)
+        }
     }
 
     fun loadUserPreferences(userId: String): LocalUserPreferences {
@@ -193,12 +219,13 @@ object LocalClassroomCache {
         if (!dir.exists()) {
             dir.mkdirs()
         }
-        val safeId = userId.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val safeId = userId.replace(SAFE_USER_ID_REGEX, "_")
         return File(dir, "snapshot_$safeId.json")
     }
 
     private fun writeSnapshotToDisk(userId: String, snapshot: CachedClassroomSnapshot) {
         val file = snapshotFileForUser(userId) ?: return
+        val startNs = SystemClock.elapsedRealtimeNanos()
         runCatching {
             val root = JSONObject().apply {
                 put("savedAtMillis", snapshot.savedAtMillis)
@@ -216,14 +243,17 @@ object LocalClassroomCache {
                     snapshot.students.forEach { put(serializeStudent(it)) }
                 })
                 put("cardEvents", JSONArray().apply {
-                    // Cache up to 600 recent card events for instant startup
-                    snapshot.cardEvents.take(600).forEach { put(serializeCardEvent(it)) }
+                    // Keep only 250 recent events in fast startup metadata; Firestore SQLite persistence holds full history
+                    snapshot.cardEvents.take(250).forEach { put(serializeCardEvent(it)) }
                 })
                 put("monthlyBalances", JSONArray().apply {
-                    snapshot.monthlyBalances.take(400).forEach { put(serializeMonthlyBalance(it)) }
+                    snapshot.monthlyBalances.take(150).forEach { put(serializeMonthlyBalance(it)) }
                 })
             }
-            file.writeText(root.toString())
+            val jsonBytes = root.toString().toByteArray(Charsets.UTF_8)
+            file.writeBytes(jsonBytes)
+            val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000.0
+            KamPerformanceTracker.recordSnapshotDiskWrite(elapsedMs, jsonBytes.size)
         }.onFailure { e ->
             Log.w(TAG, "Failed to write classroom snapshot to disk: ${e.message}")
         }
@@ -376,6 +406,13 @@ object LocalClassroomCache {
     )
 
     private fun serializeStudent(s: Student): JSONObject = JSONObject().apply {
+        // Persist any inline avatar into standalone local file first, then strip Base64 from snapshot JSON
+        if (s.avatarBase64.isNotBlank() && s.id.isNotBlank()) {
+            val existingLocal = StudentAvatarImageHelper.readLocalAlbumRaw(appContext, s.id)
+            if (existingLocal.isBlank()) {
+                StudentAvatarImageHelper.writeLocalAlbumRaw(appContext, s.id, s.avatarBase64)
+            }
+        }
         put("id", s.id)
         put("groupId", s.groupId)
         put("name", s.name)
@@ -384,24 +421,42 @@ object LocalClassroomCache {
         put("sortOrder", s.sortOrder)
         put("position", s.position)
         put("avatarInitials", s.avatarInitials)
-        put("avatarBase64", s.avatarBase64)
+        put("avatarBase64", "")
+        put("hasAvatar", s.effectiveHasAvatar)
+        put("avatarHash", s.effectiveAvatarKey)
         put("createdByUid", s.createdByUid)
         put("memberUids", JSONArray(s.memberUids))
     }
 
-    private fun deserializeStudent(obj: JSONObject): Student = Student(
-        id = obj.optString("id", ""),
-        groupId = obj.optString("groupId", ""),
-        name = obj.optString("name", ""),
-        studentNumber = obj.optLong("studentNumber", 1L),
-        blockId = obj.optString("blockId", ""),
-        sortOrder = obj.optLong("sortOrder", 0L),
-        position = obj.optDouble("position", 0.0),
-        avatarInitials = obj.optString("avatarInitials", ""),
-        avatarBase64 = obj.optString("avatarBase64", ""),
-        createdByUid = obj.optString("createdByUid", ""),
-        memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids"))
-    )
+    private fun deserializeStudent(obj: JSONObject): Student {
+        val id = obj.optString("id", "")
+        val legacyInlineAvatar = obj.optString("avatarBase64", "").trim()
+        if (legacyInlineAvatar.isNotBlank() && id.isNotBlank()) {
+            val existingLocal = StudentAvatarImageHelper.readLocalAlbumRaw(appContext, id)
+            if (existingLocal.isBlank()) {
+                StudentAvatarImageHelper.writeLocalAlbumRaw(appContext, id, legacyInlineAvatar)
+            }
+        }
+        val hasAvatarFlag = obj.optBoolean("hasAvatar", false) || legacyInlineAvatar.isNotBlank()
+        val hashFlag = obj.optString("avatarHash", "").ifBlank {
+            if (legacyInlineAvatar.isNotBlank()) Student.computeAvatarHash(legacyInlineAvatar) else ""
+        }
+        return Student(
+            id = id,
+            groupId = obj.optString("groupId", ""),
+            name = obj.optString("name", ""),
+            studentNumber = obj.optLong("studentNumber", 1L),
+            blockId = obj.optString("blockId", ""),
+            sortOrder = obj.optLong("sortOrder", 0L),
+            position = obj.optDouble("position", 0.0),
+            avatarInitials = obj.optString("avatarInitials", ""),
+            avatarBase64 = "",
+            hasAvatar = hasAvatarFlag,
+            avatarHash = hashFlag,
+            createdByUid = obj.optString("createdByUid", ""),
+            memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids"))
+        )
+    }
 
     private fun serializeCardEvent(e: CardEvent): JSONObject = JSONObject().apply {
         put("id", e.id)

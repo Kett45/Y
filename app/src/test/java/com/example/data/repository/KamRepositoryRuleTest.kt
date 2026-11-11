@@ -32,10 +32,10 @@ class KamRepositoryRuleTest : FirestoreEmulatorTestBase() {
 
         // 1. Admin creates group and adds Student 1 BEFORE any servant joins
         val adminUid = signInTestUser("admin_${groupCode}@test.com")
-        val adminStudentId = withTimeout(TIMEOUT_MS) {
+        val (createdGroup, adminStudentId) = withTimeout(TIMEOUT_MS) {
             repository.ensureUserProfile("الأمين أبانوب", "admin@test.com").getOrThrow()
-            repository.createGroup("فصل مارمينا", "الأمين أبانوب", groupCode).getOrThrow()
-            repository.addStudent(
+            val grp = repository.createGroup("فصل مارمينا", "الأمين أبانوب", groupCode).getOrThrow()
+            val stuId = repository.addStudent(
                 groupId = groupCode,
                 name = "مينا جرجس",
                 studentNumber = 1,
@@ -44,13 +44,14 @@ class KamRepositoryRuleTest : FirestoreEmulatorTestBase() {
                 position = 1000.0,
                 memberUids = listOf(adminUid) // Only adminUid was known at creation time!
             ).getOrThrow()
+            grp to stuId
         }
 
         // 2. Servant 1 joins by code -> MUST immediately see Student 1 added by Admin!
         val servant1Uid = signInTestUser("servant1_${groupCode}@test.com")
         val joinedGroup = withTimeout(TIMEOUT_MS) {
             repository.ensureUserProfile("الخادم مايكل", "servant1@test.com").getOrThrow()
-            repository.joinGroupByCode(groupCode, "الخادم مايكل").getOrThrow()
+            repository.joinGroupByCode(createdGroup.fullDailyInviteCode, "الخادم مايكل").getOrThrow()
         }
         assertTrue(joinedGroup.memberUids.contains(adminUid))
         assertTrue(joinedGroup.memberUids.contains(servant1Uid))
@@ -157,7 +158,7 @@ class KamRepositoryRuleTest : FirestoreEmulatorTestBase() {
         signInTestUser("servant2_${groupCode}@test.com")
         withTimeout(TIMEOUT_MS) {
             repository.ensureUserProfile("الخادم بيشوي", "servant2@test.com").getOrThrow()
-            repository.joinGroupByCode(groupCode, "الخادم بيشوي").getOrThrow()
+            repository.joinGroupByCode(createdGroup.fullDailyInviteCode, "الخادم بيشوي").getOrThrow()
         }
         val studentsForNewServant = withTimeout(FLOW_TIMEOUT_MS) {
             repository.observeStudents(groupCode).first { it.size == 2 }
@@ -338,8 +339,55 @@ class KamRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertEquals(keepId, transferredEvents.first().studentId)
     }
 
+    @Test
+    fun decoupledStudentAvatar_storesInSeparateAvatarsCollectionAndKeepsStudentLightweight() = runBlocking {
+        val groupCode = "KAMA" + UUID.randomUUID().toString().replace("-", "").uppercase().take(5)
+        val repository = KamRepository(firestore)
+
+        val adminUid = signInTestUser("admin_av_${groupCode}@test.com")
+        val studentId = withTimeout(TIMEOUT_MS) {
+            repository.ensureUserProfile("الأمين كيرلس", "admin_av@test.com").getOrThrow()
+            repository.createGroup("فصل الصور المنفصلة", "الأمين كيرلس", groupCode).getOrThrow()
+            repository.addStudent(
+                groupId = groupCode,
+                name = "ابانوب مينا",
+                studentNumber = 1,
+                blockId = "",
+                sortOrder = 0,
+                memberUids = listOf(adminUid),
+                position = 1000.0
+            ).getOrThrow()
+        }
+
+        val samplePackedAvatar = "F3|1|0.0|0.0|1.0|dGVzdF9hdmF0YXJfYmFzZTY0X3BheWxvYWQ="
+        withTimeout(TIMEOUT_MS) {
+            repository.updateStudentAvatar(
+                groupId = groupCode,
+                studentId = studentId,
+                avatarBase64 = samplePackedAvatar
+            ).getOrThrow()
+        }
+
+        val updatedStudent = withTimeout(FLOW_TIMEOUT_MS) {
+            repository.observeStudents(groupCode).first { list ->
+                list.any { it.id == studentId && it.hasAvatar }
+            }.first { it.id == studentId }
+        }
+        // Student doc in main listener has empty avatarBase64 and non-empty avatarHash
+        assertEquals("", updatedStudent.avatarBase64)
+        assertTrue(updatedStudent.hasAvatar)
+        assertTrue(updatedStudent.avatarHash.isNotEmpty())
+
+        // Lazy fetch from groups/{groupId}/avatars/{studentId} returns the full packed payload
+        val fetchedAvatar = withTimeout(TIMEOUT_MS) {
+            repository.fetchStudentAvatar(groupCode, studentId)
+        }
+        assertEquals(samplePackedAvatar, fetchedAvatar)
+    }
+
     private companion object {
         const val TIMEOUT_MS = 5000L
         const val FLOW_TIMEOUT_MS = 3000L
     }
 }
+

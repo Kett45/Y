@@ -90,6 +90,7 @@ import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalAppAppearanceController
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.viewmodel.KamViewModel
+import com.example.util.KamPerformanceTracker
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -116,6 +117,7 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        KamPerformanceTracker.markActivityOnCreate()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         LocalClassroomCache.init(applicationContext)
@@ -136,6 +138,10 @@ fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
     var currentUser by remember { mutableStateOf(auth.currentUser) }
     var authSessionId by rememberSaveable { mutableIntStateOf(0) }
     val navScope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        KamPerformanceTracker.markFirstUiFrameRendered()
+    }
 
     DisposableEffect(auth) {
         val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
