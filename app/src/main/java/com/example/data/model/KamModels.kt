@@ -266,7 +266,21 @@ data class CardEvent(
     val memberUids: List<String> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+    fun hasValidCreatedAt(): Boolean = createdAt != null && createdAt.seconds > 0L
+
+    /**
+     * Returns the exact event timestamp in milliseconds from [createdAt], or falls back
+     * deterministically to [weekKey] / [monthKey] if an older historical event lacks a valid [createdAt].
+     */
+    fun effectiveTimestampMillis(): Long {
+        val ts = createdAt
+        if (ts != null && ts.seconds > 0L) {
+            return ts.toDate().time
+        }
+        return ServiceCalendarHelper.computeFallbackTimestampMillis(monthKey = monthKey, weekKey = weekKey)
+    }
+}
 
 @Immutable
 @IgnoreExtraProperties
@@ -711,6 +725,140 @@ object SaturdayCalendarHelper {
             monthLabel
         }
     }
+
+    /**
+     * Fallback timestamp in milliseconds for legacy [CardEvent] documents that lack a valid `createdAt`.
+     * Uses `weekKey` (e.g. `2026-11-W2` or `2026-W45`) first, then `monthKey` (`2026-11`).
+     */
+    fun computeFallbackTimestampMillis(monthKey: String, weekKey: String): Long {
+        val utcZone = java.util.TimeZone.getTimeZone("UTC")
+        val cal = java.util.Calendar.getInstance(utcZone).apply {
+            firstDayOfWeek = java.util.Calendar.SATURDAY
+            set(java.util.Calendar.HOUR_OF_DAY, 12)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+
+        val cleanMonth = monthKey.trim()
+        val mParts = cleanMonth.split("-")
+        val yearFromMonth = mParts.getOrNull(0)?.toIntOrNull()
+        val monthFromMonth = mParts.getOrNull(1)?.toIntOrNull()
+
+        if (yearFromMonth != null && monthFromMonth != null && monthFromMonth in 1..12) {
+            val weekNumInMonth = weekKey.substringAfterLast("-W", "").toIntOrNull()
+            val approxDay = if (weekNumInMonth != null && weekNumInMonth in 1..5) {
+                ((weekNumInMonth - 1) * 7 + 1).coerceIn(1, 28)
+            } else {
+                1
+            }
+            cal.set(java.util.Calendar.YEAR, yearFromMonth)
+            cal.set(java.util.Calendar.MONTH, monthFromMonth - 1)
+            cal.set(java.util.Calendar.DAY_OF_MONTH, approxDay)
+            return cal.timeInMillis
+        }
+
+        // ISO-style weekKey fallback e.g. "2026-W52"
+        if (weekKey.contains("-W")) {
+            val wYear = weekKey.substringBefore("-W").toIntOrNull()
+            val wNum = weekKey.substringAfter("-W").toIntOrNull()
+            if (wYear != null && wNum != null && wNum in 1..53) {
+                cal.set(java.util.Calendar.YEAR, wYear)
+                cal.set(java.util.Calendar.WEEK_OF_YEAR, wNum)
+                cal.set(java.util.Calendar.DAY_OF_WEEK, java.util.Calendar.SATURDAY)
+                return cal.timeInMillis
+            }
+        }
+        return 0L
+    }
+
+    /**
+     * Returns `(startOfMonthUtcMillis, endOfMonthUtcMillis)` at 00:00:00.000 UTC for the first and
+     * last day of [monthKey] (e.g. `"2026-11"`), matching Material3 `DateRangePicker` UTC day millis.
+     */
+    fun computeMonthDateRangeUtcMillis(monthKey: String): Pair<Long, Long> {
+        val utcZone = java.util.TimeZone.getTimeZone("UTC")
+        val cal = java.util.Calendar.getInstance(utcZone).apply {
+            firstDayOfWeek = java.util.Calendar.SATURDAY
+        }
+        val parts = monthKey.trim().split("-")
+        val year = parts.getOrNull(0)?.toIntOrNull() ?: cal.get(java.util.Calendar.YEAR)
+        val month = (parts.getOrNull(1)?.toIntOrNull() ?: (cal.get(java.util.Calendar.MONTH) + 1)).coerceIn(1, 12)
+
+        cal.set(java.util.Calendar.YEAR, year)
+        cal.set(java.util.Calendar.MONTH, month - 1)
+        cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        val startUtcMillis = cal.timeInMillis
+
+        val maxDay = cal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+        cal.set(java.util.Calendar.DAY_OF_MONTH, maxDay)
+        val endDayStartUtcMillis = cal.timeInMillis
+        return startUtcMillis to endDayStartUtcMillis
+    }
+
+    fun normalizeStartOfDayMillis(utcOrLocalMillis: Long): Long {
+        val utcZone = java.util.TimeZone.getTimeZone("UTC")
+        val cal = java.util.Calendar.getInstance(utcZone).apply {
+            timeInMillis = utcOrLocalMillis
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        return cal.timeInMillis
+    }
+
+    fun normalizeEndOfDayMillis(utcOrLocalMillis: Long): Long {
+        return normalizeStartOfDayMillis(utcOrLocalMillis) + 86_399_999L
+    }
+
+    /**
+     * Checks if `[startMillis, endMillis]` falls completely within [monthKey] (e.g., `"2026-11"`).
+     */
+    fun isDateRangeWithinMonth(startMillis: Long, endMillis: Long, monthKey: String): Boolean {
+        if (monthKey.isBlank()) return false
+        val (monthStart, monthEndDayStart) = computeMonthDateRangeUtcMillis(monthKey)
+        val monthEndInclusive = monthEndDayStart + 86_399_999L
+        return startMillis >= monthStart && endMillis <= monthEndInclusive
+    }
+
+    /**
+     * Formats `[startMillis, endMillis]` as a concise Arabic button label such as
+     * `"٣ نوفمبر ← ١١ نوفمبر"` or `"١ نوفمبر ← ٣٠ نوفمبر"`.
+     */
+    fun formatCompactArabicDateRange(startMillis: Long, endMillis: Long): String {
+        val utcZone = java.util.TimeZone.getTimeZone("UTC")
+        val startCal = java.util.Calendar.getInstance(utcZone).apply { timeInMillis = startMillis }
+        val endCal = java.util.Calendar.getInstance(utcZone).apply { timeInMillis = endMillis }
+
+        val sYear = startCal.get(java.util.Calendar.YEAR)
+        val sMonth = startCal.get(java.util.Calendar.MONTH) + 1
+        val sDay = startCal.get(java.util.Calendar.DAY_OF_MONTH)
+
+        val eYear = endCal.get(java.util.Calendar.YEAR)
+        val eMonth = endCal.get(java.util.Calendar.MONTH) + 1
+        val eDay = endCal.get(java.util.Calendar.DAY_OF_MONTH)
+
+        val sMonthName = getArabicMonthName(sMonth)
+        val eMonthName = getArabicMonthName(eMonth)
+
+        return when {
+            sYear == eYear && sMonth == eMonth && sDay == eDay ->
+                "${toArabicDigits(sDay)} $sMonthName"
+            sYear == eYear ->
+                "${toArabicDigits(sDay)} $sMonthName ← ${toArabicDigits(eDay)} $eMonthName"
+            else ->
+                "${toArabicDigits(sDay)} $sMonthName ${toArabicDigits(sYear)} ← ${toArabicDigits(eDay)} $eMonthName ${toArabicDigits(eYear)}"
+        }
+    }
 }
+
+typealias ServiceCalendarHelper = SaturdayCalendarHelper
+
+
 
 

@@ -14,7 +14,9 @@ import com.example.data.model.Student
 import com.example.data.model.UserProfile
 import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
+import com.example.data.cache.LocalClassroomCache
 import com.google.firebase.Firebase
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.DocumentReference
@@ -23,6 +25,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.snapshots
+import java.util.Date
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1589,6 +1592,46 @@ class KamRepository(private val db: FirebaseFirestore) {
     ): Flow<List<CardEvent>> {
         return observeAllCardEventsForGroup(groupId, currentUserId)
             .map { events -> events.filter { it.monthKey == monthKey } }
+    }
+
+    /**
+     * One-shot `get()` query for `cardEvents` within `[startMillis, endMillis]` by `createdAt`
+     * when the servant selects a custom date range outside the current month.
+     * - Does NOT attach a live listener.
+     * - Queries `groups/{groupId}/cardEvents` directly by `createdAt` range so it uses Firestore's
+     *   automatic single-field index on `createdAt` without requiring a manual composite index.
+     * - Stores the result in [LocalClassroomCache] so repeated selections of historical periods
+     *   return in 0ms without re-querying Firestore.
+     */
+    suspend fun fetchCardEventsForDateRange(
+        groupId: String,
+        startMillis: Long,
+        endMillis: Long
+    ): Result<List<CardEvent>> = runCatching {
+        if (groupId.isBlank()) return@runCatching emptyList()
+        LocalClassroomCache.getCachedHistoricalRangeEvents(groupId, startMillis, endMillis)?.let { cached ->
+            return@runCatching cached
+        }
+        val path = "groups/$groupId/cardEvents"
+        val startTimestamp = Timestamp(Date(startMillis))
+        val endTimestamp = Timestamp(Date(endMillis))
+        try {
+            val snapshot = db.collection("groups").document(groupId).collection("cardEvents")
+                .whereGreaterThanOrEqualTo("createdAt", startTimestamp)
+                .whereLessThanOrEqualTo("createdAt", endTimestamp)
+                .get()
+                .await()
+            val events = snapshot.documents.mapNotNull { doc ->
+                doc.toObject(CardEvent::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            }.sortedByDescending { it.effectiveTimestampMillis() }
+            LocalClassroomCache.saveCachedHistoricalRangeEvents(groupId, startMillis, endMillis, events)
+            events
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, path)
+            throw e
+        }
     }
 
     fun observeAllMonthlyBalancesForGroup(

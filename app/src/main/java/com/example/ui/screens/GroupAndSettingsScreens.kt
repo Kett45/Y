@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -81,6 +82,7 @@ import com.example.data.model.CardType
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
 import com.example.data.model.ServantBlock
+import com.example.data.model.ServiceCalendarHelper
 import com.example.data.sync.GitHubSmartSyncEngine
 import com.example.ui.components.AppearanceFullScreen
 import com.example.ui.components.AppearanceSettingsEntryCard
@@ -134,37 +136,80 @@ fun GroupInvitationsScreen(
     val context = LocalContext.current
     var inviteeName by rememberSaveable { mutableStateOf("") }
     var blockPendingServantRemoval by remember { mutableStateOf<ServantBlock?>(null) }
+    var activeInfoDialogTopic by rememberSaveable { mutableStateOf<String?>(null) }
 
     val fullDailyCode = state.group?.fullDailyInviteCode.orEmpty()
     val remainingHours = state.group?.remainingDailyCodeHours() ?: 24
     val bannedServants = state.group?.bannedServantsList.orEmpty()
+
+    if (activeInfoDialogTopic != null) {
+        AlertDialog(
+            onDismissRequest = { activeInfoDialogTopic = null },
+            title = {
+                Text(
+                    text = when (activeInfoDialogTopic) {
+                        "CODE" -> "معلومات رمز المجموعة اليومي"
+                        "BLOCKS" -> "إدارة بلوكات الخدام"
+                        else -> "الأدوار والصلاحيات"
+                    },
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    when (activeInfoDialogTopic) {
+                        "CODE" -> {
+                            Text("• بادئة المجموعة الفريدة: ${state.group?.inviteCode.orEmpty()} • الجزء اليومي: ${state.group?.effectiveDailyToken.orEmpty()}")
+                            Text("• يتغير الجزء اليومي تلقائياً كل ٢٤ ساعة لمنع دخول غير المدعوين (متبقي حوالي $remainingHours ساعة).")
+                            Text("• شارك الرمز الكامل ($fullDailyCode) مع الخادم الجديد؛ بادئة المجموعة تضمن عدم تداخل أي مجموعتين نهائياً.")
+                        }
+                        "BLOCKS" -> {
+                            Text("• الضغط على زر الإزالة بجوار بلوك الخادم يقوم بإزالة الخادم وحظره من المجموعة فقط مع الإبقاء على البلوك وجميع أطفاله ونقاطهم محفوظة بالكامل.")
+                        }
+                        else -> {
+                            Text("• الأمين: كل الصلاحيات شاملة إزالة وحظر الخدام، تجديد الرمز اليومي، إنشاء المجموعة، والدعوات.")
+                            Text("• الخادم: يرى كل أطفال وبلوكات المجموعة، يضيف ويعدّل وينقل ويرتّب ويعطي الكروت (الحذف مرفوض من السيرفر).")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { activeInfoDialogTopic = null }) {
+                    Text("حسناً")
+                }
+            }
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .testTag("group_invitations_list"),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Group Daily Invite Code Card (24-Hour Rotating Code with Unique Group Prefix)
+        // 1. Group Header, Counters & Daily Invite Code Card (Clean & Compact)
         item(key = "group_code_card") {
-            val isCompactMobile = LocalUiScaleController.current.isCompactMobile
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
                 )
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (isCompactMobile) {
-                        // On mobile: Full-width group title & stats on top, followed by full-width invite code buttons row below
+                    // Header row: Group Name + Admin Name + Counters + Small ⓘ Info Icon
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
                         Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
                             Text(
                                 text = state.group?.name ?: "المجموعة",
@@ -173,7 +218,7 @@ fun GroupInvitationsScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "الأمين: ${state.group?.adminName.orEmpty()} • الدور: ${if (state.isAdmin) "الأمين" else "خادم"}",
+                                text = "الأمين: ${state.group?.adminName.orEmpty()}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
@@ -185,213 +230,122 @@ fun GroupInvitationsScreen(
                             )
                         }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        IconButton(
+                            onClick = { activeInfoDialogTopic = "CODE" },
+                            modifier = Modifier
+                                .size(32.dp)
+                                .testTag("group_code_info_button")
                         ) {
-                            Button(
-                                onClick = {
-                                    val code = fullDailyCode.ifBlank { state.group?.inviteCode.orEmpty() }
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                    clipboard?.setPrimaryClip(ClipData.newPlainText("رمز المجموعة اليومي", code))
-                                    onCopyBanner("تم نسخ رمز المجموعة اليومي: $code")
-                                },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("copy_group_code_button")
-                            ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = "نسخ الرمز اليومي", modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = fullDailyCode.ifBlank { state.group?.inviteCode ?: "---" },
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
-
-                            OutlinedButton(
-                                onClick = {
-                                    val grp = state.group ?: return@OutlinedButton
-                                    val code = grp.fullDailyInviteCode
-                                    val msg = KamViewModel.buildInvitationShareText(
-                                        groupName = grp.name,
-                                        inviteCode = code,
-                                        inviteeName = "خادم الفصل"
-                                    )
-                                    shareInvitationText(
-                                        context = context,
-                                        shareMessage = msg,
-                                        inviteCode = code,
-                                        onCopyFallback = onCopyBanner
-                                    )
-                                },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.testTag("share_group_invite_button")
-                            ) {
-                                Icon(Icons.Default.Share, contentDescription = "مشاركة الدعوة", modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "مشاركة الرمز",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
-                        }
-                    } else {
-                        // Tablet / Expanded layout
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = state.group?.name ?: "المجموعة",
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "الأمين: ${state.group?.adminName.orEmpty()} • الدور: ${if (state.isAdmin) "الأمين" else "خادم"}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                                Text(
-                                    text = "إجمالي الأطفال المشتركين: ${state.students.size} / $MAX_STUDENTS_PER_GROUP • البلوكات: ${state.blocks.size} • الأعضاء: ${state.group?.memberUids?.size ?: 1} / 7",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-
-                            Column(
-                                horizontalAlignment = Alignment.End,
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Button(
-                                    onClick = {
-                                        val code = fullDailyCode.ifBlank { state.group?.inviteCode.orEmpty() }
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                        clipboard?.setPrimaryClip(ClipData.newPlainText("رمز المجموعة اليومي", code))
-                                        onCopyBanner("تم نسخ رمز المجموعة اليومي: $code")
-                                    },
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.testTag("copy_group_code_button")
-                                ) {
-                                    Icon(Icons.Default.ContentCopy, contentDescription = "نسخ الرمز اليومي", modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = fullDailyCode.ifBlank { state.group?.inviteCode ?: "---" },
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-
-                                OutlinedButton(
-                                    onClick = {
-                                        val grp = state.group ?: return@OutlinedButton
-                                        val code = grp.fullDailyInviteCode
-                                        val msg = KamViewModel.buildInvitationShareText(
-                                            groupName = grp.name,
-                                            inviteCode = code,
-                                            inviteeName = "خادم الفصل"
-                                        )
-                                        shareInvitationText(
-                                            context = context,
-                                            shareMessage = msg,
-                                            inviteCode = code,
-                                            onCopyFallback = onCopyBanner
-                                        )
-                                    },
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.testTag("share_group_invite_button")
-                                ) {
-                                    Icon(Icons.Default.Share, contentDescription = "مشاركة الدعوة", modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(text = "مشاركة الرمز", style = MaterialTheme.typography.labelMedium)
-                                }
-                            }
+                            Icon(
+                                imageVector = Icons.Outlined.Info,
+                                contentDescription = "معلومات الرمز والصلاحيات",
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
 
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-                        modifier = Modifier.fillMaxWidth()
+                    // Code Actions Row: Copy Full Code + Share + Compact Timer "⏱ ٢١س" + Small Refresh Icon
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(
+                        Button(
+                            onClick = {
+                                val code = fullDailyCode.ifBlank { state.group?.inviteCode.orEmpty() }
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                clipboard?.setPrimaryClip(ClipData.newPlainText("رمز المجموعة اليومي", code))
+                                onCopyBanner("تم نسخ رمز المجموعة اليومي: $code")
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                .weight(1f)
+                                .testTag("copy_group_code_button")
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                            Icon(Icons.Default.ContentCopy, contentDescription = "نسخ الرمز اليومي", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = fullDailyCode.ifBlank { state.group?.inviteCode ?: "---" },
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+
+                        // Compact Timer Badge "⏱ ٢١س"
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
+                        ) {
+                            Text(
+                                text = "⏱ ${ServiceCalendarHelper.toArabicDigits(remainingHours)}س",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                            )
+                        }
+
+                        // Small Refresh Icon Button (Admin Only)
+                        if (state.isAdmin) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clickable(onClick = onRefreshDailyInviteCode)
+                                    .testTag("refresh_daily_code_button")
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "بادئة المجموعة الفريدة: ${state.group?.inviteCode.orEmpty()} • الجزء اليومي: ${state.group?.effectiveDailyToken.orEmpty()}",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "يتغير تلقائياً كل ٢٤ ساعة لمنع دخول غير المدعوين (متبقي حوالي $remainingHours ساعة)",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                if (state.isAdmin && !isCompactMobile) {
-                                    OutlinedButton(
-                                        onClick = onRefreshDailyInviteCode,
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier.testTag("refresh_daily_code_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Refresh,
-                                            contentDescription = "تجديد الرمز فوراً",
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("تجديد فوراً", style = MaterialTheme.typography.labelMedium)
-                                    }
-                                }
-                            }
-                            if (state.isAdmin && isCompactMobile) {
-                                OutlinedButton(
-                                    onClick = onRefreshDailyInviteCode,
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("refresh_daily_code_button")
-                                ) {
+                                Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = Icons.Default.Refresh,
-                                        contentDescription = "تجديد الرمز فوراً",
-                                        modifier = Modifier.size(16.dp)
+                                        contentDescription = "تجديد الرمز اليومي فوراً",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("تجديد الرمز اليومي فوراً", style = MaterialTheme.typography.labelMedium)
                                 }
                             }
                         }
-                    }
 
-                    Text(
-                        text = "شارك الرمز اليومي الكامل ($fullDailyCode) مع الخادم الجديد؛ بادئة المجموعة تضمن عدم تداخل أي مجموعتين نهائياً.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
+                        OutlinedButton(
+                            onClick = {
+                                val grp = state.group ?: return@OutlinedButton
+                                val code = grp.fullDailyInviteCode
+                                val msg = KamViewModel.buildInvitationShareText(
+                                    groupName = grp.name,
+                                    inviteCode = code,
+                                    inviteeName = "خادم الفصل"
+                                )
+                                shareInvitationText(
+                                    context = context,
+                                    shareMessage = msg,
+                                    inviteCode = code,
+                                    onCopyFallback = onCopyBanner
+                                )
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                            modifier = Modifier.testTag("share_group_invite_button")
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = "مشاركة الدعوة", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "مشاركة",
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // 1b. Multi-Group Switcher Card (Only in Group & Settings screens to prevent accidental switching)
+        // 1b. Multi-Group Switcher Card
         item(key = "multi_group_switcher_in_group_screen") {
             MultiGroupSwitcherCard(
                 state = state,
@@ -401,7 +355,7 @@ fun GroupInvitationsScreen(
             )
         }
 
-        // 2. Send New Invitation (Admin Only)
+        // 2. Send New Invitation (Admin Only — Clean Field + Button Only)
         if (state.isAdmin) {
             item(key = "admin_send_invite_card") {
                 Card(
@@ -410,18 +364,13 @@ fun GroupInvitationsScreen(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "دعوة خادم جديد ومشاركة الرمز اليومي (للأمين)",
+                            text = "دعوة خادم جديد",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "اكتب اسم الخادم واضغط 'دعوة' لحفظ الدعوة وفتح نافذة مشاركة الرسالة والرمز اليومي (صالح لمدة يوم واحد):",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -431,7 +380,7 @@ fun GroupInvitationsScreen(
                             OutlinedTextField(
                                 value = inviteeName,
                                 onValueChange = { inviteeName = it },
-                                label = { Text("اسم الخادم المدعو") },
+                                placeholder = { Text("اسم الخادم المدعو") },
                                 singleLine = true,
                                 modifier = Modifier
                                     .weight(1f)
@@ -462,7 +411,7 @@ fun GroupInvitationsScreen(
                                 },
                                 enabled = inviteeName.trim().isNotBlank(),
                                 modifier = Modifier
-                                    .height(54.dp)
+                                    .height(52.dp)
                                     .testTag("send_invitation_button"),
                                 shape = RoundedCornerShape(12.dp)
                             ) {
@@ -613,9 +562,12 @@ fun GroupInvitationsScreen(
 
         // 4. Servant Blocks Management (Remove & Ban Servant ONLY — Preserve Block & Children)
         item(key = "blocks_management_header") {
-            Column(
-                modifier = Modifier.padding(top = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = "بلوكات الخدام المشتركة (${state.blocks.size})",
@@ -623,11 +575,17 @@ fun GroupInvitationsScreen(
                     fontWeight = FontWeight.Bold
                 )
                 if (state.isAdmin) {
-                    Text(
-                        text = "الضغط على زر الإزالة بجوار بلوك الخادم يقوم بإزالة الخادم وحظره من المجموعة فقط مع الإبقاء على البلوك وجميع أطفاله ونقاطهم كما هم تماماً.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    IconButton(
+                        onClick = { activeInfoDialogTopic = "BLOCKS" },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Info,
+                            contentDescription = "توضيح إزالة الخادم",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
         }
@@ -746,18 +704,11 @@ fun GroupInvitationsScreen(
                                 tint = MaterialTheme.colorScheme.error
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(
-                                    text = "قائمة الخدام المحظورين من المجموعة (${bannedServants.size})",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "أي خادم في هذه القائمة تظهر له رسالة «تم إزالتك من هذه المجموعة» إذا حاول التسجيل بالرمز، ويمكنك إلغاء الحظر عنه في أي وقت:",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Text(
+                                text = "الخدام المحظورون (${bannedServants.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
 
                         if (bannedServants.isEmpty()) {
@@ -810,41 +761,39 @@ fun GroupInvitationsScreen(
             }
         }
 
-        // 5. Role Permissions Matrix Summary
+        // 5. Compact Role Permissions Info Row
         item(key = "roles_matrix_card") {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { activeInfoDialogTopic = "ROLES" }
             ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.Security,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "الأدوار والصلاحيات المحمية في Firebase Security Rules",
+                            text = "الأدوار والصلاحيات",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    Text(
-                        text = "• الأمين: كل الصلاحيات شاملة إزالة وحظر الخدام، تجديد الرمز اليومي، إنشاء المجموعة، والدعوات.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "• الخادم: يرى كل أطفال وبلوكات المجموعة، يضيف ويعدّل وينقل ويرتّب ويعطي الكروت (الحذف مرفوض من السيرفر).",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "• أمان الرمز اليومي: لكل مجموعة بادئة فريدة خاصة بها مع رمز يومي صالح لمدة ٢٤ ساعة يمنع أي تشابه أو تداخل بين المجموعات.",
-                        style = MaterialTheme.typography.bodySmall
+                    Icon(
+                        imageVector = Icons.Outlined.Info,
+                        contentDescription = "عرض تفاصيل الصلاحيات",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
@@ -1548,18 +1497,11 @@ private fun MultiGroupSwitcherCard(
                     tint = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Column {
-                    Text(
-                        text = "مجموعاتي والتبديل بينها (${groupsList.size})",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "كل مجموعة منفصلة تماماً ببياناتها وأطفالها. اضغط على أي مجموعة للتبديل إليها فوراً:",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    text = "مجموعاتي والتبديل بينها (${groupsList.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
             }
 
             HorizontalDivider()

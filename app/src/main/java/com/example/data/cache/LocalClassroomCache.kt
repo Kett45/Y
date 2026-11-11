@@ -21,7 +21,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import com.google.firebase.Timestamp
 import java.io.File
+import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 
 @Immutable
@@ -68,6 +70,7 @@ object LocalClassroomCache {
 
     private val memorySnapshots = ConcurrentHashMap<String, CachedClassroomSnapshot>()
     private val memoryPrefs = ConcurrentHashMap<String, LocalUserPreferences>()
+    private val historicalRangeMemoryCache = ConcurrentHashMap<String, List<CardEvent>>()
 
     fun init(context: Context?) {
         val ctx = context?.applicationContext ?: return
@@ -469,20 +472,79 @@ object LocalClassroomCache {
         put("servantName", e.servantName)
         put("monthKey", e.monthKey)
         put("weekKey", e.weekKey)
+        val tsMillis = e.createdAt?.toDate()?.time ?: 0L
+        if (tsMillis > 0L) {
+            put("createdAtMillis", tsMillis)
+        }
     }
 
-    private fun deserializeCardEvent(obj: JSONObject): CardEvent = CardEvent(
-        id = obj.optString("id", ""),
-        groupId = obj.optString("groupId", ""),
-        studentId = obj.optString("studentId", ""),
-        studentName = obj.optString("studentName", ""),
-        cardType = obj.optString("cardType", "ATTENDANCE"),
-        points = obj.optLong("points", 3L),
-        servantId = obj.optString("servantId", ""),
-        servantName = obj.optString("servantName", ""),
-        monthKey = obj.optString("monthKey", ""),
-        weekKey = obj.optString("weekKey", "")
-    )
+    private fun deserializeCardEvent(obj: JSONObject): CardEvent {
+        val createdAtMs = obj.optLong("createdAtMillis", 0L)
+        val parsedCreatedAt = if (createdAtMs > 0L) Timestamp(Date(createdAtMs)) else null
+        return CardEvent(
+            id = obj.optString("id", ""),
+            groupId = obj.optString("groupId", ""),
+            studentId = obj.optString("studentId", ""),
+            studentName = obj.optString("studentName", ""),
+            cardType = obj.optString("cardType", "ATTENDANCE"),
+            points = obj.optLong("points", 3L),
+            servantId = obj.optString("servantId", ""),
+            servantName = obj.optString("servantName", ""),
+            monthKey = obj.optString("monthKey", ""),
+            weekKey = obj.optString("weekKey", ""),
+            createdAt = parsedCreatedAt
+        )
+    }
+
+    /**
+     * Returns cached historical `cardEvents` for an out-of-month date range `[startDayMillis, endDayMillis]`
+     * from memory or local disk so past periods never repeat network `get()` calls.
+     */
+    fun getCachedHistoricalRangeEvents(
+        groupId: String,
+        startDayMillis: Long,
+        endDayMillis: Long
+    ): List<CardEvent>? {
+        if (groupId.isBlank()) return null
+        val key = "${groupId}_${startDayMillis / 86_400_000L}_${endDayMillis / 86_400_000L}"
+        historicalRangeMemoryCache[key]?.let { return it }
+        val ctx = appContext ?: return null
+        val dir = File(ctx.filesDir, "historical_range_cache")
+        val file = File(dir, "range_${key.replace(SAFE_USER_ID_REGEX, "_")}.json")
+        if (!file.exists()) return null
+        return runCatching {
+            val arr = JSONArray(file.readText())
+            val list = ArrayList<CardEvent>(arr.length())
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                list.add(deserializeCardEvent(item))
+            }
+            historicalRangeMemoryCache[key] = list
+            list
+        }.getOrNull()
+    }
+
+    fun saveCachedHistoricalRangeEvents(
+        groupId: String,
+        startDayMillis: Long,
+        endDayMillis: Long,
+        events: List<CardEvent>
+    ) {
+        if (groupId.isBlank()) return
+        val key = "${groupId}_${startDayMillis / 86_400_000L}_${endDayMillis / 86_400_000L}"
+        historicalRangeMemoryCache[key] = events
+        val ctx = appContext ?: return
+        ioScope.launch {
+            runCatching {
+                val dir = File(ctx.filesDir, "historical_range_cache")
+                if (!dir.exists()) dir.mkdirs()
+                val file = File(dir, "range_${key.replace(SAFE_USER_ID_REGEX, "_")}.json")
+                val arr = JSONArray()
+                events.forEach { arr.put(serializeCardEvent(it)) }
+                file.writeText(arr.toString())
+            }
+        }
+    }
 
     private fun serializeMonthlyBalance(m: MonthlyBalance): JSONObject = JSONObject().apply {
         put("id", m.id)
@@ -518,3 +580,4 @@ object LocalClassroomCache {
         return list
     }
 }
+

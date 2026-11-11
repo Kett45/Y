@@ -503,6 +503,119 @@ data class KamScreenState(
         indices.leaderboardCache[cacheKey] = computed
         return computed
     }
+
+    /**
+     * Returns `true` if the leaderboard for the custom date range `[startMillis, endMillis]` is already
+     * precomputed and cached in memory for the current classroom data snapshot.
+     */
+    fun isLeaderboardDateRangeCached(
+        startMillis: Long,
+        endMillis: Long,
+        extraHistoricalEventsCount: Int = 0
+    ): Boolean {
+        val startBound = SaturdayCalendarHelper.normalizeStartOfDayMillis(startMillis)
+        val endBound = SaturdayCalendarHelper.normalizeEndOfDayMillis(endMillis)
+        val activeCards = enabledCardTypes.ifEmpty { CardType.entries }
+        val cacheKey = "RANGE|${startBound / 86_400_000L}|${endBound / 86_400_000L}|${activeCards.size}|${effectiveAllCardEvents.size}|$extraHistoricalEventsCount|${students.size}"
+        return indices.leaderboardCache.containsKey(cacheKey)
+    }
+
+    /**
+     * Computes the full-class leaderboard and per-card breakdown for ALL students in the classroom
+     * across an arbitrary custom date range `[startMillis, endMillis]` strictly from `cardEvents`
+     * (never from `monthlyBalances`).
+     * - Uses `event.effectiveTimestampMillis()` which reads `createdAt` and falls back to `weekKey`/`monthKey`
+     *   if an older event lacks a valid `createdAt`.
+     * - Memoizes the sorted result in [PrecomputedClassroomIndices.leaderboardCache] so repeated opens
+     *   or filter changes return in 0ms without recalculating.
+     */
+    fun computeClassLeaderboardEntriesForDateRange(
+        startMillis: Long,
+        endMillis: Long,
+        extraHistoricalEvents: List<CardEvent> = emptyList()
+    ): List<StudentDetailedLeaderboardEntry> {
+        if (students.isEmpty()) return emptyList()
+        val startBound = SaturdayCalendarHelper.normalizeStartOfDayMillis(startMillis)
+        val endBound = SaturdayCalendarHelper.normalizeEndOfDayMillis(endMillis)
+        val allEvents = effectiveAllCardEvents
+        val activeCards = enabledCardTypes.ifEmpty { CardType.entries }
+        val cacheKey = "RANGE|${startBound / 86_400_000L}|${endBound / 86_400_000L}|${activeCards.size}|${allEvents.size}|${extraHistoricalEvents.size}|${students.size}"
+        indices.leaderboardCache[cacheKey]?.let { cached ->
+            return cached
+        }
+
+        // Merge in-memory events with any fetched historical range events (deduplicated by id)
+        val combinedEvents = if (extraHistoricalEvents.isEmpty()) {
+            allEvents
+        } else {
+            val byId = LinkedHashMap<String, CardEvent>(allEvents.size + extraHistoricalEvents.size)
+            for (i in 0 until allEvents.size) {
+                val ev = allEvents[i]
+                val key = ev.id.ifBlank { "${ev.studentId}_${ev.cardType}_${ev.weekKey}_${ev.servantId}" }
+                byId[key] = ev
+            }
+            for (i in 0 until extraHistoricalEvents.size) {
+                val ev = extraHistoricalEvents[i]
+                val key = ev.id.ifBlank { "${ev.studentId}_${ev.cardType}_${ev.weekKey}_${ev.servantId}" }
+                if (!byId.containsKey(key)) {
+                    byId[key] = ev
+                }
+            }
+            byId.values.toList()
+        }
+
+        val scopedEvents = ArrayList<CardEvent>(combinedEvents.size)
+        for (i in 0 until combinedEvents.size) {
+            val ev = combinedEvents[i]
+            val ts = ev.effectiveTimestampMillis()
+            if (ts in startBound..endBound) {
+                scopedEvents.add(ev)
+            }
+        }
+
+        val scopedEventsByStudentId = scopedEvents.groupBy { it.studentId }
+
+        val unsorted = students.map { student ->
+            val stuEvents = scopedEventsByStudentId[student.id].orEmpty()
+            val eventsByType = if (stuEvents.isEmpty()) emptyMap() else stuEvents.groupBy { it.cardType }
+
+            val breakdown = activeCards.map { cardType ->
+                val matching = eventsByType[cardType.id].orEmpty()
+                StudentCardTypeBreakdown(
+                    cardType = cardType,
+                    count = matching.size,
+                    points = matching.sumOf { it.points }
+                )
+            }
+
+            // Strictly sum points from cardEvents in the date range (never monthlyBalances)
+            val totalPoints = stuEvents.sumOf { it.points }
+            val attendanceEvents = eventsByType[CardType.ATTENDANCE.id].orEmpty()
+
+            StudentDetailedLeaderboardEntry(
+                student = student,
+                rank = 0,
+                totalPoints = totalPoints,
+                totalCardsCount = stuEvents.size,
+                attendanceCount = attendanceEvents.size,
+                attendancePoints = attendanceEvents.sumOf { it.points },
+                breakdownByCard = breakdown
+            )
+        }
+
+        val computed = unsorted
+            .sortedWith(
+                compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                    .thenByDescending { it.attendancePoints }
+                    .thenByDescending { it.totalCardsCount }
+                    .thenBy { it.student.studentNumber }
+            )
+            .mapIndexed { idx, entry ->
+                entry.copy(rank = idx + 1)
+            }
+        indices.leaderboardCache[cacheKey] = computed
+        return computed
+    }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -567,6 +680,9 @@ class KamViewModel(
     init {
         StudentAvatarImageHelper.cloudAvatarFetcher = { groupId, studentId ->
             repository.fetchStudentAvatar(groupId, studentId)
+        }
+        historicalRangeFetcher = { groupId, startMillis, endMillis ->
+            repository.fetchCardEventsForDateRange(groupId, startMillis, endMillis).getOrDefault(emptyList())
         }
         ensureProfileInitialized()
     }
@@ -836,11 +952,12 @@ class KamViewModel(
             currentUserId in group.bannedUids ||
                 (currentUserId !in group.memberUids && group.adminId != currentUserId)
             )
-        if (isBannedOrRemovedFromGroup && group != null) {
-            if (lastEjectedBannedGroupId != group.inviteCode) {
-                lastEjectedBannedGroupId = group.inviteCode
+        if (isBannedOrRemovedFromGroup) {
+            val bannedGrp = group!!
+            if (lastEjectedBannedGroupId != bannedGrp.inviteCode) {
+                lastEjectedBannedGroupId = bannedGrp.inviteCode
                 _operationError.value = "تم إزالتك من هذه المجموعة"
-                val remainingJoined = profile?.joinedGroupIds.orEmpty().filter { it != group.inviteCode }
+                val remainingJoined = profile?.joinedGroupIds.orEmpty().filter { it != bannedGrp.inviteCode }
                 viewModelScope.launch {
                     repository.updateUserGroup("", remainingJoined)
                 }
@@ -949,9 +1066,10 @@ class KamViewModel(
             previousGroupId = fallbackPrevGroup,
             precomputedIndices = precomputed
         )
-        // Prewarm the default current-month leaderboard on Dispatchers.Default so opening the Leaderboard screen is 0ms
+        // Prewarm the default current-month date-range leaderboard on Dispatchers.Default so opening the Leaderboard screen is 0ms
         if (effectiveStudents.isNotEmpty() && selectedMonth.isNotBlank()) {
-            builtState.computeClassLeaderboardEntries(setOf(selectedMonth), null)
+            val (defaultStartMs, defaultEndMs) = SaturdayCalendarHelper.computeMonthDateRangeUtcMillis(selectedMonth)
+            builtState.computeClassLeaderboardEntriesForDateRange(defaultStartMs, defaultEndMs)
         }
         builtState
     }.flowOn(Dispatchers.Default)
@@ -2177,5 +2295,8 @@ class KamViewModel(
                 }
             }
         }.distinctUntilChanged()
+
+        @Volatile
+        var historicalRangeFetcher: (suspend (groupId: String, startMillis: Long, endMillis: Long) -> List<CardEvent>)? = null
     }
 }

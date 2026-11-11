@@ -1594,13 +1594,14 @@ fun StudentPhotoPickerDialog(
                             },
                             modifier = Modifier
                                 .weight(1f)
+                                .height(38.dp)
                                 .testTag("reframe_current_main_photo_button"),
                             shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("ضبط مكان الوجه", style = MaterialTheme.typography.labelMedium)
+                            Text("ضبط الوجه", style = MaterialTheme.typography.labelMedium, maxLines = 1)
                         }
 
                         OutlinedButton(
@@ -1624,23 +1625,17 @@ fun StudentPhotoPickerDialog(
                             },
                             modifier = Modifier
                                 .weight(1f)
+                                .height(38.dp)
                                 .testTag("download_current_main_photo_button"),
                             shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Icon(Icons.Default.ArrowDownward, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("تحميل الصورة كاملة", style = MaterialTheme.typography.labelMedium)
+                            Text("تحميل كاملة", style = MaterialTheme.typography.labelMedium, maxLines = 1)
                         }
                     }
                 }
-
-                Text(
-                    text = "الصور تُحفظ كاملةً بدون أي قص داخل الألبوم، والجزء الذي تحدده فقط يظهر داخل دائرة البروفايل مثل فيسبوك.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
 
                 statusBannerMessage?.let { msg ->
                     Surface(
@@ -1679,9 +1674,10 @@ fun StudentPhotoPickerDialog(
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .height(46.dp)
+                            .height(42.dp)
                             .testTag("pick_student_photo_gallery_button"),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.PhotoLibrary,
@@ -1689,7 +1685,7 @@ fun StudentPhotoPickerDialog(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("اختيار من المعرض")
+                        Text("المعرض", maxLines = 1)
                     }
 
                     OutlinedButton(
@@ -1699,9 +1695,10 @@ fun StudentPhotoPickerDialog(
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .height(46.dp)
+                            .height(42.dp)
                             .testTag("pick_student_photo_camera_button"),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.CameraAlt,
@@ -1709,7 +1706,7 @@ fun StudentPhotoPickerDialog(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("الكاميرا")
+                        Text("الكاميرا", maxLines = 1)
                     }
                 }
 
@@ -2391,15 +2388,10 @@ fun StudentPhotoAlbumSection(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "ألبوم صور الطفل الكاملة المحفوظة (${albumPhotos.size})",
+                        text = "ألبوم صور الطفل (${albumPhotos.size})",
                         style = MaterialTheme.typography.titleSmall,
                         color = Color(0xFF0F172A),
                         fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "الصور تُحفظ هنا كاملةً بدون قص • اضغط على أي صورة لعرضها كاملة أو تحميلها على هاتفك أو ضبط مكان الوجه",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF475569)
                     )
                 }
             }
