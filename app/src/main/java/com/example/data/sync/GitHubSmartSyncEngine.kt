@@ -104,6 +104,7 @@ data class GitHubSyncUiState(
     val isDownloadingApk: Boolean = false,
     val downloadProgressPercent: Int = 0,
     val downloadedApkReady: Boolean = false,
+    val isUpToDateConfirmed: Boolean = false,
     val downloadErrorArabic: String? = null,
     val silentDeltaBannerMessage: String? = null,
     val majorUpdatePrompt: GitHubVersionManifest? = null,
@@ -451,7 +452,18 @@ object GitHubSmartSyncEngine {
             .apply()
 
         val apkFile = getLocalApkUpdateFile(context.applicationContext)
-        val isReady = apkFile.exists() && apkFile.length() > 100_000L
+        val installedSha = prefs.getString(KEY_INSTALLED_APK_SHA256, "").orEmpty()
+        val isReady = if (apkFile.exists() && apkFile.length() > 100_000L) {
+            val cachedApkFileSha = computeFileSha256(apkFile)
+            if (installedSha.isNotBlank() && cachedApkFileSha.equals(installedSha, ignoreCase = true)) {
+                runCatching { apkFile.delete() }
+                false
+            } else {
+                true
+            }
+        } else {
+            false
+        }
 
         _syncState.value = _syncState.value.copy(
             repositorySlug = FIXED_GITHUB_REPO,
@@ -471,6 +483,29 @@ object GitHubSmartSyncEngine {
     private fun getLocalApkUpdateFile(context: Context): File {
         val updateDir = File(context.cacheDir, APK_UPDATE_DIR).apply { mkdirs() }
         return File(updateDir, APK_UPDATE_FILENAME)
+    }
+
+    /**
+     * Unified smart action for the single update button in Settings:
+     * - If a verified newer APK is already downloaded and ready, opens the native installer immediately.
+     * - Otherwise checks GitHub first (`versionCode` + `apkSha256`):
+     *   • If a newer version or modified APK exists -> downloads and installs automatically.
+     *   • If already on the latest version -> confirms to the user that the app is up to date without downloading.
+     */
+    fun triggerSmartUpdateCheckOrInstall(context: Context) {
+        if (_syncState.value.isCheckingInBackground || _syncState.value.isDownloadingApk) return
+        val appContext = context.applicationContext
+        val apkFile = getLocalApkUpdateFile(appContext)
+        if (_syncState.value.downloadedApkReady &&
+            _syncState.value.majorUpdatePrompt != null &&
+            apkFile.exists() &&
+            apkFile.length() > 100_000L
+        ) {
+            if (installDownloadedApk(context)) return
+        }
+        downloadScope.launch {
+            checkAndSyncSilently(appContext, forceManualCheck = true)
+        }
     }
 
     /**
@@ -498,10 +533,17 @@ object GitHubSmartSyncEngine {
                 ?: fetchTextFromUrl(defaultVersionManifestUrl(FIXED_GITHUB_REPO, "master"))
 
             if (manifestJson.isNullOrBlank()) {
+                val verName = _syncState.value.effectiveSyncedVersionName
                 _syncState.value = _syncState.value.copy(
                     isCheckingInBackground = false,
+                    isUpToDateConfirmed = true,
+                    lastSyncSummaryArabic = if (forceManualCheck) {
+                        "أنت على أحدث إصدار بالفعل (v$verName) — لا يوجد تحديث جديد للتنزيل"
+                    } else {
+                        _syncState.value.lastSyncSummaryArabic
+                    },
                     silentDeltaBannerMessage = if (forceManualCheck) {
-                        "التطبيق يعمل على أحدث نسخة متاحة (${_syncState.value.effectiveSyncedVersionName})"
+                        "أنت على أحدث إصدار بالفعل (v$verName) — لا يوجد تحديث جديد للتنزيل"
                     } else {
                         null
                     }
@@ -544,6 +586,13 @@ object GitHubSmartSyncEngine {
                 remoteManifest = manifest
             )
 
+            if (!hasNewerApkBinary) {
+                val cachedApk = getLocalApkUpdateFile(appContext)
+                if (cachedApk.exists()) {
+                    runCatching { cachedApk.delete() }
+                }
+            }
+
             val isDismissed = manifest.versionCode == dismissedMajorVersion &&
                 (manifest.apkSha256.isBlank() || manifest.apkSha256.equals(dismissedApkSha256, ignoreCase = true))
             val shouldPromptBinaryUpgrade = hasNewerApkBinary && (forceManualCheck || !isDismissed)
@@ -557,6 +606,7 @@ object GitHubSmartSyncEngine {
                     } else {
                         BuildConfig.VERSION_NAME
                     }
+                    val upToDateMsg = "أنت على أحدث إصدار بالفعل (v$effectiveName) — لا يوجد تحديث جديد للتنزيل"
                     prefs.edit()
                         .putString(KEY_SYNCED_VERSION_NAME, effectiveName)
                         .putString(KEY_LATEST_DIRECT_APK_URL, singleCleanUrl)
@@ -565,6 +615,9 @@ object GitHubSmartSyncEngine {
                             if (manifest.apkSha256.isNotBlank() && !hasNewerApkBinary) {
                                 putString(KEY_SYNCED_APK_SHA256, manifest.apkSha256)
                             }
+                            if (forceManualCheck && !hasNewerApkBinary) {
+                                putString(KEY_LAST_SUMMARY, upToDateMsg)
+                            }
                         }
                         .apply()
 
@@ -572,8 +625,15 @@ object GitHubSmartSyncEngine {
                         isCheckingInBackground = false,
                         effectiveSyncedVersionName = effectiveName,
                         lastSyncedApkSha256 = manifest.apkSha256.ifBlank { currentSyncedApkSha256 },
+                        lastSyncSummaryArabic = if (forceManualCheck && !hasNewerApkBinary) {
+                            upToDateMsg
+                        } else {
+                            _syncState.value.lastSyncSummaryArabic
+                        },
                         latestDirectApkUrl = singleCleanUrl,
                         backupApkUrl = singleCleanUrl,
+                        downloadedApkReady = if (!hasNewerApkBinary) false else _syncState.value.downloadedApkReady,
+                        isUpToDateConfirmed = !hasNewerApkBinary,
                         majorUpdatePrompt = if (shouldPromptBinaryUpgrade) manifest else null,
                         majorUpdateReasonArabic = if (shouldPromptBinaryUpgrade) {
                             manifest.releaseNotesArabic.ifBlank { "يتوفر تحديث جديد (v${manifest.versionName}) جاهز للتثبيت المباشر داخل التطبيق" }
@@ -581,7 +641,7 @@ object GitHubSmartSyncEngine {
                             null
                         },
                         silentDeltaBannerMessage = if (forceManualCheck && !hasNewerApkBinary) {
-                            "التطبيق محدّث بالفعل لأحدث نسخة على GitHub (v$effectiveName)"
+                            upToDateMsg
                         } else {
                             null
                         }
@@ -603,8 +663,13 @@ object GitHubSmartSyncEngine {
                         ?: manifest.versionName
                     val newSha = deltaPayload?.commitSha?.ifBlank { manifest.commitSha } ?: manifest.commitSha
                     val newApkSha256 = deltaPayload?.apkSha256?.ifBlank { manifest.apkSha256 } ?: manifest.apkSha256
-                    val summary = deltaPayload?.deltaSummaryArabic?.ifBlank { manifest.releaseNotesArabic }
-                        ?: manifest.releaseNotesArabic.ifBlank { "تمت مزامنة التحديثات تلقائياً" }
+                    val upToDateMsg = "أنت على أحدث إصدار بالفعل (v$newVersionName) — لا يوجد تحديث جديد للتنزيل"
+                    val summary = if (forceManualCheck && !hasNewerApkBinary) {
+                        upToDateMsg
+                    } else {
+                        deltaPayload?.deltaSummaryArabic?.ifBlank { manifest.releaseNotesArabic }
+                            ?: manifest.releaseNotesArabic.ifBlank { "تمت مزامنة التحديثات تلقائياً" }
+                    }
 
                     prefs.edit()
                         .putInt(KEY_SYNCED_VERSION_CODE, newVersionCode)
@@ -629,16 +694,18 @@ object GitHubSmartSyncEngine {
                         lastSyncSummaryArabic = summary,
                         latestDirectApkUrl = singleCleanUrl,
                         backupApkUrl = singleCleanUrl,
+                        downloadedApkReady = if (!hasNewerApkBinary) false else _syncState.value.downloadedApkReady,
+                        isUpToDateConfirmed = !hasNewerApkBinary,
                         majorUpdatePrompt = if (shouldPromptBinaryUpgrade) manifest else null,
                         majorUpdateReasonArabic = if (shouldPromptBinaryUpgrade) {
                             summary.ifBlank { "يتوفر تحديث جديد (v$newVersionName) جاهز للتثبيت المباشر" }
                         } else {
                             null
                         },
-                        silentDeltaBannerMessage = if (shouldPromptBinaryUpgrade) {
-                            "تم اكتشاف تحديث جديد ($newVersionName)؛ جاري تنزيل التحديث داخل التطبيق..."
-                        } else {
-                            "تم تحديث آخر التطورات ($newVersionName) تلقائياً بالخلفية"
+                        silentDeltaBannerMessage = when {
+                            shouldPromptBinaryUpgrade -> "تم اكتشاف تحديث جديد ($newVersionName)؛ جاري تنزيل التحديث داخل التطبيق..."
+                            forceManualCheck && !hasNewerApkBinary -> upToDateMsg
+                            else -> "تم تحديث آخر التطورات ($newVersionName) تلقائياً بالخلفية"
                         }
                     )
 
@@ -658,6 +725,7 @@ object GitHubSmartSyncEngine {
                         isCheckingInBackground = false,
                         latestDirectApkUrl = singleCleanUrl,
                         backupApkUrl = singleCleanUrl,
+                        isUpToDateConfirmed = false,
                         lastSyncSummaryArabic = decision.reasonArabic,
                         majorUpdatePrompt = if (shouldShowBar) manifest else null,
                         majorUpdateReasonArabic = if (shouldShowBar) decision.reasonArabic else null

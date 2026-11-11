@@ -1425,61 +1425,77 @@ private fun GitHubAutoSyncSettingsCard() {
                 )
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = {
+            if (syncState.isUpToDateConfirmed && !syncState.isCheckingInBackground && !syncState.isDownloadingApk) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("github_already_up_to_date_badge")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "أنت على أحدث إصدار بالفعل (v${syncState.effectiveSyncedVersionName}) — لا يوجد تحديث جديد للتنزيل",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            Button(
+                onClick = {
+                    val apkFileReady = syncState.downloadedApkReady && syncState.majorUpdatePrompt != null
+                    if (apkFileReady) {
+                        GitHubSmartSyncEngine.triggerSmartUpdateCheckOrInstall(context)
+                    } else {
                         scope.launch {
                             GitHubSmartSyncEngine.checkAndSyncSilently(context, forceManualCheck = true)
                         }
+                    }
+                },
+                enabled = !syncState.isCheckingInBackground && !syncState.isDownloadingApk,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("github_sync_now_button")
+            ) {
+                Icon(
+                    imageVector = if (syncState.isUpToDateConfirmed && !syncState.isCheckingInBackground && !syncState.isDownloadingApk) {
+                        Icons.Default.Check
+                    } else {
+                        Icons.Default.Refresh
                     },
-                    enabled = !syncState.isCheckingInBackground && !syncState.isDownloadingApk,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("github_sync_now_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (syncState.isCheckingInBackground) "جاري الفحص..." else "فحص وتحديث الآن",
-                        maxLines = 1
-                    )
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                        clipboard?.setPrimaryClip(
-                            ClipData.newPlainText("نجم الكارت v${syncState.effectiveSyncedVersionName} Latest APK", syncState.latestDirectApkUrl)
-                        )
-                        GitHubSmartSyncEngine.startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = when {
+                        syncState.isCheckingInBackground -> "جاري فحص التحديثات على GitHub..."
+                        syncState.isDownloadingApk -> "جاري تنزيل التحديث الجديد... (${syncState.downloadProgressPercent}%)"
+                        syncState.downloadedApkReady && syncState.majorUpdatePrompt != null ->
+                            "تثبيت التحديث الجاهز الآن (v${syncState.majorUpdatePrompt?.versionName.orEmpty()})"
+                        else -> "البحث عن تحديث وتثبيته تلقائياً"
                     },
-                    enabled = !syncState.isDownloadingApk,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("github_download_latest_apk_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Share,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (syncState.downloadedApkReady) "تثبيت التحديث الآن" else "تنزيل وتثبيت APK",
-                        maxLines = 1
-                    )
-                }
+                    maxLines = 1,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }
