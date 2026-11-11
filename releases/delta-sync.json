@@ -2,10 +2,10 @@
   "targetVersionCode": 6,
   "targetVersionName": "1.6",
   "minCompatibleBaseVersion": 3,
-  "commitSha": "9f63b1b47dee",
+  "commitSha": "b15c70787277",
   "apkSha256": "9f63b1b47dee033ee40d319ca2752ebfabab8392683ac0877217930339a77ed6",
-  "updatedAt": "2026-11-11T11:35:00Z",
-  "deltaSummaryArabic": "الإصدار 1.6 (نجم الكارت v1.6): فتح فوري بالتخزين المحلي + صفحة المظهر والسمتين (داكن وفاتح للشمس) + مزامنة تفضيلات الحساب على السحابة",
+  "updatedAt": "2026-11-11T13:17:49Z",
+  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.6 (b15c70787277)",
   "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "changedModules": [
     "instant_0ms_local_classroom_cache",
