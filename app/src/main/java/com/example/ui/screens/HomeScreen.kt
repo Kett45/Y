@@ -200,6 +200,14 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) {
+            KamPerformanceTracker.setInteractionContext("تمرير الرئيسية (${state.students.size} طفل)")
+        } else {
+            KamPerformanceTracker.setInteractionContext("الرئيسية (ثابت)")
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (showLeaderboardExpanded) {
             FullClassLeaderboardScreen(

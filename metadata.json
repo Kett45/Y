@@ -1,5 +1,5 @@
 {
-  "name": "نجم الكارت v1.6",
+  "name": "نجم الكارت v1.8",
   "description": "تطبيق سريع لتسجيل حضور وكروت ونقاط الأطفال وتوزيعهم على بلوكات الخدام مع مزامنة فورية ودعم العمل بدون إنترنت.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

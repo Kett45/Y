@@ -22,6 +22,14 @@ data class KamPerfSnapshot(
     val lastSnapshotSizeKb: Double = 0.0,
     val avatarMemoryCacheHits: Int = 0,
     val avatarDiskOrLazyLoads: Int = 0,
+    // Real Frame Metrics & Jank tracking
+    val totalFramesTracked: Long = 0L,
+    val jankFramesCount: Long = 0L,
+    val jankPercentage: Double = 0.0,
+    val avgFrameDurationMs: Double = 0.0,
+    val worstFrameDurationMs: Double = 0.0,
+    val lastJankContext: String = "",
+    val strictModeViolationsCount: Int = 0,
     val recentTimingLogs: List<String> = emptyList()
 )
 
@@ -202,6 +210,119 @@ object KamPerformanceTracker {
         _metrics.update { current ->
             current.copy(avatarDiskOrLazyLoads = current.avatarDiskOrLazyLoads + 1)
         }
+    }
+
+    @Volatile
+    var currentInteractionContext: String = "الرئيسية (ثابت)"
+
+    @Volatile
+    private var totalFrames: Long = 0L
+
+    @Volatile
+    private var jankFrames: Long = 0L
+
+    @Volatile
+    private var totalDurationNanosSum: Long = 0L
+
+    @Volatile
+    private var worstFrameNanos: Long = 0L
+
+    @Volatile
+    private var strictModeCount: Int = 0
+
+    fun setInteractionContext(contextLabel: String) {
+        currentInteractionContext = contextLabel
+    }
+
+    /**
+     * Records a single UI frame duration from Android Window.OnFrameMetricsAvailableListener
+     * Total Frame Duration = (FrameMetrics.TOTAL_DURATION or FRAME_TIMELINE)
+     * If duration > 16.6ms (60Hz boundary), it is marked as a Jank Frame.
+     */
+    fun recordFrameDuration(durationNanos: Long) {
+        if (durationNanos <= 0L) return
+        totalFrames++
+        totalDurationNanosSum += durationNanos
+        if (durationNanos > worstFrameNanos) {
+            worstFrameNanos = durationNanos
+        }
+
+        val durationMs = durationNanos / 1_000_000.0
+        val isJank = durationMs > 16.0
+
+        if (isJank) {
+            jankFrames++
+            val roundedMs = (durationMs * 10.0).toInt() / 10.0
+            val ctx = currentInteractionContext
+            val msg = String.format(
+                Locale.US,
+                "إطار بطيء (Jank Frame): %.1fms في [%s] (> 16ms)",
+                roundedMs,
+                ctx
+            )
+            Log.w(TAG, "[JANK_FRAME] $msg")
+            _metrics.update { current ->
+                val total = totalFrames
+                val janks = jankFrames
+                val jankPct = if (total > 0) ((janks.toDouble() / total) * 1000.0).toInt() / 10.0 else 0.0
+                val avgMs = if (total > 0) (((totalDurationNanosSum.toDouble() / total) / 1_000_000.0) * 10.0).toInt() / 10.0 else 0.0
+                val worstMs = ((worstFrameNanos / 1_000_000.0) * 10.0).toInt() / 10.0
+                current.copy(
+                    totalFramesTracked = total,
+                    jankFramesCount = janks,
+                    jankPercentage = jankPct,
+                    avgFrameDurationMs = avgMs,
+                    worstFrameDurationMs = worstMs,
+                    lastJankContext = ctx,
+                    recentTimingLogs = appendLog(current.recentTimingLogs, msg)
+                )
+            }
+        } else if (totalFrames % 120 == 0L) {
+            // Periodic update for avg stats without log spam
+            _metrics.update { current ->
+                val total = totalFrames
+                val janks = jankFrames
+                val jankPct = if (total > 0) ((janks.toDouble() / total) * 1000.0).toInt() / 10.0 else 0.0
+                val avgMs = if (total > 0) (((totalDurationNanosSum.toDouble() / total) / 1_000_000.0) * 10.0).toInt() / 10.0 else 0.0
+                val worstMs = ((worstFrameNanos / 1_000_000.0) * 10.0).toInt() / 10.0
+                current.copy(
+                    totalFramesTracked = total,
+                    jankFramesCount = janks,
+                    jankPercentage = jankPct,
+                    avgFrameDurationMs = avgMs,
+                    worstFrameDurationMs = worstMs
+                )
+            }
+        }
+    }
+
+    fun recordStrictModeViolation(violationDetails: String) {
+        strictModeCount++
+        val msg = "مخالفة StrictMode على الخيط الرئيسي: $violationDetails"
+        Log.e(TAG, "[STRICT_MODE] $msg")
+        _metrics.update { current ->
+            current.copy(
+                strictModeViolationsCount = strictModeCount,
+                recentTimingLogs = appendLog(current.recentTimingLogs, msg)
+            )
+        }
+    }
+
+    fun resetFrameMetrics() {
+        totalFrames = 0L
+        jankFrames = 0L
+        totalDurationNanosSum = 0L
+        worstFrameNanos = 0L
+        _metrics.update { current ->
+            current.copy(
+                totalFramesTracked = 0L,
+                jankFramesCount = 0L,
+                jankPercentage = 0.0,
+                avgFrameDurationMs = 0.0,
+                worstFrameDurationMs = 0.0
+            )
+        }
+        Log.i(TAG, "[FRAME_METRICS] Reset frame metrics counter")
     }
 
     private fun appendLog(existing: List<String>, newEntry: String): List<String> {

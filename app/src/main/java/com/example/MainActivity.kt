@@ -116,10 +116,16 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 }
 
 class MainActivity : ComponentActivity() {
+
+    private var frameMetricsListener: android.view.Window.OnFrameMetricsAvailableListener? = null
+    private var frameMetricsHandlerThread: android.os.HandlerThread? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         KamPerformanceTracker.markActivityOnCreate()
+        setupStrictMode()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        setupFrameMetricsListener()
         LocalClassroomCache.init(applicationContext)
         Firebase.auth.currentUser?.uid?.let { uid ->
             LocalClassroomCache.preloadForUser(applicationContext, uid)
@@ -130,6 +136,51 @@ class MainActivity : ComponentActivity() {
                 AppNavigation()
             }
         }
+    }
+
+    private fun setupStrictMode() {
+        android.os.StrictMode.setThreadPolicy(
+            android.os.StrictMode.ThreadPolicy.Builder()
+                .detectDiskReads()
+                .detectDiskWrites()
+                .detectNetwork()
+                .penaltyLog()
+                .penaltyListener(mainExecutor) { violation ->
+                    val cause = violation.cause?.message ?: violation.message ?: violation.javaClass.simpleName
+                    KamPerformanceTracker.recordStrictModeViolation(cause)
+                }
+                .build()
+        )
+        android.os.StrictMode.setVmPolicy(
+            android.os.StrictMode.VmPolicy.Builder()
+                .detectLeakedClosableObjects()
+                .penaltyLog()
+                .build()
+        )
+    }
+
+    private fun setupFrameMetricsListener() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            val thread = android.os.HandlerThread("KamFrameMetricsThread").apply { start() }
+            frameMetricsHandlerThread = thread
+            val handler = android.os.Handler(thread.looper)
+            val listener = android.view.Window.OnFrameMetricsAvailableListener { _, frameMetrics, _ ->
+                val durationNanos = frameMetrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION)
+                KamPerformanceTracker.recordFrameDuration(durationNanos)
+            }
+            frameMetricsListener = listener
+            window.addOnFrameMetricsAvailableListener(listener, handler)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            frameMetricsListener?.let {
+                window.removeOnFrameMetricsAvailableListener(it)
+            }
+        }
+        frameMetricsHandlerThread?.quitSafely()
     }
 }
 

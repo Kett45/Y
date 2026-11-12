@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.kamlite.rtyxqp"
     minSdk = 24
     targetSdk = 36
-    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 7
-    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.7"
+    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 8
+    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.8"
     val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
     versionCode = propVersionCode
     versionName = propVersionName
@@ -96,8 +96,8 @@ tasks.register<Copy>("syncReleaseApk") {
   into(rootProject.layout.projectDirectory.dir("releases"))
   rename { "kAM-Lite.apk" }
 
-  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 7
-  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.7"
+  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 8
+  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.8"
   val repoSlug = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
   val releasesDir = rootProject.layout.projectDirectory.dir("releases").asFile
   val readmeFile = rootProject.layout.projectDirectory.file("README.md").asFile

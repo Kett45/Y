@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -30,13 +32,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.DateRangePicker
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -46,13 +50,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -63,12 +65,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.example.data.model.ArabicInitialsHelper
+import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
 import com.example.data.model.ServantBlock
@@ -108,29 +111,30 @@ fun FullClassLeaderboardScreen(
 ) {
     BackHandler(onBack = onBackToHome)
 
-    val initialMonth = state.selectedMonthKey.ifBlank { "2026-11" }
-    val (defaultStartMillis, defaultEndMillis) = remember(initialMonth) {
-        ServiceCalendarHelper.computeMonthDateRangeUtcMillis(initialMonth)
+    LaunchedEffect(Unit) {
+        KamPerformanceTracker.setInteractionContext("لوحة الشرف")
     }
 
-    var startDateMillis by rememberSaveable(initialMonth) { mutableLongStateOf(defaultStartMillis) }
-    var endDateMillis by rememberSaveable(initialMonth) { mutableLongStateOf(defaultEndMillis) }
-    var showDateRangePickerDialog by rememberSaveable { mutableStateOf(false) }
+    val initialMonth = SaturdayCalendarHelper.clampMonthKey(state.selectedMonthKey.ifBlank { "2026-11" })
+
+    var selectedMonthKeys by rememberSaveable { mutableStateOf(setOf(initialMonth)) }
+    var selectedWeekKeys by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var showCalendarTreeDialog by rememberSaveable { mutableStateOf(false) }
 
     var sortFilter by rememberSaveable { mutableStateOf(LeaderboardSortFilter.HIGHEST_TO_LOWEST) }
     var selectedBlockFilterId by rememberSaveable { mutableStateOf<String?>("ALL") }
     var localSearchQuery by rememberSaveable { mutableStateOf("") }
 
-    val isCustomRange = startDateMillis != defaultStartMillis || endDateMillis != defaultEndMillis
-    val isWithinCurrentMonth = remember(startDateMillis, endDateMillis, initialMonth) {
-        ServiceCalendarHelper.isDateRangeWithinMonth(startDateMillis, endDateMillis, initialMonth)
+    val isCustomSelection = selectedMonthKeys != setOf(initialMonth) || selectedWeekKeys.isNotEmpty()
+    val isWithinCurrentMonth = remember(selectedMonthKeys, selectedWeekKeys, initialMonth) {
+        selectedMonthKeys == setOf(initialMonth) && (selectedWeekKeys.isEmpty() || selectedWeekKeys.all { it.startsWith(initialMonth) })
     }
 
-    // Fetch out-of-month historical events via a single one-shot get() (cached locally) ONLY when range exits current month
+    // Fetch out-of-month historical events via a single one-shot get() (cached locally) ONLY when selection exits current month
     var historicalExtraEvents by remember { mutableStateOf<List<CardEvent>>(emptyList()) }
     var isFetchingHistoricalRange by remember { mutableStateOf(false) }
 
-    LaunchedEffect(startDateMillis, endDateMillis, isWithinCurrentMonth, state.group?.inviteCode) {
+    LaunchedEffect(selectedMonthKeys, selectedWeekKeys, isWithinCurrentMonth, state.group?.inviteCode) {
         if (isWithinCurrentMonth) {
             historicalExtraEvents = emptyList()
             isFetchingHistoricalRange = false
@@ -139,8 +143,7 @@ fun FullClassLeaderboardScreen(
             val fetcher = KamViewModel.historicalRangeFetcher
             if (groupId.isNotBlank() && fetcher != null) {
                 isFetchingHistoricalRange = true
-                val startBound = ServiceCalendarHelper.normalizeStartOfDayMillis(startDateMillis)
-                val endBound = ServiceCalendarHelper.normalizeEndOfDayMillis(endDateMillis)
+                val (startBound, endBound) = SaturdayCalendarHelper.computeBoundsForSelection(selectedMonthKeys, selectedWeekKeys)
                 historicalExtraEvents = withContext(Dispatchers.IO) {
                     fetcher(groupId, startBound, endBound)
                 }
@@ -150,12 +153,12 @@ fun FullClassLeaderboardScreen(
     }
 
     // Fast path: if already cached in PrecomputedClassroomIndices, return in 0ms without launching a coroutine
-    val initialCachedEntries = remember(startDateMillis, endDateMillis, historicalExtraEvents.size, state) {
+    val initialCachedEntries = remember(selectedMonthKeys, selectedWeekKeys, historicalExtraEvents.size, state) {
         KamPerformanceTracker.markLeaderboardOpenStart()
-        if (state.isLeaderboardDateRangeCached(startDateMillis, endDateMillis, historicalExtraEvents.size)) {
-            val cached = state.computeClassLeaderboardEntriesForDateRange(
-                startMillis = startDateMillis,
-                endMillis = endDateMillis,
+        if (state.isLeaderboardSelectionCached(selectedMonthKeys, selectedWeekKeys, historicalExtraEvents.size)) {
+            val cached = state.computeClassLeaderboardEntriesForSelection(
+                selectedMonthKeys = selectedMonthKeys,
+                selectedWeekKeys = selectedWeekKeys,
                 extraHistoricalEvents = historicalExtraEvents
             )
             KamPerformanceTracker.markLeaderboardOpenReady(cached.size, fromCache = true)
@@ -170,21 +173,21 @@ fun FullClassLeaderboardScreen(
         state.students,
         state.effectiveAllCardEvents,
         state.enabledCardTypes,
-        startDateMillis,
-        endDateMillis,
+        selectedMonthKeys,
+        selectedWeekKeys,
         historicalExtraEvents
     ) {
-        if (state.isLeaderboardDateRangeCached(startDateMillis, endDateMillis, historicalExtraEvents.size)) {
-            value = state.computeClassLeaderboardEntriesForDateRange(
-                startMillis = startDateMillis,
-                endMillis = endDateMillis,
+        if (state.isLeaderboardSelectionCached(selectedMonthKeys, selectedWeekKeys, historicalExtraEvents.size)) {
+            value = state.computeClassLeaderboardEntriesForSelection(
+                selectedMonthKeys = selectedMonthKeys,
+                selectedWeekKeys = selectedWeekKeys,
                 extraHistoricalEvents = historicalExtraEvents
             )
         } else {
             val computed = withContext(Dispatchers.Default) {
-                state.computeClassLeaderboardEntriesForDateRange(
-                    startMillis = startDateMillis,
-                    endMillis = endDateMillis,
+                state.computeClassLeaderboardEntriesForSelection(
+                    selectedMonthKeys = selectedMonthKeys,
+                    selectedWeekKeys = selectedWeekKeys,
                     extraHistoricalEvents = historicalExtraEvents
                 )
             }
@@ -199,7 +202,7 @@ fun FullClassLeaderboardScreen(
     val absentStudentsCount by remember(allRankedEntries) { derivedStateOf { allRankedEntries.count { it.attendanceCount == 0 } } }
     val zeroPointStudentsCount by remember(allRankedEntries) { derivedStateOf { allRankedEntries.count { it.totalPoints == 0L } } }
 
-    // Apply servant filters (Block filter + Search query + Merged Sort/Filter mode)
+    // Apply servant filters with tie-breaking: attendanceCount DESC -> attendancePoints DESC -> Arabic name ASC
     val filteredEntries = remember(
         allRankedEntries,
         sortFilter,
@@ -226,101 +229,39 @@ fun FullClassLeaderboardScreen(
             LeaderboardSortFilter.ABSENT_ZERO_ATTENDANCE -> bySearch
                 .filter { it.attendanceCount == 0 }
                 .sortedWith(
-                    compareBy<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                    compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                        .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
                         .thenBy { it.student.studentNumber }
                 )
             LeaderboardSortFilter.WEAKEST_FIRST -> bySearch.sortedWith(
                 compareBy<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                    .thenBy { it.attendanceCount }
                     .thenBy { it.attendancePoints }
+                    .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
                     .thenBy { it.student.studentNumber }
             )
         }
     }
 
-    val formattedDateRangeLabel = remember(startDateMillis, endDateMillis) {
-        ServiceCalendarHelper.formatCompactArabicDateRange(startDateMillis, endDateMillis)
+    val formattedSelectionLabel = remember(selectedMonthKeys, selectedWeekKeys) {
+        SaturdayCalendarHelper.formatLeaderboardSelectionLabel(selectedMonthKeys, selectedWeekKeys)
     }
 
     val blockById = remember(state.blocks) { state.blocks.associateBy { it.id } }
 
-    // Material 3 DateRangePicker Modal Dialog
-    if (showDateRangePickerDialog) {
-        val pickerState = rememberDateRangePickerState(
-            initialSelectedStartDateMillis = startDateMillis,
-            initialSelectedEndDateMillis = endDateMillis
+    // Multi-Select Calendar Tree Modal Dialog
+    if (showCalendarTreeDialog) {
+        LeaderboardMultiSelectCalendarTreeDialog(
+            initialMonthKeys = selectedMonthKeys,
+            initialWeekKeys = selectedWeekKeys,
+            currentMonthKey = initialMonth,
+            onDismiss = { showCalendarTreeDialog = false },
+            onConfirm = { pickedMonths, pickedWeeks ->
+                selectedMonthKeys = if (pickedMonths.isEmpty() && pickedWeeks.isEmpty()) setOf(initialMonth) else pickedMonths
+                selectedWeekKeys = pickedWeeks
+                showCalendarTreeDialog = false
+            }
         )
-        DatePickerDialog(
-            onDismissRequest = { showDateRangePickerDialog = false },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val pickedStart = pickerState.selectedStartDateMillis
-                        val pickedEnd = pickerState.selectedEndDateMillis ?: pickedStart
-                        if (pickedStart != null && pickedEnd != null) {
-                            startDateMillis = minOf(pickedStart, pickedEnd)
-                            endDateMillis = maxOf(pickedStart, pickedEnd)
-                        }
-                        showDateRangePickerDialog = false
-                    },
-                    modifier = Modifier.testTag("confirm_date_range_button")
-                ) {
-                    Text("تطبيق الفترة")
-                }
-            },
-            dismissButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextButton(
-                        onClick = {
-                            startDateMillis = defaultStartMillis
-                            endDateMillis = defaultEndMillis
-                            showDateRangePickerDialog = false
-                        }
-                    ) {
-                        Text("إعادة للشهر الحالي")
-                    }
-                    TextButton(onClick = { showDateRangePickerDialog = false }) {
-                        Text("إلغاء")
-                    }
-                }
-            }
-        ) {
-            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                DateRangePicker(
-                    state = pickerState,
-                    title = {
-                        Text(
-                            text = "اختر بداية ونهاية الفترة",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
-                        )
-                    },
-                    headline = {
-                        val pStart = pickerState.selectedStartDateMillis
-                        val pEnd = pickerState.selectedEndDateMillis ?: pStart
-                        val previewLabel = if (pStart != null && pEnd != null) {
-                            ServiceCalendarHelper.formatCompactArabicDateRange(
-                                minOf(pStart, pEnd),
-                                maxOf(pStart, pEnd)
-                            )
-                        } else {
-                            "حدد تاريخ البداية والنهاية"
-                        }
-                        Text(
-                            text = previewLabel,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                        )
-                    },
-                    showModeToggle = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(440.dp)
-                )
-            }
-        }
     }
 
     Column(
@@ -329,7 +270,7 @@ fun FullClassLeaderboardScreen(
             .background(MaterialTheme.colorScheme.background)
             .testTag("full_class_leaderboard_screen")
     ) {
-        // --- 1. Compact Top Header Bar (Title + Date Range Button + Small Reset Button) ---
+        // --- 1. Compact Top Header Bar (Title + Calendar Tree Button + Small Reset Button) ---
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 2.dp,
@@ -379,19 +320,19 @@ fun FullClassLeaderboardScreen(
                     )
                 }
 
-                // Period Range Button + Small "إعادة" Reset Button
+                // Calendar Tree Trigger Button + Small "إعادة" Reset Button
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    if (isCustomRange) {
+                    if (isCustomSelection) {
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier
                                 .clickable {
-                                    startDateMillis = defaultStartMillis
-                                    endDateMillis = defaultEndMillis
+                                    selectedMonthKeys = setOf(initialMonth)
+                                    selectedWeekKeys = emptySet()
                                 }
                                 .testTag("reset_leaderboard_period_button")
                         ) {
@@ -421,7 +362,7 @@ fun FullClassLeaderboardScreen(
                         color = MaterialTheme.colorScheme.primaryContainer,
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)),
                         modifier = Modifier
-                            .clickable { showDateRangePickerDialog = true }
+                            .clickable { showCalendarTreeDialog = true }
                             .testTag("toggle_leaderboard_period_selector_button")
                     ) {
                         Row(
@@ -436,7 +377,7 @@ fun FullClassLeaderboardScreen(
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = formattedDateRangeLabel,
+                                text = formattedSelectionLabel,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 fontWeight = FontWeight.Bold,
@@ -972,4 +913,471 @@ private fun CardBreakdownChip(item: StudentCardTypeBreakdown) {
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
         )
     }
+}
+
+/**
+ * Interactive Multi-Select Calendar Tree Dialog for the Leaderboard:
+ * - Starts strictly from Year 2026, Month 11 (November). Older months never exist.
+ * - Dynamically computes forward into the future through [SaturdayCalendarHelper].
+ * - Allows servants to check (✓) entire months, or expand any month to check/uncheck individual weeks independently.
+ * - Includes quick actions: "كل الشهور السابقة" (selects all months up to now), "الشهر الحالي" (default), and "مسح الكل".
+ */
+@Composable
+fun LeaderboardMultiSelectCalendarTreeDialog(
+    initialMonthKeys: Set<String>,
+    initialWeekKeys: Set<String>,
+    currentMonthKey: String,
+    onDismiss: () -> Unit,
+    onConfirm: (selectedMonths: Set<String>, selectedWeeks: Set<String>) -> Unit
+) {
+    val availableYears = remember { SaturdayCalendarHelper.availableYears() }
+    val initialYear = remember(currentMonthKey) {
+        currentMonthKey.substringBefore("-").toIntOrNull()
+            ?: availableYears.firstOrNull()
+            ?: 2026
+    }
+
+    var expandedYear by rememberSaveable { mutableIntStateOf(initialYear) }
+    var expandedMonthKey by rememberSaveable { mutableStateOf<String?>(currentMonthKey) }
+
+    var draftMonthKeys by remember { mutableStateOf(initialMonthKeys.toMutableSet()) }
+    var draftWeekKeys by remember { mutableStateOf(initialWeekKeys.toMutableSet()) }
+
+    val yearTrees = remember(availableYears) {
+        availableYears.associateWith { year -> SaturdayCalendarHelper.buildYearTree(year) }
+    }
+
+    val allPastAndCurrentMonths = remember(yearTrees, currentMonthKey) {
+        yearTrees.values.flatMap { it.months }
+            .filter { !it.isFutureMonth || it.isCurrentMonth }
+            .map { it.monthKey }
+            .toSet()
+    }
+
+    val selectedCount = draftMonthKeys.size + draftWeekKeys.size
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.CalendarMonth,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "شجرة الشهور والأسابيع",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Text(
+                    text = "علّم علامة صح (✓) على أي شهر بالكامل أو افتحه لاختيار أسابيع محددة",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Quick Action Presets Row: All Past Months | Current Month | Clear All
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .weight(1.2f)
+                            .clickable {
+                                draftMonthKeys = allPastAndCurrentMonths.toMutableSet()
+                                draftWeekKeys = mutableSetOf()
+                            }
+                            .testTag("select_all_past_months_button")
+                    ) {
+                        Text(
+                            text = "كل الشهور السابقة",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                            maxLines = 1
+                        )
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                draftMonthKeys = mutableSetOf(currentMonthKey)
+                                draftWeekKeys = mutableSetOf()
+                            }
+                            .testTag("select_current_month_only_button")
+                    ) {
+                        Text(
+                            text = "الشهر الحالي",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                            maxLines = 1
+                        )
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier
+                            .weight(0.8f)
+                            .clickable {
+                                draftMonthKeys = mutableSetOf()
+                                draftWeekKeys = mutableSetOf()
+                            }
+                            .testTag("clear_all_calendar_selection_button")
+                    ) {
+                        Text(
+                            text = "مسح الكل",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                // Year and Month Cards
+                availableYears.forEach { year ->
+                    val yearTree = yearTrees[year] ?: return@forEach
+                    val isYearExpanded = expandedYear == year
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            // Year Header Row
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { expandedYear = if (isYearExpanded) -1 else year }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = yearTree.arabicYearLabel,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Icon(
+                                    imageVector = if (isYearExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            // Months inside Year
+                            AnimatedVisibility(visible = isYearExpanded) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    yearTree.months.forEach { monthNode ->
+                                        val isFullySelected = draftMonthKeys.contains(monthNode.monthKey)
+                                        val selectedWeeksInMonth = monthNode.weeks.filter { draftWeekKeys.contains(it.weekKey) }
+                                        val isPartiallySelected = !isFullySelected && selectedWeeksInMonth.isNotEmpty()
+                                        val isMonthExpanded = expandedMonthKey == monthNode.monthKey
+
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = when {
+                                                isFullySelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                                isPartiallySelected -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
+                                                else -> MaterialTheme.colorScheme.surface
+                                            },
+                                            border = BorderStroke(
+                                                width = if (isFullySelected || isPartiallySelected) 1.5.dp else 1.dp,
+                                                color = when {
+                                                    isFullySelected -> MaterialTheme.colorScheme.primary
+                                                    isPartiallySelected -> MaterialTheme.colorScheme.secondary
+                                                    else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                                                }
+                                            ),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(modifier = Modifier.fillMaxWidth()) {
+                                                // Month Row
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    // Checkbox & Month Name
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .clickable {
+                                                                if (isFullySelected) {
+                                                                    draftMonthKeys = (draftMonthKeys - monthNode.monthKey).toMutableSet()
+                                                                    draftWeekKeys = (draftWeekKeys - monthNode.weeks.map { it.weekKey }.toSet()).toMutableSet()
+                                                                } else {
+                                                                    draftMonthKeys = (draftMonthKeys + monthNode.monthKey).toMutableSet()
+                                                                    draftWeekKeys = (draftWeekKeys - monthNode.weeks.map { it.weekKey }.toSet()).toMutableSet()
+                                                                }
+                                                            }
+                                                    ) {
+                                                        Checkbox(
+                                                            checked = isFullySelected,
+                                                            onCheckedChange = { checked ->
+                                                                if (checked) {
+                                                                    draftMonthKeys = (draftMonthKeys + monthNode.monthKey).toMutableSet()
+                                                                    draftWeekKeys = (draftWeekKeys - monthNode.weeks.map { it.weekKey }.toSet()).toMutableSet()
+                                                                } else {
+                                                                    draftMonthKeys = (draftMonthKeys - monthNode.monthKey).toMutableSet()
+                                                                    draftWeekKeys = (draftWeekKeys - monthNode.weeks.map { it.weekKey }.toSet()).toMutableSet()
+                                                                }
+                                                            },
+                                                            modifier = Modifier.size(24.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        Column {
+                                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                                Text(
+                                                                    text = "${SaturdayCalendarHelper.toArabicDigits(monthNode.monthNumber)}. ${monthNode.arabicMonthName}",
+                                                                    style = MaterialTheme.typography.titleSmall,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = MaterialTheme.colorScheme.onSurface
+                                                                )
+                                                                if (monthNode.isCurrentMonth) {
+                                                                    Surface(
+                                                                        shape = RoundedCornerShape(4.dp),
+                                                                        color = MaterialTheme.colorScheme.primary
+                                                                    ) {
+                                                                        Text(
+                                                                            text = "الحالي",
+                                                                            style = MaterialTheme.typography.labelSmall,
+                                                                            color = MaterialTheme.colorScheme.onPrimary,
+                                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
+                                                            if (monthNode.copticMonthsLabel.isNotBlank()) {
+                                                                Text(
+                                                                    text = "قبطي: ${monthNode.copticMonthsLabel}",
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    color = MaterialTheme.colorScheme.primary,
+                                                                    fontWeight = FontWeight.SemiBold
+                                                                )
+                                                            }
+                                                            if (isPartiallySelected) {
+                                                                Text(
+                                                                    text = "محدد: ${SaturdayCalendarHelper.toArabicDigits(selectedWeeksInMonth.size)} من ${SaturdayCalendarHelper.toArabicDigits(monthNode.weeks.size)} أسابيع",
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    color = MaterialTheme.colorScheme.secondary,
+                                                                    fontWeight = FontWeight.Bold
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // Arrow button to expand/collapse weeks inside the month
+                                                    IconButton(
+                                                        onClick = {
+                                                            expandedMonthKey = if (isMonthExpanded) null else monthNode.monthKey
+                                                        },
+                                                        modifier = Modifier.size(36.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = if (isMonthExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                                            contentDescription = "عرض أسابيع الشهر",
+                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
+
+                                                // Expanded Weeks inside the Month
+                                                AnimatedVisibility(visible = isMonthExpanded) {
+                                                    Column(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(start = 28.dp, end = 10.dp, bottom = 8.dp),
+                                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                                    ) {
+                                                        HorizontalDivider(modifier = Modifier.padding(bottom = 4.dp))
+                                                        monthNode.weeks.forEach { weekNode ->
+                                                            val isWeekSelected = isFullySelected || draftWeekKeys.contains(weekNode.weekKey)
+
+                                                            Surface(
+                                                                shape = RoundedCornerShape(8.dp),
+                                                                color = if (isWeekSelected) {
+                                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                                                } else {
+                                                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                                                },
+                                                                border = if (isWeekSelected) {
+                                                                    BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                                                                } else {
+                                                                    null
+                                                                },
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .clickable {
+                                                                        if (isFullySelected) {
+                                                                            draftMonthKeys = (draftMonthKeys - monthNode.monthKey).toMutableSet()
+                                                                            val otherWeeks = monthNode.weeks
+                                                                                .filter { it.weekKey != weekNode.weekKey }
+                                                                                .map { it.weekKey }
+                                                                            draftWeekKeys = (draftWeekKeys + otherWeeks).toMutableSet()
+                                                                        } else if (draftWeekKeys.contains(weekNode.weekKey)) {
+                                                                            draftWeekKeys = (draftWeekKeys - weekNode.weekKey).toMutableSet()
+                                                                        } else {
+                                                                            val newWeeks = (draftWeekKeys + weekNode.weekKey).toMutableSet()
+                                                                            val allMonthWeeks = monthNode.weeks.map { it.weekKey }.toSet()
+                                                                            if (allMonthWeeks.all { newWeeks.contains(it) }) {
+                                                                                draftMonthKeys = (draftMonthKeys + monthNode.monthKey).toMutableSet()
+                                                                                draftWeekKeys = (newWeeks - allMonthWeeks).toMutableSet()
+                                                                            } else {
+                                                                                draftWeekKeys = newWeeks
+                                                                            }
+                                                                        }
+                                                                    }
+                                                            ) {
+                                                                Row(
+                                                                    modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                                                    verticalAlignment = Alignment.CenterVertically,
+                                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                                ) {
+                                                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                                                        Checkbox(
+                                                                            checked = isWeekSelected,
+                                                                            onCheckedChange = { checked ->
+                                                                                if (checked) {
+                                                                                    if (!isFullySelected) {
+                                                                                        val newWeeks = (draftWeekKeys + weekNode.weekKey).toMutableSet()
+                                                                                        val allMonthWeeks = monthNode.weeks.map { it.weekKey }.toSet()
+                                                                                        if (allMonthWeeks.all { newWeeks.contains(it) }) {
+                                                                                            draftMonthKeys = (draftMonthKeys + monthNode.monthKey).toMutableSet()
+                                                                                            draftWeekKeys = (newWeeks - allMonthWeeks).toMutableSet()
+                                                                                        } else {
+                                                                                            draftWeekKeys = newWeeks
+                                                                                        }
+                                                                                    }
+                                                                                } else {
+                                                                                    if (isFullySelected) {
+                                                                                        draftMonthKeys = (draftMonthKeys - monthNode.monthKey).toMutableSet()
+                                                                                        val otherWeeks = monthNode.weeks
+                                                                                            .filter { it.weekKey != weekNode.weekKey }
+                                                                                            .map { it.weekKey }
+                                                                                        draftWeekKeys = (draftWeekKeys + otherWeeks).toMutableSet()
+                                                                                    } else {
+                                                                                        draftWeekKeys = (draftWeekKeys - weekNode.weekKey).toMutableSet()
+                                                                                    }
+                                                                                }
+                                                                            },
+                                                                            modifier = Modifier.size(22.dp)
+                                                                        )
+                                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                                        Column {
+                                                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                                                Text(
+                                                                                    text = weekNode.arabicTitle,
+                                                                                    style = MaterialTheme.typography.labelMedium,
+                                                                                    fontWeight = FontWeight.Bold,
+                                                                                    color = MaterialTheme.colorScheme.onSurface
+                                                                                )
+                                                                                if (weekNode.isCurrentWeek) {
+                                                                                    Surface(
+                                                                                        shape = RoundedCornerShape(4.dp),
+                                                                                        color = MaterialTheme.colorScheme.secondary
+                                                                                    ) {
+                                                                                        Text(
+                                                                                            text = "الحالي ★",
+                                                                                            style = MaterialTheme.typography.labelSmall,
+                                                                                            color = MaterialTheme.colorScheme.onSecondary,
+                                                                                            fontWeight = FontWeight.Bold,
+                                                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                                        )
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            Text(
+                                                                                text = "ميلادي: ${weekNode.dateRangeLabel}",
+                                                                                style = MaterialTheme.typography.bodySmall,
+                                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                            )
+                                                                            if (weekNode.copticDateRangeLabel.isNotBlank()) {
+                                                                                Text(
+                                                                                    text = "قبطي: ${weekNode.copticDateRangeLabel}",
+                                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                                    color = MaterialTheme.colorScheme.primary
+                                                                                )
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onConfirm(draftMonthKeys, draftWeekKeys)
+                    onDismiss()
+                },
+                modifier = Modifier.testTag("confirm_calendar_tree_selection_button")
+            ) {
+                Text(
+                    text = if (selectedCount > 0) {
+                        "تطبيق الاختيار (${SaturdayCalendarHelper.toArabicDigits(selectedCount)})"
+                    } else {
+                        "تطبيق الاختيار"
+                    }
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إلغاء")
+            }
+        }
+    )
 }

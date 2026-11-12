@@ -1083,19 +1083,7 @@ fun StudentAvatarCircle(
         }
     }
 
-    if (baseViewConfig.longPressTimeoutMillis <= 220L) {
-        avatarBoxContent()
-    } else {
-        val fastHoldViewConfig = remember(baseViewConfig) {
-            object : ViewConfiguration by baseViewConfig {
-                override val longPressTimeoutMillis: Long
-                    get() = 210L
-            }
-        }
-        CompositionLocalProvider(LocalViewConfiguration provides fastHoldViewConfig) {
-            avatarBoxContent()
-        }
-    }
+    avatarBoxContent()
 
     if (isHoldPreviewVisible) {
         val mainBase64 = remember(resolvedPackedAvatar, student.avatarBase64) {

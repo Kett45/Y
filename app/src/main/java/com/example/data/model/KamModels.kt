@@ -479,6 +479,19 @@ object SaturdayCalendarHelper {
     }
 
     /**
+     * Clamps any historical or legacy month key to strictly never precede November 2026 (Month 11).
+     */
+    fun clampMonthKey(monthKey: String): String {
+        val parts = monthKey.trim().split("-")
+        val y = parts.getOrNull(0)?.toIntOrNull() ?: APP_START_YEAR
+        val m = parts.getOrNull(1)?.toIntOrNull() ?: APP_START_MONTH
+        if (y < APP_START_YEAR || (y == APP_START_YEAR && m < APP_START_MONTH)) {
+            return String.format(java.util.Locale.US, "%04d-%02d", APP_START_YEAR, APP_START_MONTH)
+        }
+        return String.format(java.util.Locale.US, "%04d-%02d", y, m.coerceIn(1, 12))
+    }
+
+    /**
      * Computes the Saturday-based week key (`YYYY-MM-W#`) for the given calendar timestamp.
      * A new week within the month begins on day 1 and on every Saturday at 12:00 AM midnight (00:00:00).
      */
@@ -518,11 +531,7 @@ object SaturdayCalendarHelper {
             val monthKey = String.format(java.util.Locale.US, "%04d-%02d", year, monthNum)
             val isFutureMonth = (year > nowYear) || (year == nowYear && monthNum > nowMonth)
             val isCurrentMonth = (year == nowYear && monthNum == nowMonth)
-            val weeks = if (isFutureMonth) {
-                emptyList()
-            } else {
-                buildWeeksForMonth(year, monthNum, nowCal)
-            }
+            val weeks = buildWeeksForMonth(year, monthNum, nowCal)
 
             // Compute Coptic months overlapping this Gregorian month
             val cal = java.util.Calendar.getInstance().apply {
@@ -854,6 +863,120 @@ object SaturdayCalendarHelper {
             else ->
                 "${toArabicDigits(sDay)} $sMonthName ${toArabicDigits(sYear)} ← ${toArabicDigits(eDay)} $eMonthName ${toArabicDigits(eYear)}"
         }
+    }
+
+    /**
+     * Formats the multi-month and multi-week selection as a concise Arabic label
+     * displayed on the calendar trigger button in the Leaderboard top bar.
+     */
+    fun formatLeaderboardSelectionLabel(
+        selectedMonthKeys: Set<String>,
+        selectedWeekKeys: Set<String>
+    ): String {
+        val validMonths = selectedMonthKeys.filter { it.isNotBlank() }.toSortedSet()
+        val validWeeks = selectedWeekKeys.filter { it.isNotBlank() }.toSortedSet()
+
+        if (validMonths.isEmpty() && validWeeks.isEmpty()) {
+            return "اختر الشهور والأسابيع"
+        }
+
+        if (validWeeks.isEmpty()) {
+            return if (validMonths.size == 1) {
+                val mKey = validMonths.first()
+                val parts = mKey.split("-")
+                val y = parts.getOrNull(0)?.toIntOrNull()
+                val m = parts.getOrNull(1)?.toIntOrNull()
+                if (y != null && m != null) {
+                    "شهر ${toArabicDigits(m)} (${getArabicMonthName(m)} ${toArabicDigits(y)})"
+                } else {
+                    mKey
+                }
+            } else if (validMonths.size <= 3) {
+                validMonths.joinToString("، ") { mKey ->
+                    val m = mKey.split("-").getOrNull(1)?.toIntOrNull() ?: 1
+                    getArabicMonthName(m)
+                }
+            } else {
+                "${toArabicDigits(validMonths.size)} شهور محددة"
+            }
+        }
+
+        if (validMonths.isEmpty()) {
+            val byMonth = validWeeks.groupBy { it.substringBefore("-W") }
+            return if (byMonth.size == 1) {
+                val (mKey, weeks) = byMonth.entries.first()
+                val m = mKey.split("-").getOrNull(1)?.toIntOrNull() ?: 1
+                val mName = getArabicMonthName(m)
+                val weekNums = weeks.mapNotNull { it.substringAfter("-W", "").toIntOrNull() }.sorted()
+                val weekLabels = weekNums.joinToString("، ") { toArabicDigits(it) }
+                "$mName (أسبوع $weekLabels)"
+            } else {
+                "${toArabicDigits(validWeeks.size)} أسابيع محددة"
+            }
+        }
+
+        val monthNames = validMonths.map { mKey ->
+            val m = mKey.split("-").getOrNull(1)?.toIntOrNull() ?: 1
+            getArabicMonthName(m)
+        }
+        val weekCount = validWeeks.size
+        return "${monthNames.joinToString(" + ")} (+ ${toArabicDigits(weekCount)} أسابيع)"
+    }
+
+    /**
+     * Computes the bounding start and end UTC timestamps in milliseconds across all selected months & weeks.
+     */
+    fun computeBoundsForSelection(
+        monthKeys: Set<String>,
+        weekKeys: Set<String>
+    ): Pair<Long, Long> {
+        val startTimes = mutableListOf<Long>()
+        val endTimes = mutableListOf<Long>()
+
+        monthKeys.filter { it.isNotBlank() }.forEach { mKey ->
+            val (mStart, mEndDayStart) = computeMonthDateRangeUtcMillis(mKey)
+            startTimes.add(mStart)
+            endTimes.add(mEndDayStart + 86_399_999L)
+        }
+
+        val utcZone = java.util.TimeZone.getTimeZone("UTC")
+        val cal = java.util.Calendar.getInstance(utcZone).apply {
+            firstDayOfWeek = java.util.Calendar.SATURDAY
+        }
+
+        weekKeys.filter { it.isNotBlank() }.forEach { wKey ->
+            val mKey = wKey.substringBefore("-W")
+            val wNum = wKey.substringAfter("-W", "").toIntOrNull() ?: 1
+            val parts = mKey.split("-")
+            val y = parts.getOrNull(0)?.toIntOrNull() ?: 2026
+            val m = parts.getOrNull(1)?.toIntOrNull() ?: 11
+            val weeks = buildWeeksForMonth(y, m)
+            val matched = weeks.find { it.weekNumberInMonth == wNum } ?: weeks.firstOrNull()
+            if (matched != null) {
+                cal.set(java.util.Calendar.YEAR, y)
+                cal.set(java.util.Calendar.MONTH, m - 1)
+                cal.set(java.util.Calendar.DAY_OF_MONTH, matched.startDayOfMonth)
+                cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                cal.set(java.util.Calendar.MINUTE, 0)
+                cal.set(java.util.Calendar.SECOND, 0)
+                cal.set(java.util.Calendar.MILLISECOND, 0)
+                startTimes.add(cal.timeInMillis)
+
+                cal.set(java.util.Calendar.DAY_OF_MONTH, matched.endDayOfMonth)
+                cal.set(java.util.Calendar.HOUR_OF_DAY, 23)
+                cal.set(java.util.Calendar.MINUTE, 59)
+                cal.set(java.util.Calendar.SECOND, 59)
+                cal.set(java.util.Calendar.MILLISECOND, 999)
+                endTimes.add(cal.timeInMillis)
+            }
+        }
+
+        if (startTimes.isEmpty() || endTimes.isEmpty()) {
+            val (defStart, defEndDayStart) = computeMonthDateRangeUtcMillis(currentYearMonth())
+            return defStart to (defEndDayStart + 86_399_999L)
+        }
+
+        return startTimes.minOrNull()!! to endTimes.maxOrNull()!!
     }
 }
 

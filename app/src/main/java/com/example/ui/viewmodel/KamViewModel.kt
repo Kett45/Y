@@ -493,8 +493,9 @@ data class KamScreenState(
         val computed = unsorted
             .sortedWith(
                 compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                    .thenByDescending { it.attendanceCount }
                     .thenByDescending { it.attendancePoints }
-                    .thenByDescending { it.totalCardsCount }
+                    .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
                     .thenBy { it.student.studentNumber }
             )
             .mapIndexed { idx, entry ->
@@ -606,8 +607,123 @@ data class KamScreenState(
         val computed = unsorted
             .sortedWith(
                 compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                    .thenByDescending { it.attendanceCount }
                     .thenByDescending { it.attendancePoints }
-                    .thenByDescending { it.totalCardsCount }
+                    .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
+                    .thenBy { it.student.studentNumber }
+            )
+            .mapIndexed { idx, entry ->
+                entry.copy(rank = idx + 1)
+            }
+        indices.leaderboardCache[cacheKey] = computed
+        return computed
+    }
+
+    /**
+     * Checks if the leaderboard for the multi-month and multi-week selection is already cached in memory.
+     */
+    fun isLeaderboardSelectionCached(
+        selectedMonthKeys: Set<String>,
+        selectedWeekKeys: Set<String>,
+        extraHistoricalEventsCount: Int = 0
+    ): Boolean {
+        val targetMonths = selectedMonthKeys.filter { it.isNotBlank() }.toSortedSet()
+        val targetWeeks = selectedWeekKeys.filter { it.isNotBlank() }.toSortedSet()
+        val activeCards = enabledCardTypes.ifEmpty { CardType.entries }
+        val cacheKey = "SEL|${targetMonths.joinToString(",")}|${targetWeeks.joinToString(",")}|${activeCards.size}|${effectiveAllCardEvents.size}|$extraHistoricalEventsCount|${students.size}"
+        return indices.leaderboardCache.containsKey(cacheKey)
+    }
+
+    /**
+     * Computes the full-class leaderboard for an arbitrary set of selected months and weeks
+     * strictly from `cardEvents` (never from `monthlyBalances`).
+     * - Breaks ties by: totalPoints DESC -> attendanceCount DESC (الأكثر حضوراً) -> attendancePoints DESC -> Arabic name ASC (أبجدياً) -> studentNumber ASC.
+     * - Memoizes in [PrecomputedClassroomIndices.leaderboardCache] for instantaneous (0ms) response.
+     */
+    fun computeClassLeaderboardEntriesForSelection(
+        selectedMonthKeys: Set<String>,
+        selectedWeekKeys: Set<String>,
+        extraHistoricalEvents: List<CardEvent> = emptyList()
+    ): List<StudentDetailedLeaderboardEntry> {
+        if (students.isEmpty()) return emptyList()
+        val targetMonths = selectedMonthKeys.filter { it.isNotBlank() }.toSortedSet()
+        val targetWeeks = selectedWeekKeys.filter { it.isNotBlank() }.toSortedSet()
+        val effectiveMonths = if (targetMonths.isEmpty() && targetWeeks.isEmpty()) {
+            sortedSetOf(selectedMonthKey.ifBlank { "2026-11" })
+        } else {
+            targetMonths
+        }
+        val allEvents = effectiveAllCardEvents
+        val activeCards = enabledCardTypes.ifEmpty { CardType.entries }
+        val cacheKey = "SEL|${effectiveMonths.joinToString(",")}|${targetWeeks.joinToString(",")}|${activeCards.size}|${allEvents.size}|${extraHistoricalEvents.size}|${students.size}"
+        indices.leaderboardCache[cacheKey]?.let { cached ->
+            return cached
+        }
+
+        val combinedEvents = if (extraHistoricalEvents.isEmpty()) {
+            allEvents
+        } else {
+            val byId = LinkedHashMap<String, CardEvent>(allEvents.size + extraHistoricalEvents.size)
+            for (i in 0 until allEvents.size) {
+                val ev = allEvents[i]
+                val key = ev.id.ifBlank { "${ev.studentId}_${ev.cardType}_${ev.weekKey}_${ev.servantId}" }
+                byId[key] = ev
+            }
+            for (i in 0 until extraHistoricalEvents.size) {
+                val ev = extraHistoricalEvents[i]
+                val key = ev.id.ifBlank { "${ev.studentId}_${ev.cardType}_${ev.weekKey}_${ev.servantId}" }
+                if (!byId.containsKey(key)) {
+                    byId[key] = ev
+                }
+            }
+            byId.values.toList()
+        }
+
+        val scopedEvents = ArrayList<CardEvent>(combinedEvents.size)
+        for (i in 0 until combinedEvents.size) {
+            val ev = combinedEvents[i]
+            val matchesMonth = ev.monthKey.isNotBlank() && ev.monthKey in effectiveMonths
+            val matchesWeek = ev.weekKey.isNotBlank() && ev.weekKey in targetWeeks
+            if (matchesMonth || matchesWeek) {
+                scopedEvents.add(ev)
+            }
+        }
+
+        val scopedEventsByStudentId = scopedEvents.groupBy { it.studentId }
+
+        val unsorted = students.map { student ->
+            val stuEvents = scopedEventsByStudentId[student.id].orEmpty()
+            val eventsByType = if (stuEvents.isEmpty()) emptyMap() else stuEvents.groupBy { it.cardType }
+
+            val breakdown = activeCards.map { cardType ->
+                val matching = eventsByType[cardType.id].orEmpty()
+                StudentCardTypeBreakdown(
+                    cardType = cardType,
+                    count = matching.size,
+                    points = matching.sumOf { it.points }
+                )
+            }
+
+            val totalPoints = stuEvents.sumOf { it.points }
+            val attendanceEvents = eventsByType[CardType.ATTENDANCE.id].orEmpty()
+
+            StudentDetailedLeaderboardEntry(
+                student = student,
+                rank = 0,
+                totalPoints = totalPoints,
+                totalCardsCount = stuEvents.size,
+                attendanceCount = attendanceEvents.size,
+                attendancePoints = attendanceEvents.sumOf { it.points },
+                breakdownByCard = breakdown
+            )
+        }
+
+        val computed = unsorted
+            .sortedWith(
+                compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                    .thenByDescending { it.attendanceCount }
+                    .thenByDescending { it.attendancePoints }
+                    .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
                     .thenBy { it.student.studentNumber }
             )
             .mapIndexed { idx, entry ->
@@ -1059,17 +1175,17 @@ class KamViewModel(
             allGroupCardEvents = effectiveAllEvents,
             allGroupMonthlyBalances = effectiveAllBalances,
             invitations = effectiveInvitations,
-            selectedMonthKey = selectedMonth,
+            selectedMonthKey = SaturdayCalendarHelper.clampMonthKey(selectedMonth),
             selectedWeekKey = selectedWeek,
             currentWeekKey = currentYearWeek(),
             dismissedDuplicateNames = dismissedDuplicates,
             previousGroupId = fallbackPrevGroup,
             precomputedIndices = precomputed
         )
-        // Prewarm the default current-month date-range leaderboard on Dispatchers.Default so opening the Leaderboard screen is 0ms
+        // Prewarm the default current-month selection leaderboard on Dispatchers.Default so opening the Leaderboard screen is 0ms
         if (effectiveStudents.isNotEmpty() && selectedMonth.isNotBlank()) {
-            val (defaultStartMs, defaultEndMs) = SaturdayCalendarHelper.computeMonthDateRangeUtcMillis(selectedMonth)
-            builtState.computeClassLeaderboardEntriesForDateRange(defaultStartMs, defaultEndMs)
+            val clampedMonth = SaturdayCalendarHelper.clampMonthKey(selectedMonth)
+            builtState.computeClassLeaderboardEntriesForSelection(selectedMonthKeys = setOf(clampedMonth), selectedWeekKeys = emptySet())
         }
         builtState
     }.flowOn(Dispatchers.Default)
@@ -1169,7 +1285,7 @@ class KamViewModel(
             showBanner("لا يمكن فتح الشهور التي لم تبدأ بعد")
             return
         }
-        _selectedMonthKey.value = monthKey
+        _selectedMonthKey.value = SaturdayCalendarHelper.clampMonthKey(monthKey)
         _selectedWeekKey.value = weekKey
     }
 
