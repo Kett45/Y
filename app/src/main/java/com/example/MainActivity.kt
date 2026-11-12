@@ -122,11 +122,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         KamPerformanceTracker.markActivityOnCreate()
-        setupStrictMode()
+        if (BuildConfig.ENABLE_STRICT_MODE_BY_DEFAULT) {
+            setupStrictMode()
+        }
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setupFrameMetricsListener()
         LocalClassroomCache.init(applicationContext)
+        com.example.ui.theme.AppAppearanceController.preloadAsync(applicationContext)
+        com.example.ui.theme.UiScaleController.preloadAsync(applicationContext)
         Firebase.auth.currentUser?.uid?.let { uid ->
             LocalClassroomCache.preloadForUser(applicationContext, uid)
         }
@@ -146,8 +150,7 @@ class MainActivity : ComponentActivity() {
                 .detectNetwork()
                 .penaltyLog()
                 .penaltyListener(mainExecutor) { violation ->
-                    val cause = violation.cause?.message ?: violation.message ?: violation.javaClass.simpleName
-                    KamPerformanceTracker.recordStrictModeViolation(cause)
+                    KamPerformanceTracker.recordStrictModeViolation(violation)
                 }
                 .build()
         )

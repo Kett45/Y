@@ -9,6 +9,7 @@ import com.example.data.model.Group
 import com.example.data.model.MonthlyBalance
 import com.example.data.model.ServantBlock
 import com.example.data.model.Student
+import android.os.Looper
 import android.os.SystemClock
 import com.example.data.model.UserProfile
 import com.example.ui.components.StudentAvatarImageHelper
@@ -19,6 +20,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import com.google.firebase.Timestamp
@@ -53,8 +55,8 @@ data class LocalUserPreferences(
 
 /**
  * Fast local cache for instant 0ms startup and offline-first personal preferences persistence.
- * Stores classroom lists (blocks, students, card events, balances) on disk and in memory so the
- * Home screen opens immediately without waiting for cloud round-trips, then updates diffs in background.
+ * All disk & SharedPreferences operations run strictly on [Dispatchers.IO] so the Main Thread
+ * never blocks on DiskReadViolation / DiskWriteViolation.
  */
 object LocalClassroomCache {
     private const val TAG = "LocalClassroomCache"
@@ -70,25 +72,80 @@ object LocalClassroomCache {
 
     private val memorySnapshots = ConcurrentHashMap<String, CachedClassroomSnapshot>()
     private val memoryPrefs = ConcurrentHashMap<String, LocalUserPreferences>()
+    private val migratedGroupIds = ConcurrentHashMap.newKeySet<String>()
     private val historicalRangeMemoryCache = ConcurrentHashMap<String, List<CardEvent>>()
+
+    private fun isOnMainThread(): Boolean {
+        return runCatching { Looper.myLooper() == Looper.getMainLooper() }.getOrDefault(false)
+    }
 
     fun init(context: Context?) {
         val ctx = context?.applicationContext ?: return
         appContext = ctx
     }
 
+    /**
+     * Preloads the user's classroom snapshot and preferences on [Dispatchers.IO] without blocking the Main Thread.
+     * Returns immediately if already in memory.
+     */
     fun preloadForUser(context: Context?, userId: String): CachedClassroomSnapshot? {
         init(context)
         if (userId.isBlank()) return null
         memorySnapshots[userId]?.let { return it }
+        if (isOnMainThread()) {
+            ioScope.launch {
+                loadUserPreferencesFromDiskInternal(userId)
+                readSnapshotFromDisk(userId)?.let { snap ->
+                    memorySnapshots.putIfAbsent(userId, snap)
+                }
+            }
+            return memorySnapshots[userId]
+        }
+        loadUserPreferencesFromDiskInternal(userId)
         return readSnapshotFromDisk(userId)?.also {
             memorySnapshots[userId] = it
+        }
+    }
+
+    fun getMemorySnapshot(userId: String): CachedClassroomSnapshot? {
+        if (userId.isBlank()) return null
+        return memorySnapshots[userId]
+    }
+
+    fun getMemoryUserPreferences(userId: String): LocalUserPreferences? {
+        if (userId.isBlank()) return null
+        return memoryPrefs[userId]
+    }
+
+    suspend fun loadSnapshotFromDiskAsync(userId: String): CachedClassroomSnapshot? {
+        if (userId.isBlank()) return null
+        memorySnapshots[userId]?.let { return it }
+        return withContext(Dispatchers.IO) {
+            memorySnapshots[userId] ?: readSnapshotFromDisk(userId)?.also {
+                memorySnapshots[userId] = it
+            }
+        }
+    }
+
+    suspend fun loadUserPreferencesAsync(userId: String): LocalUserPreferences {
+        if (userId.isBlank()) return LocalUserPreferences()
+        memoryPrefs[userId]?.let { return it }
+        return withContext(Dispatchers.IO) {
+            loadUserPreferencesFromDiskInternal(userId)
         }
     }
 
     fun getCachedSnapshot(userId: String): CachedClassroomSnapshot? {
         if (userId.isBlank()) return null
         memorySnapshots[userId]?.let { return it }
+        if (isOnMainThread()) {
+            ioScope.launch {
+                readSnapshotFromDisk(userId)?.let { snap ->
+                    memorySnapshots.putIfAbsent(userId, snap)
+                }
+            }
+            return null
+        }
         return readSnapshotFromDisk(userId)?.also {
             memorySnapshots[userId] = it
         }
@@ -130,6 +187,18 @@ object LocalClassroomCache {
     }
 
     fun loadUserPreferences(userId: String): LocalUserPreferences {
+        if (userId.isBlank()) return LocalUserPreferences()
+        memoryPrefs[userId]?.let { return it }
+        if (isOnMainThread()) {
+            ioScope.launch {
+                loadUserPreferencesFromDiskInternal(userId)
+            }
+            return LocalUserPreferences()
+        }
+        return loadUserPreferencesFromDiskInternal(userId)
+    }
+
+    private fun loadUserPreferencesFromDiskInternal(userId: String): LocalUserPreferences {
         if (userId.isBlank()) return LocalUserPreferences()
         memoryPrefs[userId]?.let { return it }
         val ctx = appContext ?: return LocalUserPreferences()
@@ -179,41 +248,52 @@ object LocalClassroomCache {
         }
 
         val ctx = appContext ?: return
-        runCatching {
-            val obj = JSONObject().apply {
-                put("enabledCards", JSONArray(stamped.enabledCards))
-                put("collapsedBlockIds", JSONArray(stamped.collapsedBlockIds))
-                put("hiddenBlockIds", JSONArray(stamped.hiddenBlockIds))
-                put("themeId", stamped.themeId)
-                put("uiScaleMode", stamped.uiScaleMode)
-                put("uiScaleFactor", stamped.uiScaleFactor.toDouble())
-                put("showFloatingAddButton", stamped.showFloatingAddButton)
-                put("activeGroupId", stamped.activeGroupId)
-                put("updatedAtMillis", stamped.updatedAtMillis)
+        ioScope.launch {
+            runCatching {
+                val obj = JSONObject().apply {
+                    put("enabledCards", JSONArray(stamped.enabledCards))
+                    put("collapsedBlockIds", JSONArray(stamped.collapsedBlockIds))
+                    put("hiddenBlockIds", JSONArray(stamped.hiddenBlockIds))
+                    put("themeId", stamped.themeId)
+                    put("uiScaleMode", stamped.uiScaleMode)
+                    put("uiScaleFactor", stamped.uiScaleFactor.toDouble())
+                    put("showFloatingAddButton", stamped.showFloatingAddButton)
+                    put("activeGroupId", stamped.activeGroupId)
+                    put("updatedAtMillis", stamped.updatedAtMillis)
+                }
+                ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("user_prefs_$userId", obj.toString())
+                    .apply()
+            }.onFailure { e ->
+                Log.w(TAG, "Failed to persist user preferences locally: ${e.message}")
             }
-            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putString("user_prefs_$userId", obj.toString())
-                .apply()
-        }.onFailure { e ->
-            Log.w(TAG, "Failed to persist user preferences locally: ${e.message}")
         }
     }
 
     fun isGroupMigrationCompleted(groupId: String): Boolean {
         if (groupId.isBlank()) return false
+        if (migratedGroupIds.contains(groupId)) return true
+        if (isOnMainThread()) return false
         val ctx = appContext ?: return false
-        return ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val done = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean("migrated_v16_$groupId", false)
+        if (done) {
+            migratedGroupIds.add(groupId)
+        }
+        return done
     }
 
     fun markGroupMigrationCompleted(groupId: String) {
         if (groupId.isBlank()) return
+        migratedGroupIds.add(groupId)
         val ctx = appContext ?: return
-        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean("migrated_v16_$groupId", true)
-            .apply()
+        ioScope.launch {
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("migrated_v16_$groupId", true)
+                .apply()
+        }
     }
 
     private fun snapshotFileForUser(userId: String): File? {
@@ -507,6 +587,17 @@ object LocalClassroomCache {
     ): List<CardEvent>? {
         if (groupId.isBlank()) return null
         val key = "${groupId}_${startDayMillis / 86_400_000L}_${endDayMillis / 86_400_000L}"
+        historicalRangeMemoryCache[key]?.let { return it }
+        if (isOnMainThread()) {
+            ioScope.launch {
+                readHistoricalRangeFromDiskInternal(key)
+            }
+            return null
+        }
+        return readHistoricalRangeFromDiskInternal(key)
+    }
+
+    private fun readHistoricalRangeFromDiskInternal(key: String): List<CardEvent>? {
         historicalRangeMemoryCache[key]?.let { return it }
         val ctx = appContext ?: return null
         val dir = File(ctx.filesDir, "historical_range_cache")

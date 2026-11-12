@@ -112,7 +112,7 @@ fun FullClassLeaderboardScreen(
     BackHandler(onBack = onBackToHome)
 
     LaunchedEffect(Unit) {
-        KamPerformanceTracker.setInteractionContext("لوحة الشرف")
+        KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_LEADERBOARD, scrolling = false)
     }
 
     val initialMonth = SaturdayCalendarHelper.clampMonthKey(state.selectedMonthKey.ifBlank { "2026-11" })

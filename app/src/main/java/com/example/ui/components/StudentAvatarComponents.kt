@@ -203,9 +203,21 @@ object StudentAvatarImageHelper {
         return File(thumbDir, "thumb_${cacheKey}.jpg")
     }
 
+    private val avatarIoScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
+    )
+
+    private fun isOnMainThread(): Boolean {
+        return runCatching {
+            android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+        }.getOrDefault(false)
+    }
+
     /**
      * Reads the student's packed album string from local disk (`filesDir/student_avatars/{studentId}/album_entries.txt`),
      * automatically migrating any legacy `SharedPreferences` entry on first access and freeing RAM.
+     * Never blocks the Main Thread: if called on the Main Thread when not yet in memory, schedules an async
+     * disk preload on [Dispatchers.IO] and returns immediately.
      */
     fun readLocalAlbumRaw(context: Context?, studentId: String): String {
         if (studentId.isBlank()) return ""
@@ -213,6 +225,20 @@ object StudentAvatarImageHelper {
             if (cached.isNotBlank()) return cached
         }
         if (context == null) return ""
+        val appCtx = context.applicationContext ?: context
+        if (isOnMainThread()) {
+            avatarIoScope.launch {
+                readLocalAlbumRawFromDiskInternal(appCtx, studentId)
+            }
+            return localPackedAvatarByStudentId[studentId].orEmpty()
+        }
+        return readLocalAlbumRawFromDiskInternal(appCtx, studentId)
+    }
+
+    private fun readLocalAlbumRawFromDiskInternal(context: Context, studentId: String): String {
+        localPackedAvatarByStudentId[studentId]?.let { cached ->
+            if (cached.isNotBlank()) return cached
+        }
         return try {
             val dir = getStudentAvatarDir(context, studentId)
             val albumFile = File(dir, "album_entries.txt")
@@ -241,7 +267,7 @@ object StudentAvatarImageHelper {
 
     /**
      * Writes the student's packed album string to a standalone local file (`album_entries.txt`)
-     * instead of `SharedPreferences` or the startup JSON snapshot.
+     * on [Dispatchers.IO] instead of `SharedPreferences` or the startup JSON snapshot.
      */
     fun writeLocalAlbumRaw(context: Context?, studentId: String, rawPacked: String) {
         if (studentId.isBlank()) return
@@ -252,6 +278,17 @@ object StudentAvatarImageHelper {
             localPackedAvatarByStudentId[studentId] = trimmed
         }
         if (context == null) return
+        val appCtx = context.applicationContext ?: context
+        if (isOnMainThread()) {
+            avatarIoScope.launch {
+                writeLocalAlbumRawToDiskInternal(appCtx, studentId, trimmed)
+            }
+        } else {
+            writeLocalAlbumRawToDiskInternal(appCtx, studentId, trimmed)
+        }
+    }
+
+    private fun writeLocalAlbumRawToDiskInternal(context: Context, studentId: String, trimmed: String) {
         try {
             val dir = getStudentAvatarDir(context, studentId)
             val albumFile = File(dir, "album_entries.txt")

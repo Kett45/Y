@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Density
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -93,12 +94,27 @@ class UiScaleController(
     }
 
     private fun savePreferences() {
-        val ctx = context ?: return
-        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_MODE, mode.name)
-            .putFloat(KEY_MANUAL_SCALE, manualScaleFactor)
-            .apply()
+        val modeToSave = mode
+        val scaleToSave = manualScaleFactor
+        cachedScalePair = modeToSave to scaleToSave
+        val ctx = context?.applicationContext ?: return
+        ioScope.launch {
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_MODE, modeToSave.name)
+                .putFloat(KEY_MANUAL_SCALE, scaleToSave)
+                .apply()
+        }
+    }
+
+    internal fun applyLoadedPrefsFromDisk(loadedMode: UiScaleMode, loadedScale: Float) {
+        if (mode != loadedMode) {
+            mode = loadedMode
+        }
+        val clamped = loadedScale.coerceIn(MIN_SCALE, MAX_SCALE)
+        if (abs(manualScaleFactor - clamped) > 0.005f) {
+            manualScaleFactor = clamped
+        }
     }
 
     companion object {
@@ -112,6 +128,21 @@ class UiScaleController(
         const val PRESET_STANDARD = 1.00f
         const val PRESET_LARGE_TABLET = 1.15f
 
+        private val ioScope = kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+        )
+
+        @Volatile
+        private var cachedScalePair: Pair<UiScaleMode, Float>? = null
+
+        fun preloadAsync(context: Context) {
+            if (cachedScalePair != null) return
+            val appCtx = context.applicationContext
+            ioScope.launch {
+                loadFromDiskInternal(appCtx)
+            }
+        }
+
         fun computeAutoScaleForWidth(widthDp: Int): Float {
             return when {
                 widthDp <= 360 -> 0.85f
@@ -121,12 +152,27 @@ class UiScaleController(
             }
         }
 
-        fun loadFromContext(context: Context): Pair<UiScaleMode, Float> {
+        private fun loadFromDiskInternal(context: Context): Pair<UiScaleMode, Float> {
+            cachedScalePair?.let { return it }
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val modeStr = prefs.getString(KEY_MODE, UiScaleMode.AUTO.name) ?: UiScaleMode.AUTO.name
             val parsedMode = UiScaleMode.fromString(modeStr)
             val savedScale = prefs.getFloat(KEY_MANUAL_SCALE, PRESET_COMPACT_MOBILE).coerceIn(MIN_SCALE, MAX_SCALE)
-            return parsedMode to savedScale
+            val pair = parsedMode to savedScale
+            cachedScalePair = pair
+            return pair
+        }
+
+        fun loadFromContext(context: Context): Pair<UiScaleMode, Float> {
+            cachedScalePair?.let { return it }
+            val isMain = runCatching {
+                android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+            }.getOrDefault(false)
+            if (isMain) {
+                preloadAsync(context)
+                return UiScaleMode.AUTO to PRESET_COMPACT_MOBILE
+            }
+            return loadFromDiskInternal(context.applicationContext)
         }
     }
 }
@@ -157,6 +203,13 @@ fun rememberUiScaleController(): Pair<UiScaleController, Density> {
             rawScreenWidthDp = rawWidthDp,
             systemDensity = systemDensity
         )
+    }
+
+    androidx.compose.runtime.LaunchedEffect(controller, context) {
+        val (diskMode, diskScale) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            UiScaleController.loadFromContext(context.applicationContext)
+        }
+        controller.applyLoadedPrefsFromDisk(diskMode, diskScale)
     }
 
     val effectiveDensity = Density(

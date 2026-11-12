@@ -98,6 +98,10 @@ class PrecomputedClassroomIndices(
         CardType.entries.filter { it.id in ids }
     }
 
+    val enabledCardsMask: Int by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        KamScreenState.packEnabledCardsMask(enabledCardTypes)
+    }
+
     val collapsedBlockIds: Set<String> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         userProfile?.collapsedBlockIds?.toSet() ?: emptySet()
     }
@@ -257,6 +261,7 @@ class PrecomputedClassroomIndices(
 
     fun prewarmAll() {
         enabledCardTypes
+        enabledCardsMask
         collapsedBlockIds
         hiddenBlockIds
         displayedCardEvents
@@ -330,6 +335,9 @@ data class KamScreenState(
     val enabledCardTypes: List<CardType>
         get() = indices.enabledCardTypes
 
+    val enabledCardsMask: Int
+        get() = indices.enabledCardsMask
+
     val collapsedBlockIds: Set<String>
         get() = indices.collapsedBlockIds
 
@@ -378,6 +386,20 @@ data class KamScreenState(
     }
 
     companion object {
+        const val ALL_CARDS_ENABLED_MASK: Int = 0x7F
+
+        fun packEnabledCardsMask(cards: List<CardType>): Int {
+            var mask = 0
+            for (i in 0 until cards.size) {
+                mask = mask or (1 shl cards[i].ordinal)
+            }
+            return mask
+        }
+
+        fun isCardEnabledInMask(mask: Int, cardType: CardType): Boolean {
+            return (mask and (1 shl cardType.ordinal)) != 0
+        }
+
         fun unpackCardCount(packedCounts: Long, cardType: CardType): Int {
             if (packedCounts == 0L) return 0
             return ((packedCounts ushr (cardType.ordinal * 8)) and 0xFFL).toInt()
@@ -743,12 +765,20 @@ class KamViewModel(
     val isOnlineFlow: Flow<Boolean> = flowOf(true)
 ) : ViewModel() {
 
-    private val initialCachedSnapshot: CachedClassroomSnapshot? =
-        LocalClassroomCache.getCachedSnapshot(currentUserId)
+    @Volatile
+    private var initialCachedSnapshot: CachedClassroomSnapshot? =
+        LocalClassroomCache.getMemorySnapshot(currentUserId)
 
     private val _localPrefsOverride = MutableStateFlow<LocalUserPreferences?>(
-        LocalClassroomCache.loadUserPreferences(currentUserId).takeIf { it.updatedAtMillis > 0L }
+        LocalClassroomCache.getMemoryUserPreferences(currentUserId)?.takeIf { it.updatedAtMillis > 0L }
     )
+
+    private suspend fun resolveCachedSnapshot(): CachedClassroomSnapshot? {
+        initialCachedSnapshot?.let { return it }
+        return LocalClassroomCache.loadSnapshotFromDiskAsync(currentUserId)?.also {
+            initialCachedSnapshot = it
+        }
+    }
 
     private val _selectedMonthKey = MutableStateFlow(currentYearMonth())
     private val _selectedWeekKey = MutableStateFlow<String?>(currentYearWeek())
@@ -800,6 +830,12 @@ class KamViewModel(
         historicalRangeFetcher = { groupId, startMillis, endMillis ->
             repository.fetchCardEventsForDateRange(groupId, startMillis, endMillis).getOrDefault(emptyList())
         }
+        viewModelScope.launch(Dispatchers.IO) {
+            val loadedPrefs = LocalClassroomCache.loadUserPreferencesAsync(currentUserId)
+            if (loadedPrefs.updatedAtMillis > 0L && _localPrefsOverride.value == null) {
+                _localPrefsOverride.value = loadedPrefs
+            }
+        }
         ensureProfileInitialized()
     }
 
@@ -813,7 +849,7 @@ class KamViewModel(
                 Log.d(TAG, "[Step 4] User profile ready: uid=${profile.userId}, groupId='${profile.groupId}'")
             }.onFailure { err ->
                 Log.w(TAG, "[Step 4] Profile initialization failed: ${err.javaClass.simpleName} - ${err.message}", err)
-                if (initialCachedSnapshot == null) {
+                if (resolveCachedSnapshot() == null) {
                     _operationError.value = err.localizedMessage ?: "تعذر تهيئة حساب الخادم"
                 }
             }
@@ -843,21 +879,22 @@ class KamViewModel(
             profile
         }
         .onStart {
-            initialCachedSnapshot?.userProfile?.let { emit(it) }
+            resolveCachedSnapshot()?.userProfile?.let { emit(it) }
         }
         .catch { err ->
             Log.w(TAG, "[Step 4] Error observing userProfile: ${err.javaClass.simpleName} - ${err.message}", err)
-            if (initialCachedSnapshot == null) {
+            val snap = resolveCachedSnapshot()
+            if (snap == null) {
                 _operationError.value = err.localizedMessage
             }
-            emit(initialCachedSnapshot?.userProfile)
+            emit(snap?.userProfile)
         }
 
     private val userGroupsFlow: Flow<List<Group>> = repository.observeUserGroups(currentUserId)
-        .onStart { emit(initialCachedSnapshot?.userGroups.orEmpty()) }
+        .onStart { emit(resolveCachedSnapshot()?.userGroups.orEmpty()) }
         .catch { err ->
             Log.w(TAG, "Error observing userGroups", err)
-            emit(initialCachedSnapshot?.userGroups.orEmpty())
+            emit(resolveCachedSnapshot()?.userGroups.orEmpty())
         }
 
     private val activeGroupIdFlow: Flow<String> = userProfileFlow
@@ -870,12 +907,14 @@ class KamViewModel(
             flowOf(null)
         } else {
             Log.d(TAG, "[Step 4] Observing group document for groupId=$groupId")
-            val cachedGroup = initialCachedSnapshot?.group?.takeIf { it.inviteCode == groupId }
             repository.observeGroup(groupId)
-                .onStart { if (cachedGroup != null) emit(cachedGroup) }
+                .onStart {
+                    val cachedGroup = resolveCachedSnapshot()?.group?.takeIf { it.inviteCode == groupId }
+                    if (cachedGroup != null) emit(cachedGroup)
+                }
                 .catch { err ->
                     Log.w(TAG, "[Step 4] Error observing group ($groupId): ${err.javaClass.simpleName} - ${err.message}", err)
-                    emit(cachedGroup)
+                    emit(resolveCachedSnapshot()?.group?.takeIf { it.inviteCode == groupId })
                 }
         }
     }
@@ -884,12 +923,15 @@ class KamViewModel(
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
-            val cachedBlocks = initialCachedSnapshot?.blocks.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeBlocks(groupId, currentUserId)
-                .onStart { emit(cachedBlocks) }
+                .onStart {
+                    val cachedBlocks = resolveCachedSnapshot()?.blocks.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
+                    emit(cachedBlocks)
+                }
                 .debounceSubsequentCloudEmissions(200L)
                 .catch { err ->
                     Log.w(TAG, "Error observing blocks", err)
+                    val cachedBlocks = resolveCachedSnapshot()?.blocks.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
                     emit(cachedBlocks)
                 }
         }
@@ -899,12 +941,15 @@ class KamViewModel(
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
-            val cachedStudents = initialCachedSnapshot?.students.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeStudents(groupId, currentUserId)
-                .onStart { emit(cachedStudents) }
+                .onStart {
+                    val cachedStudents = resolveCachedSnapshot()?.students.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
+                    emit(cachedStudents)
+                }
                 .debounceSubsequentCloudEmissions(200L)
                 .catch { err ->
                     Log.w(TAG, "Error observing students", err)
+                    val cachedStudents = resolveCachedSnapshot()?.students.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
                     emit(cachedStudents)
                 }
         }
@@ -928,12 +973,15 @@ class KamViewModel(
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
-            val cachedEvents = initialCachedSnapshot?.cardEvents.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeAllCardEventsForGroup(groupId, currentUserId)
-                .onStart { emit(cachedEvents) }
+                .onStart {
+                    val cachedEvents = resolveCachedSnapshot()?.cardEvents.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
+                    emit(cachedEvents)
+                }
                 .debounceSubsequentCloudEmissions(200L)
                 .catch { err ->
                     Log.w(TAG, "Error observing allCardEvents", err)
+                    val cachedEvents = resolveCachedSnapshot()?.cardEvents.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
                     emit(cachedEvents)
                 }
         }
@@ -952,12 +1000,15 @@ class KamViewModel(
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
-            val cachedBalances = initialCachedSnapshot?.monthlyBalances.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
             repository.observeAllMonthlyBalancesForGroup(groupId, currentUserId)
-                .onStart { emit(cachedBalances) }
+                .onStart {
+                    val cachedBalances = resolveCachedSnapshot()?.monthlyBalances.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
+                    emit(cachedBalances)
+                }
                 .debounceSubsequentCloudEmissions(200L)
                 .catch { err ->
                     Log.w(TAG, "Error observing allMonthlyBalances", err)
+                    val cachedBalances = resolveCachedSnapshot()?.monthlyBalances.orEmpty().filter { it.groupId == groupId || it.groupId.isBlank() }
                     emit(cachedBalances)
                 }
         }

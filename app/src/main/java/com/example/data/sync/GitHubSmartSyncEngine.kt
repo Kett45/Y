@@ -420,12 +420,29 @@ object GitHubSmartSyncEngine {
         }.getOrDefault("")
     }
 
+    private fun isOnMainThread(): Boolean {
+        return runCatching {
+            android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+        }.getOrDefault(false)
+    }
+
     /**
-     * Loads cached delta state from SharedPreferences immediately so startup is 0ms,
-     * and normalizes links to the single permanent auto-updating GitHub URL.
+     * Loads cached delta state from SharedPreferences on [Dispatchers.IO] so startup is 0ms
+     * on the Main Thread without triggering StrictMode DiskReadViolation / DiskWriteViolation.
      */
     fun initializeFromLocalCache(context: Context) {
-        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val appCtx = context.applicationContext
+        if (isOnMainThread()) {
+            downloadScope.launch {
+                initializeFromLocalCacheInternal(appCtx)
+            }
+        } else {
+            initializeFromLocalCacheInternal(appCtx)
+        }
+    }
+
+    private fun initializeFromLocalCacheInternal(appCtx: Context) {
+        val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val rawCachedCode = prefs.getInt(KEY_SYNCED_VERSION_CODE, BuildConfig.VERSION_CODE)
         val isLocalBinaryNewerOrEqual = BuildConfig.VERSION_CODE >= rawCachedCode
         val effectiveCode = maxOf(BuildConfig.VERSION_CODE, rawCachedCode)
@@ -455,7 +472,6 @@ object GitHubSmartSyncEngine {
             .putString(KEY_BACKUP_APK_URL, singleCleanUrl)
             .apply()
 
-        val appCtx = context.applicationContext
         val apkFile = getLocalApkUpdateFile(appCtx)
         val installedSha = prefs.getString(KEY_INSTALLED_APK_SHA256, "").orEmpty()
         val hasApkFileOnDisk = apkFile.exists() && apkFile.length() > 100_000L
@@ -500,15 +516,18 @@ object GitHubSmartSyncEngine {
     fun triggerSmartUpdateCheckOrInstall(context: Context) {
         if (_syncState.value.isCheckingInBackground || _syncState.value.isDownloadingApk) return
         val appContext = context.applicationContext
-        val apkFile = getLocalApkUpdateFile(appContext)
-        if (_syncState.value.downloadedApkReady &&
-            _syncState.value.majorUpdatePrompt != null &&
-            apkFile.exists() &&
-            apkFile.length() > 100_000L
-        ) {
-            if (installDownloadedApk(context)) return
-        }
         downloadScope.launch {
+            val apkFile = getLocalApkUpdateFile(appContext)
+            if (_syncState.value.downloadedApkReady &&
+                _syncState.value.majorUpdatePrompt != null &&
+                apkFile.exists() &&
+                apkFile.length() > 100_000L
+            ) {
+                val launched = withContext(Dispatchers.Main) {
+                    installDownloadedApk(context)
+                }
+                if (launched) return@launch
+            }
             checkAndSyncSilently(appContext, forceManualCheck = true)
         }
     }
@@ -752,16 +771,19 @@ object GitHubSmartSyncEngine {
 
     fun dismissMajorUpdatePrompt(context: Context) {
         val prompt = _syncState.value.majorUpdatePrompt ?: return
-        context.applicationContext
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putInt(KEY_DISMISSED_MAJOR_VERSION, prompt.versionCode)
-            .putString(KEY_DISMISSED_APK_SHA256, prompt.apkSha256)
-            .apply()
+        val appContext = context.applicationContext
         _syncState.value = _syncState.value.copy(
             majorUpdatePrompt = null,
             majorUpdateReasonArabic = null
         )
+        downloadScope.launch {
+            appContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putInt(KEY_DISMISSED_MAJOR_VERSION, prompt.versionCode)
+                .putString(KEY_DISMISSED_APK_SHA256, prompt.apkSha256)
+                .apply()
+        }
     }
 
     /**

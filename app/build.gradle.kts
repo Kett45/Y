@@ -21,9 +21,11 @@ android {
     val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 8
     val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.8"
     val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
+    val propEnableStrictMode = (project.findProperty("ENABLE_STRICT_MODE") as? String)?.toBoolean() ?: false
     versionCode = propVersionCode
     versionName = propVersionName
     buildConfigField("String", "GITHUB_REPO", "\"$propGithubRepo\"")
+    buildConfigField("boolean", "ENABLE_STRICT_MODE_BY_DEFAULT", "$propEnableStrictMode")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

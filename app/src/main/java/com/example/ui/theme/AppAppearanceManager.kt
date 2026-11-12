@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 
 /**
  * Modular, extensible theme definition (`KamThemePaletteSpec`).
@@ -226,13 +227,35 @@ class AppAppearanceController(
     }
 
     private fun saveToLocalPrefs() {
-        val ctx = context ?: return
-        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_THEME_ID, selectedTheme.id)
-            .putString(KEY_ICON_ID, selectedIcon.id)
-            .putBoolean(KEY_SHOW_FLOATING_ADD_BUTTON, showFloatingAddButton)
-            .apply()
+        val themeToSave = selectedTheme
+        val iconToSave = selectedIcon
+        val showFabToSave = showFloatingAddButton
+        cachedAppearanceTriple = Triple(themeToSave, iconToSave, showFabToSave)
+        val ctx = context?.applicationContext ?: return
+        ioScope.launch {
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_THEME_ID, themeToSave.id)
+                .putString(KEY_ICON_ID, iconToSave.id)
+                .putBoolean(KEY_SHOW_FLOATING_ADD_BUTTON, showFabToSave)
+                .apply()
+        }
+    }
+
+    internal fun applyLoadedPrefsFromDisk(
+        loadedTheme: KamAppThemePreset,
+        loadedIcon: KamLauncherIconPreset,
+        loadedShowFab: Boolean
+    ) {
+        if (selectedTheme != loadedTheme) {
+            selectedTheme = loadedTheme
+        }
+        if (selectedIcon != loadedIcon) {
+            selectedIcon = loadedIcon
+        }
+        if (showFloatingAddButton != loadedShowFab) {
+            showFloatingAddButton = loadedShowFab
+        }
     }
 
     companion object {
@@ -241,12 +264,42 @@ class AppAppearanceController(
         private const val KEY_ICON_ID = "selected_launcher_icon_id"
         private const val KEY_SHOW_FLOATING_ADD_BUTTON = "show_floating_add_button"
 
-        fun loadFromContext(context: Context): Triple<KamAppThemePreset, KamLauncherIconPreset, Boolean> {
+        private val ioScope = kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+        )
+
+        @Volatile
+        private var cachedAppearanceTriple: Triple<KamAppThemePreset, KamLauncherIconPreset, Boolean>? = null
+
+        fun preloadAsync(context: Context) {
+            if (cachedAppearanceTriple != null) return
+            val appCtx = context.applicationContext
+            ioScope.launch {
+                loadFromDiskInternal(appCtx)
+            }
+        }
+
+        private fun loadFromDiskInternal(context: Context): Triple<KamAppThemePreset, KamLauncherIconPreset, Boolean> {
+            cachedAppearanceTriple?.let { return it }
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val theme = KamAppThemePreset.fromId(prefs.getString(KEY_THEME_ID, KamAppThemePreset.DARK.id))
             val icon = KamLauncherIconPreset.BETHLEHEM_STAR
             val showFab = prefs.getBoolean(KEY_SHOW_FLOATING_ADD_BUTTON, true)
-            return Triple(theme, icon, showFab)
+            val loaded = Triple(theme, icon, showFab)
+            cachedAppearanceTriple = loaded
+            return loaded
+        }
+
+        fun loadFromContext(context: Context): Triple<KamAppThemePreset, KamLauncherIconPreset, Boolean> {
+            cachedAppearanceTriple?.let { return it }
+            val isMain = runCatching {
+                android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+            }.getOrDefault(false)
+            if (isMain) {
+                preloadAsync(context)
+                return Triple(KamAppThemePreset.DARK, KamLauncherIconPreset.BETHLEHEM_STAR, true)
+            }
+            return loadFromDiskInternal(context.applicationContext)
         }
     }
 }
@@ -263,7 +316,7 @@ val LocalAppAppearanceController = staticCompositionLocalOf<AppAppearanceControl
 @Composable
 fun rememberAppAppearanceController(): AppAppearanceController {
     val context = LocalContext.current
-    return remember(context) {
+    val controller = remember(context) {
         val (savedTheme, savedIcon, savedShowFab) = AppAppearanceController.loadFromContext(context)
         AppAppearanceController(
             context = context.applicationContext,
@@ -272,4 +325,11 @@ fun rememberAppAppearanceController(): AppAppearanceController {
             initialShowFloatingAddButton = savedShowFab
         )
     }
+    androidx.compose.runtime.LaunchedEffect(controller, context) {
+        val (diskTheme, diskIcon, diskShowFab) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            AppAppearanceController.loadFromContext(context.applicationContext)
+        }
+        controller.applyLoadedPrefsFromDisk(diskTheme, diskIcon, diskShowFab)
+    }
+    return controller
 }

@@ -202,9 +202,9 @@ fun HomeScreen(
 
     LaunchedEffect(listState.isScrollInProgress) {
         if (listState.isScrollInProgress) {
-            KamPerformanceTracker.setInteractionContext("تمرير الرئيسية (${state.students.size} طفل)")
+            KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_HOME_SCROLL, scrolling = true)
         } else {
-            KamPerformanceTracker.setInteractionContext("الرئيسية (ثابت)")
+            KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_HOME_IDLE, scrolling = false)
         }
     }
 
@@ -362,14 +362,17 @@ fun HomeScreen(
                                 val onReorderRemembered = remember(student, onReorderStudent) {
                                     { moveUp: Boolean -> onReorderStudent(student, moveUp) }
                                 }
+                                val borderColorRemembered = remember(blockAccent) {
+                                    blockAccent.copy(alpha = 0.5f)
+                                }
                                 StudentFastCardRow(
                                     student = student,
                                     blockAccent = blockAccent,
                                     blockLabel = "بلوك ${block.servantName}",
                                     monthPoints = state.pointsForStudentInDisplayedScope(student.id),
-                                    enabledCards = state.enabledCardTypes,
+                                    enabledCardsMask = state.enabledCardsMask,
                                     packedCardCounts = state.packedCardCountsForStudent(student.id),
-                                    outerBorderColor = blockAccent.copy(alpha = 0.5f),
+                                    outerBorderColor = borderColorRemembered,
                                     canMoveUp = idx > 0,
                                     canMoveDown = idx < blockStudents.lastIndex,
                                     onAwardCard = onAwardRemembered,
@@ -425,7 +428,7 @@ fun HomeScreen(
                             UnassignedStudentLazyRow(
                                 student = student,
                                 blocks = state.blocks,
-                                enabledCards = state.enabledCardTypes,
+                                enabledCardsMask = state.enabledCardsMask,
                                 monthPoints = state.pointsForStudentInDisplayedScope(student.id),
                                 packedCardCounts = state.packedCardCountsForStudent(student.id),
                                 canMoveUp = idx > 0,
@@ -1220,7 +1223,7 @@ private fun HomeAutoShrinkingFab(
 private fun UnassignedStudentLazyRow(
     student: Student,
     blocks: List<ServantBlock>,
-    enabledCards: List<CardType>,
+    enabledCardsMask: Int,
     monthPoints: Long,
     packedCardCounts: Long,
     canMoveUp: Boolean,
@@ -1235,12 +1238,12 @@ private fun UnassignedStudentLazyRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(StudentRowCornerShape)
             .background(KamSemanticColors.elevatedSurface)
             .border(
                 width = 1.dp,
                 color = KamSemanticColors.unassignedBlock.copy(alpha = 0.55f),
-                shape = RoundedCornerShape(14.dp)
+                shape = StudentRowCornerShape
             )
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1250,7 +1253,7 @@ private fun UnassignedStudentLazyRow(
             blockAccent = MaterialTheme.colorScheme.primary,
             blockLabel = "بدون بلوك",
             monthPoints = monthPoints,
-            enabledCards = enabledCards,
+            enabledCardsMask = enabledCardsMask,
             packedCardCounts = packedCardCounts,
             outerBorderColor = null,
             canMoveUp = canMoveUp,
@@ -1275,11 +1278,11 @@ private fun UnassignedStudentLazyRow(
             ) {
                 blocks.forEach { blk ->
                     val blkColor = KamSemanticColors.blockColor(blk.colorHex)
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = blkColor.copy(alpha = 0.2f),
-                        border = BorderStroke(1.dp, blkColor),
+                    Box(
                         modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(blkColor.copy(alpha = 0.2f))
+                            .border(1.dp, blkColor, RoundedCornerShape(10.dp))
                             .clickable { onMoveStudentToBlock(blk.id) }
                             .testTag("quick_move_${student.id}_to_${blk.id}")
                     ) {
@@ -1316,153 +1319,215 @@ private fun StudentFastCardRow(
     onOpenPhotoDialog: () -> Unit,
     onReorder: (Boolean) -> Unit
 ) {
-    Surface(
-        modifier = Modifier
+    StudentFastCardRow(
+        student = student,
+        blockAccent = blockAccent,
+        blockLabel = blockLabel,
+        monthPoints = monthPoints,
+        enabledCardsMask = KamScreenState.packEnabledCardsMask(enabledCards),
+        packedCardCounts = packedCardCounts,
+        outerBorderColor = outerBorderColor,
+        canMoveUp = canMoveUp,
+        canMoveDown = canMoveDown,
+        onAwardCard = onAwardCard,
+        onOpenMoveDialog = onOpenMoveDialog,
+        onOpenDetailsDialog = onOpenDetailsDialog,
+        onOpenPhotoDialog = onOpenPhotoDialog,
+        onReorder = onReorder
+    )
+}
+
+/**
+ * 100% Compose-skippable student row:
+ * - Every parameter is `@Immutable` (`Student`, `Color`) or primitive (`Long`, `Int`, `Boolean`, `String`),
+ *   so tapping a card for 1 student skips recomposing the other 57 student rows completely.
+ * - Replaces heavy Material3 `Surface` and `IconButton` wrappers with lightweight `Column`/`Box` modifiers
+ *   to eliminate `CompositionLocalProvider` allocations during fast scrolling.
+ */
+@Composable
+private fun StudentFastCardRow(
+    student: Student,
+    blockAccent: Color,
+    blockLabel: String = "بدون بلوك",
+    monthPoints: Long,
+    enabledCardsMask: Int,
+    packedCardCounts: Long,
+    outerBorderColor: Color? = null,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onAwardCard: (CardType) -> Unit,
+    onOpenMoveDialog: () -> Unit,
+    onOpenDetailsDialog: () -> Unit,
+    onOpenPhotoDialog: () -> Unit,
+    onReorder: (Boolean) -> Unit
+) {
+    KamPerformanceTracker.recordStudentRowRecomposition()
+    val colorScheme = MaterialTheme.colorScheme
+    val typography = MaterialTheme.typography
+
+    val rowModifier = if (outerBorderColor != null) {
+        Modifier
             .fillMaxWidth()
-            .testTag("student_row_${student.id}"),
-        shape = StudentRowCornerShape,
-        color = KamSemanticColors.elevatedSurface,
-        border = if (outerBorderColor != null) BorderStroke(1.dp, outerBorderColor) else null
+            .clip(StudentRowCornerShape)
+            .background(KamSemanticColors.elevatedSurface)
+            .border(1.dp, outerBorderColor, StudentRowCornerShape)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("student_row_${student.id}")
+    } else {
+        Modifier
+            .fillMaxWidth()
+            .clip(StudentRowCornerShape)
+            .background(KamSemanticColors.elevatedSurface)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("student_row_${student.id}")
+    }
+
+    Column(
+        modifier = rowModifier,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+        // Line 1: Dedicated Full-Width Row for Avatar + Full Student Name (prevents name truncation on mobile)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Line 1: Dedicated Full-Width Row for Avatar + Full Student Name (prevents name truncation on mobile)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                StudentAvatarCircle(
-                    student = student,
-                    blockAccent = blockAccent,
-                    size = 38.dp,
-                    onClick = onOpenPhotoDialog,
-                    testTag = "student_avatar_${student.id}",
-                    blockLabel = blockLabel
-                )
+            StudentAvatarCircle(
+                student = student,
+                blockAccent = blockAccent,
+                size = 38.dp,
+                onClick = onOpenPhotoDialog,
+                testTag = "student_avatar_${student.id}",
+                blockLabel = blockLabel
+            )
 
-                Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(10.dp))
 
-                Text(
-                    text = student.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(onClick = onOpenDetailsDialog)
-                )
-            }
-
-            // Line 2: Organized Row Below Name for Student Number + Non-Wrapping Points Pill + Compact Action Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "رقم #${student.studentNumber}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        softWrap = false
-                    )
-                    Surface(
-                        shape = PointsPillCornerShape,
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Text(
-                            text = "$monthPoints نقطة",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                                .testTag("student_points_${student.id}")
-                        )
-                    }
-                }
-
-                // Reorder & Block Transfer & History Actions
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    if (canMoveUp) {
-                        IconButton(
-                            onClick = { onReorder(true) },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ArrowUpward,
-                                contentDescription = "تحريك لأعلى",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-                    }
-                    if (canMoveDown) {
-                        IconButton(
-                            onClick = { onReorder(false) },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ArrowDownward,
-                                contentDescription = "تحريك لأسفل",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-                    }
-                    IconButton(
-                        onClick = onOpenMoveDialog,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .testTag("move_student_button_${student.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.CompareArrows,
-                            contentDescription = "نقل لبلوك آخر",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    IconButton(
-                        onClick = onOpenDetailsDialog,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .testTag("details_student_button_${student.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.History,
-                            contentDescription = "سجل وتفاصيل الطفل",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            }
-
-            // Line 3: Compact Card Buttons (primitive packedCardCounts -> skips 149 rows on single card tap!)
-            CompactCardButtonsRow(
-                studentId = student.id,
-                enabledCards = enabledCards,
-                packedCardCounts = packedCardCounts,
-                tagPrefix = "card_btn",
-                onCardClick = onAwardCard
+            Text(
+                text = student.name,
+                style = typography.titleMedium,
+                color = colorScheme.onSurface,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(onClick = onOpenDetailsDialog)
             )
         }
+
+        // Line 2: Organized Row Below Name for Student Number + Non-Wrapping Points Pill + Compact Action Buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "رقم #${student.studentNumber}",
+                    style = typography.labelMedium,
+                    color = colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(PointsPillCornerShape)
+                        .background(colorScheme.primaryContainer)
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "$monthPoints نقطة",
+                        style = typography.labelMedium,
+                        color = colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.testTag("student_points_${student.id}")
+                    )
+                }
+            }
+
+            // Reorder & Block Transfer & History Actions (lightweight Box buttons without IconButton CompositionLocal overhead)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                if (canMoveUp) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .clickable { onReorder(true) }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowUpward,
+                            contentDescription = "تحريك لأعلى",
+                            tint = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+                if (canMoveDown) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .clickable { onReorder(false) }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowDownward,
+                            contentDescription = "تحريك لأسفل",
+                            tint = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onOpenMoveDialog)
+                        .testTag("move_student_button_${student.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.CompareArrows,
+                        contentDescription = "نقل لبلوك آخر",
+                        tint = colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onOpenDetailsDialog)
+                        .testTag("details_student_button_${student.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.History,
+                        contentDescription = "سجل وتفاصيل الطفل",
+                        tint = colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
+        // Line 3: Compact Card Buttons (primitive enabledCardsMask + packedCardCounts -> skips 57 rows on single card tap!)
+        CompactCardButtonsRow(
+            studentId = student.id,
+            enabledCardsMask = enabledCardsMask,
+            packedCardCounts = packedCardCounts,
+            tagPrefix = "card_btn",
+            onCardClick = onAwardCard
+        )
     }
 }
 
