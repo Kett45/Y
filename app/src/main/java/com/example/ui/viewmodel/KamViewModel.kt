@@ -910,7 +910,7 @@ class KamViewModel(
             repository.observeGroup(groupId)
                 .onStart {
                     val cachedGroup = resolveCachedSnapshot()?.group?.takeIf { it.inviteCode == groupId }
-                    if (cachedGroup != null) emit(cachedGroup)
+                    emit(cachedGroup)
                 }
                 .catch { err ->
                     Log.w(TAG, "[Step 4] Error observing group ($groupId): ${err.javaClass.simpleName} - ${err.message}", err)

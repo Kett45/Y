@@ -126,13 +126,20 @@ class MainActivity : ComponentActivity() {
             setupStrictMode()
         }
         super.onCreate(savedInstanceState)
+        runCatching {
+            if (com.google.firebase.FirebaseApp.getApps(applicationContext).isEmpty()) {
+                com.google.firebase.FirebaseApp.initializeApp(applicationContext)
+            }
+        }
         enableEdgeToEdge()
         setupFrameMetricsListener()
         LocalClassroomCache.init(applicationContext)
         com.example.ui.theme.AppAppearanceController.preloadAsync(applicationContext)
         com.example.ui.theme.UiScaleController.preloadAsync(applicationContext)
-        Firebase.auth.currentUser?.uid?.let { uid ->
-            LocalClassroomCache.preloadForUser(applicationContext, uid)
+        runCatching {
+            Firebase.auth.currentUser?.uid?.let { uid ->
+                LocalClassroomCache.preloadForUser(applicationContext, uid)
+            }
         }
         GitHubSmartSyncEngine.initializeFromLocalCache(applicationContext)
         setContent {
@@ -143,47 +150,52 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun setupStrictMode() {
-        android.os.StrictMode.setThreadPolicy(
-            android.os.StrictMode.ThreadPolicy.Builder()
-                .detectDiskReads()
-                .detectDiskWrites()
-                .detectNetwork()
-                .penaltyLog()
-                .penaltyListener(mainExecutor) { violation ->
-                    KamPerformanceTracker.recordStrictModeViolation(violation)
-                }
-                .build()
-        )
-        android.os.StrictMode.setVmPolicy(
-            android.os.StrictMode.VmPolicy.Builder()
-                .detectLeakedClosableObjects()
-                .penaltyLog()
-                .build()
-        )
+        runCatching {
+            KamPerformanceTracker.isStrictModeActive = true
+            android.os.StrictMode.setThreadPolicy(
+                android.os.StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads()
+                    .detectDiskWrites()
+                    .detectNetwork()
+                    .penaltyLog()
+                    .penaltyListener(mainExecutor) { violation ->
+                        KamPerformanceTracker.recordStrictModeViolation(violation)
+                    }
+                    .build()
+            )
+            android.os.StrictMode.setVmPolicy(
+                android.os.StrictMode.VmPolicy.Builder()
+                    .detectLeakedClosableObjects()
+                    .penaltyLog()
+                    .build()
+            )
+        }
     }
 
     private fun setupFrameMetricsListener() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-            val thread = android.os.HandlerThread("KamFrameMetricsThread").apply { start() }
-            frameMetricsHandlerThread = thread
-            val handler = android.os.Handler(thread.looper)
-            val listener = android.view.Window.OnFrameMetricsAvailableListener { _, frameMetrics, _ ->
-                val durationNanos = frameMetrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION)
-                KamPerformanceTracker.recordFrameDuration(durationNanos)
+            runCatching {
+                val thread = android.os.HandlerThread("KamFrameMetricsThread").apply { start() }
+                frameMetricsHandlerThread = thread
+                val handler = android.os.Handler(thread.looper)
+                val listener = android.view.Window.OnFrameMetricsAvailableListener { _, frameMetrics, _ ->
+                    val durationNanos = frameMetrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION)
+                    KamPerformanceTracker.recordFrameDuration(durationNanos)
+                }
+                frameMetricsListener = listener
+                window.addOnFrameMetricsAvailableListener(listener, handler)
             }
-            frameMetricsListener = listener
-            window.addOnFrameMetricsAvailableListener(listener, handler)
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-            frameMetricsListener?.let {
-                window.removeOnFrameMetricsAvailableListener(it)
+            frameMetricsListener?.let { listener ->
+                runCatching { window.removeOnFrameMetricsAvailableListener(listener) }
             }
         }
-        frameMetricsHandlerThread?.quitSafely()
+        runCatching { frameMetricsHandlerThread?.quitSafely() }
     }
 }
 
@@ -257,8 +269,8 @@ fun AuthenticatedKamApp(
                 val app = checkNotNull(this[APPLICATION_KEY])
                 LocalClassroomCache.init(app)
                 LocalClassroomCache.preloadForUser(app, user.uid)
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
+                val databaseId = runCatching { app.getString(R.string.firestore_database_id) }.getOrDefault("")
+                val db = if (databaseId.isNotBlank()) FirebaseFirestore.getInstance(databaseId) else FirebaseFirestore.getInstance()
                 Log.d("Auth", "[Step 4] Creating fresh KamViewModel for sessionKey=$sessionKey, uid=${user.uid}")
                 KamViewModel(
                     repository = KamRepository(db),

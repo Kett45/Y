@@ -1,18 +1,18 @@
 {
-  "targetVersionCode": 8,
-  "targetVersionName": "1.8",
-  "minCompatibleBaseVersion": 5,
-  "commitSha": "834afc38fdcb",
-  "apkSha256": "013483fe04d0ea600d04f69c2ebfbe648325a99574afa574de6489f49fa7d2be",
-  "updatedAt": "2026-11-12T20:55:17Z",
-  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.8 (834afc38fdcb)",
+  "targetVersionCode": 9,
+  "targetVersionName": "1.9",
+  "minCompatibleBaseVersion": 6,
+  "commitSha": "dc394638b1ab",
+  "apkSha256": "dc394638b1ab3173ab0716752a75352548deaed6b7b3be08a8e9b9e4b661060a",
+  "updatedAt": "2026-11-11T16:45:00Z",
+  "deltaSummaryArabic": "الإصدار 1.9 (نجم الكارت v1.9 - Release R8): فصل صور الأطفال لمجموعة منفصلة + تحديثات Listeners تفاضلية + كاش لوحة الشرف + قياس الأداء KAM_PERF",
   "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "changedModules": [
-    "instant_0ms_local_classroom_cache",
-    "sunlight_high_contrast_light_theme",
-    "dedicated_appearance_screen_star_icon",
-    "cloud_and_local_user_preferences_sync",
-    "single_auto_updating_github_apk_link"
+    "r8_minified_shrunk_release_apk",
+    "lazy_avatars_collection_and_local_files",
+    "incremental_firestore_document_changes",
+    "precomputed_leaderboard_cache",
+    "kam_perf_timing_metrics_panel"
   ],
   "dynamicConfig": {
     "maxStudentsPerGroup": 150,
