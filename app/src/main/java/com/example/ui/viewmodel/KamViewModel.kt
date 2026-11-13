@@ -28,6 +28,7 @@ import com.example.data.model.UserProfile
 import com.example.data.repository.KamRepository
 import com.example.ui.components.StudentAvatarImageHelper
 import com.example.util.KamPerformanceTracker
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -793,6 +794,8 @@ class KamViewModel(
     private val _optimisticAddedEvents = MutableStateFlow<Map<String, CardEvent>>(emptyMap())
     private val _optimisticRemovedEventIds = MutableStateFlow<Set<String>>(emptySet())
     private val _optimisticStudentOverrides = MutableStateFlow<Map<String, Student>>(emptyMap())
+    private val _optimisticGroupPolicyOverride = MutableStateFlow<Group?>(null)
+    private var policyMutationSeq: Long = 0L
 
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
@@ -1030,17 +1033,37 @@ class KamViewModel(
         combine(_selectedMonthKey, _selectedWeekKey, _dismissedDuplicateNames) { month, week, dismissed ->
             arrayOf<Any?>(month, week, dismissed)
         },
-        combine(_optimisticAddedEvents, _optimisticRemovedEventIds, _optimisticStudentOverrides) { optAdd, optRem, optStu ->
-            arrayOf<Any?>(optAdd, optRem, optStu)
+        combine(
+            _optimisticAddedEvents,
+            _optimisticRemovedEventIds,
+            _optimisticStudentOverrides,
+            _optimisticGroupPolicyOverride
+        ) { optAdd, optRem, optStu, optGroup ->
+            arrayOf<Any?>(optAdd, optRem, optStu, optGroup)
         }
     ) { groupArr, dataArr, filterArr, optArr ->
         val rawProfile = groupArr[0] as UserProfile?
-        val group = groupArr[1] as Group?
+        val cloudGroup = groupArr[1] as Group?
         @Suppress("UNCHECKED_CAST")
         val userGroups = groupArr[2] as List<Group>
         @Suppress("UNCHECKED_CAST")
         val blocks = groupArr[3] as List<ServantBlock>
         val localPrefs = groupArr[4] as LocalUserPreferences?
+        val optimisticGroupOverride = optArr[3] as Group?
+        val group = cloudGroup?.let { base ->
+            if (optimisticGroupOverride != null && optimisticGroupOverride.inviteCode == base.inviteCode) {
+                base.copy(
+                    allowServantUndo = optimisticGroupOverride.allowServantUndo,
+                    enforceWeeklyCardLimit = optimisticGroupOverride.enforceWeeklyCardLimit,
+                    maxMonthlyPoints = optimisticGroupOverride.maxMonthlyPoints,
+                    attendanceIsCardOnly = optimisticGroupOverride.attendanceIsCardOnly,
+                    showLeaderboard = optimisticGroupOverride.showLeaderboard,
+                    autoStudentNumber = optimisticGroupOverride.autoStudentNumber
+                )
+            } else {
+                base
+            }
+        }
 
         val profile = rawProfile?.let { base ->
             if (localPrefs != null) {
@@ -1297,6 +1320,8 @@ class KamViewModel(
         _optimisticAddedEvents.value = emptyMap()
         _optimisticRemovedEventIds.value = emptySet()
         _optimisticStudentOverrides.value = emptyMap()
+        _optimisticGroupPolicyOverride.value = null
+        policyMutationSeq = 0L
         _operationError.value = null
         _actionBanner.value = null
         _isBusy.value = false
@@ -2226,19 +2251,50 @@ class KamViewModel(
         autoStudentNumber: Boolean
     ) {
         val group = uiState.value.group ?: return
+        if (group.adminId != currentUserId) {
+            _operationError.value = "تعديل قواعد المجموعة متاح لأمين المجموعة فقط (${group.adminName})"
+            return
+        }
+
+        val clampedMaxPoints = maxMonthlyPoints.coerceIn(0L, 10000L)
+        val seq = ++policyMutationSeq
+        val optimisticGroup = group.copy(
+            allowServantUndo = allowServantUndo,
+            enforceWeeklyCardLimit = enforceWeeklyCardLimit,
+            maxMonthlyPoints = clampedMaxPoints,
+            attendanceIsCardOnly = attendanceIsCardOnly,
+            showLeaderboard = showLeaderboard,
+            autoStudentNumber = autoStudentNumber
+        )
+        _optimisticGroupPolicyOverride.value = optimisticGroup
+
         viewModelScope.launch {
             repository.updateGroupPolicies(
                 groupId = group.inviteCode,
                 allowServantUndo = allowServantUndo,
                 enforceWeeklyCardLimit = enforceWeeklyCardLimit,
-                maxMonthlyPoints = maxMonthlyPoints,
+                maxMonthlyPoints = clampedMaxPoints,
                 attendanceIsCardOnly = attendanceIsCardOnly,
                 showLeaderboard = showLeaderboard,
                 autoStudentNumber = autoStudentNumber
             ).onSuccess {
                 showBanner("تم حفظ قواعد وقرارات المجموعة")
-            }.onFailure {
-                _operationError.value = "تعديل قواعد المجموعة متاح للأمين فقط"
+                delay(600L)
+                if (policyMutationSeq == seq) {
+                    _optimisticGroupPolicyOverride.value = null
+                }
+            }.onFailure { err ->
+                if (policyMutationSeq == seq) {
+                    _optimisticGroupPolicyOverride.value = null
+                }
+                val firestoreErr = generateSequence(err) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                _operationError.value = when {
+                    firestoreErr?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+                        "رفضت قاعدة البيانات التعديل (PERMISSION_DENIED) — يجب تحديث قواعد groups في Firebase Console"
+                    else -> err.localizedMessage ?: "تعذر حفظ القاعدة في السحابة، تم إرجاع الحالة"
+                }
             }
         }
     }

@@ -81,11 +81,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
 import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
@@ -94,6 +96,7 @@ import com.example.data.model.ServantBlock
 import com.example.data.model.Student
 import com.example.ui.components.CompactCardButtonsRow
 import com.example.ui.components.StudentAvatarCircle
+import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.components.StudentPhotoAlbumSection
 import com.example.ui.components.StudentPhotoPickerDialog
 import com.example.ui.theme.KamSemanticColors
@@ -192,7 +195,12 @@ fun HomeScreen(
         onToggleBlockCollapsed(blockId)
     }
 
+    val context = LocalContext.current
     val listState = rememberLazyListState()
+    val elevatedRowSurfaceColor = KamSemanticColors.elevatedSurface
+    val onOpenMoveSheetRemembered: (Student) -> Unit = remember { { studentForMoveSheet = it } }
+    val onOpenDetailsSheetRemembered: (Student) -> Unit = remember { { studentForDetailsSheet = it } }
+    val onOpenPhotoSheetRemembered: (Student) -> Unit = remember { { studentForPhotoDialog = it } }
 
     LaunchedEffect(state.students.isNotEmpty()) {
         if (state.students.isNotEmpty()) {
@@ -200,7 +208,14 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(state.students.size) {
+        if (state.students.isNotEmpty()) {
+            StudentAvatarImageHelper.prewarmVisibleAvatarsAsync(context, state.students)
+        }
+    }
+
     LaunchedEffect(listState.isScrollInProgress) {
+        StudentAvatarImageHelper.setScrollActive(listState.isScrollInProgress)
         if (listState.isScrollInProgress) {
             KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_HOME_SCROLL, scrolling = true)
         } else {
@@ -348,38 +363,28 @@ fun HomeScreen(
                                 ServantBlockEmptyCard(blockAccent = blockAccent)
                             }
                         } else {
+                            val blockBorderColor = blockAccent.copy(alpha = 0.5f)
                             itemsIndexed(
                                 items = blockStudents,
                                 key = { _, student -> "blk_${block.id}_stu_${student.id}" },
                                 contentType = { _, _ -> "block_student_row" }
                             ) { idx, student ->
-                                val onAwardRemembered = remember(student, onAwardCard) {
-                                    { cardType: CardType -> onAwardCard(student, cardType) }
-                                }
-                                val onMoveRemembered = remember(student) { { studentForMoveSheet = student } }
-                                val onDetailsRemembered = remember(student) { { studentForDetailsSheet = student } }
-                                val onPhotoRemembered = remember(student) { { studentForPhotoDialog = student } }
-                                val onReorderRemembered = remember(student, onReorderStudent) {
-                                    { moveUp: Boolean -> onReorderStudent(student, moveUp) }
-                                }
-                                val borderColorRemembered = remember(blockAccent) {
-                                    blockAccent.copy(alpha = 0.5f)
-                                }
                                 StudentFastCardRow(
                                     student = student,
                                     blockAccent = blockAccent,
+                                    rowSurfaceColor = elevatedRowSurfaceColor,
                                     blockLabel = "بلوك ${block.servantName}",
                                     monthPoints = state.pointsForStudentInDisplayedScope(student.id),
                                     enabledCardsMask = state.enabledCardsMask,
                                     packedCardCounts = state.packedCardCountsForStudent(student.id),
-                                    outerBorderColor = borderColorRemembered,
+                                    outerBorderColor = blockBorderColor,
                                     canMoveUp = idx > 0,
                                     canMoveDown = idx < blockStudents.lastIndex,
-                                    onAwardCard = onAwardRemembered,
-                                    onOpenMoveDialog = onMoveRemembered,
-                                    onOpenDetailsDialog = onDetailsRemembered,
-                                    onOpenPhotoDialog = onPhotoRemembered,
-                                    onReorder = onReorderRemembered
+                                    onAwardCard = onAwardCard,
+                                    onOpenMoveDialog = onOpenMoveSheetRemembered,
+                                    onOpenDetailsDialog = onOpenDetailsSheetRemembered,
+                                    onOpenPhotoDialog = onOpenPhotoSheetRemembered,
+                                    onReorder = onReorderStudent
                                 )
                             }
                         }
@@ -413,32 +418,21 @@ fun HomeScreen(
                             key = { _, student -> "unassigned_stu_${student.id}" },
                             contentType = { _, _ -> "unassigned_student_row" }
                         ) { idx, student ->
-                            val onAwardRemembered = remember(student, onAwardCard) {
-                                { cardType: CardType -> onAwardCard(student, cardType) }
-                            }
-                            val onMoveBlockRemembered = remember(student, onMoveStudentToBlock) {
-                                { blkId: String -> onMoveStudentToBlock(student, blkId) }
-                            }
-                            val onMoveSheetRemembered = remember(student) { { studentForMoveSheet = student } }
-                            val onDetailsRemembered = remember(student) { { studentForDetailsSheet = student } }
-                            val onPhotoRemembered = remember(student) { { studentForPhotoDialog = student } }
-                            val onReorderRemembered = remember(student, onReorderStudent) {
-                                { moveUp: Boolean -> onReorderStudent(student, moveUp) }
-                            }
                             UnassignedStudentLazyRow(
                                 student = student,
                                 blocks = state.blocks,
+                                rowSurfaceColor = elevatedRowSurfaceColor,
                                 enabledCardsMask = state.enabledCardsMask,
                                 monthPoints = state.pointsForStudentInDisplayedScope(student.id),
                                 packedCardCounts = state.packedCardCountsForStudent(student.id),
                                 canMoveUp = idx > 0,
                                 canMoveDown = idx < unassignedStudents.lastIndex,
-                                onAwardCard = onAwardRemembered,
-                                onMoveStudentToBlock = onMoveBlockRemembered,
-                                onOpenMoveDialog = onMoveSheetRemembered,
-                                onOpenDetailsDialog = onDetailsRemembered,
-                                onOpenPhotoDialog = onPhotoRemembered,
-                                onReorder = onReorderRemembered
+                                onAwardCard = onAwardCard,
+                                onMoveStudentToBlock = onMoveStudentToBlock,
+                                onOpenMoveDialog = onOpenMoveSheetRemembered,
+                                onOpenDetailsDialog = onOpenDetailsSheetRemembered,
+                                onOpenPhotoDialog = onOpenPhotoSheetRemembered,
+                                onReorder = onReorderStudent
                             )
                         }
                     }
@@ -677,7 +671,7 @@ private fun HomeTopControlCard(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "نجم الكارت v1.6",
+                        text = "نجم الكارت v${BuildConfig.VERSION_NAME}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold,
@@ -1223,23 +1217,23 @@ private fun HomeAutoShrinkingFab(
 private fun UnassignedStudentLazyRow(
     student: Student,
     blocks: List<ServantBlock>,
+    rowSurfaceColor: Color,
     enabledCardsMask: Int,
     monthPoints: Long,
     packedCardCounts: Long,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
-    onAwardCard: (CardType) -> Unit,
-    onMoveStudentToBlock: (String) -> Unit,
-    onOpenMoveDialog: () -> Unit,
-    onOpenDetailsDialog: () -> Unit,
-    onOpenPhotoDialog: () -> Unit,
-    onReorder: (Boolean) -> Unit
+    onAwardCard: (Student, CardType) -> Unit,
+    onMoveStudentToBlock: (Student, String) -> Unit,
+    onOpenMoveDialog: (Student) -> Unit,
+    onOpenDetailsDialog: (Student) -> Unit,
+    onOpenPhotoDialog: (Student) -> Unit,
+    onReorder: (Student, Boolean) -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(StudentRowCornerShape)
-            .background(KamSemanticColors.elevatedSurface)
+            .background(rowSurfaceColor, StudentRowCornerShape)
             .border(
                 width = 1.dp,
                 color = KamSemanticColors.unassignedBlock.copy(alpha = 0.55f),
@@ -1251,6 +1245,7 @@ private fun UnassignedStudentLazyRow(
         StudentFastCardRow(
             student = student,
             blockAccent = MaterialTheme.colorScheme.primary,
+            rowSurfaceColor = rowSurfaceColor,
             blockLabel = "بدون بلوك",
             monthPoints = monthPoints,
             enabledCardsMask = enabledCardsMask,
@@ -1280,10 +1275,9 @@ private fun UnassignedStudentLazyRow(
                     val blkColor = KamSemanticColors.blockColor(blk.colorHex)
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(blkColor.copy(alpha = 0.2f))
+                            .background(blkColor.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
                             .border(1.dp, blkColor, RoundedCornerShape(10.dp))
-                            .clickable { onMoveStudentToBlock(blk.id) }
+                            .clickable { onMoveStudentToBlock(student, blk.id) }
                             .testTag("quick_move_${student.id}_to_${blk.id}")
                     ) {
                         Text(
@@ -1302,52 +1296,19 @@ private fun UnassignedStudentLazyRow(
 private val StudentRowCornerShape = RoundedCornerShape(14.dp)
 private val PointsPillCornerShape = RoundedCornerShape(8.dp)
 
-@Composable
-private fun StudentFastCardRow(
-    student: Student,
-    blockAccent: Color,
-    blockLabel: String = "بدون بلوك",
-    monthPoints: Long,
-    enabledCards: List<CardType>,
-    packedCardCounts: Long,
-    outerBorderColor: Color? = null,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onAwardCard: (CardType) -> Unit,
-    onOpenMoveDialog: () -> Unit,
-    onOpenDetailsDialog: () -> Unit,
-    onOpenPhotoDialog: () -> Unit,
-    onReorder: (Boolean) -> Unit
-) {
-    StudentFastCardRow(
-        student = student,
-        blockAccent = blockAccent,
-        blockLabel = blockLabel,
-        monthPoints = monthPoints,
-        enabledCardsMask = KamScreenState.packEnabledCardsMask(enabledCards),
-        packedCardCounts = packedCardCounts,
-        outerBorderColor = outerBorderColor,
-        canMoveUp = canMoveUp,
-        canMoveDown = canMoveDown,
-        onAwardCard = onAwardCard,
-        onOpenMoveDialog = onOpenMoveDialog,
-        onOpenDetailsDialog = onOpenDetailsDialog,
-        onOpenPhotoDialog = onOpenPhotoDialog,
-        onReorder = onReorder
-    )
-}
-
 /**
  * 100% Compose-skippable student row:
  * - Every parameter is `@Immutable` (`Student`, `Color`) or primitive (`Long`, `Int`, `Boolean`, `String`),
  *   so tapping a card for 1 student skips recomposing the other 57 student rows completely.
- * - Replaces heavy Material3 `Surface` and `IconButton` wrappers with lightweight `Column`/`Box` modifiers
- *   to eliminate `CompositionLocalProvider` allocations during fast scrolling.
+ * - Accepts hoisted `(Student, ...)` callbacks directly to avoid per-item `remember { ... }` allocations
+ *   inside `LazyColumn.itemsIndexed`.
+ * - Avoids hardware `.clip(...)` layers on row containers, points pill, and icon buttons.
  */
 @Composable
 private fun StudentFastCardRow(
     student: Student,
     blockAccent: Color,
+    rowSurfaceColor: Color,
     blockLabel: String = "بدون بلوك",
     monthPoints: Long,
     enabledCardsMask: Int,
@@ -1355,11 +1316,11 @@ private fun StudentFastCardRow(
     outerBorderColor: Color? = null,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
-    onAwardCard: (CardType) -> Unit,
-    onOpenMoveDialog: () -> Unit,
-    onOpenDetailsDialog: () -> Unit,
-    onOpenPhotoDialog: () -> Unit,
-    onReorder: (Boolean) -> Unit
+    onAwardCard: (Student, CardType) -> Unit,
+    onOpenMoveDialog: (Student) -> Unit,
+    onOpenDetailsDialog: (Student) -> Unit,
+    onOpenPhotoDialog: (Student) -> Unit,
+    onReorder: (Student, Boolean) -> Unit
 ) {
     KamPerformanceTracker.recordStudentRowRecomposition()
     val colorScheme = MaterialTheme.colorScheme
@@ -1368,16 +1329,14 @@ private fun StudentFastCardRow(
     val rowModifier = if (outerBorderColor != null) {
         Modifier
             .fillMaxWidth()
-            .clip(StudentRowCornerShape)
-            .background(KamSemanticColors.elevatedSurface)
+            .background(rowSurfaceColor, StudentRowCornerShape)
             .border(1.dp, outerBorderColor, StudentRowCornerShape)
             .padding(horizontal = 10.dp, vertical = 8.dp)
             .testTag("student_row_${student.id}")
     } else {
         Modifier
             .fillMaxWidth()
-            .clip(StudentRowCornerShape)
-            .background(KamSemanticColors.elevatedSurface)
+            .background(rowSurfaceColor, StudentRowCornerShape)
             .padding(horizontal = 10.dp, vertical = 8.dp)
             .testTag("student_row_${student.id}")
     }
@@ -1395,7 +1354,7 @@ private fun StudentFastCardRow(
                 student = student,
                 blockAccent = blockAccent,
                 size = 38.dp,
-                onClick = onOpenPhotoDialog,
+                onClick = { onOpenPhotoDialog(student) },
                 testTag = "student_avatar_${student.id}",
                 blockLabel = blockLabel
             )
@@ -1411,7 +1370,7 @@ private fun StudentFastCardRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .weight(1f)
-                    .clickable(onClick = onOpenDetailsDialog)
+                    .clickable { onOpenDetailsDialog(student) }
             )
         }
 
@@ -1434,8 +1393,7 @@ private fun StudentFastCardRow(
                 )
                 Box(
                     modifier = Modifier
-                        .clip(PointsPillCornerShape)
-                        .background(colorScheme.primaryContainer)
+                        .background(colorScheme.primaryContainer, PointsPillCornerShape)
                         .padding(horizontal = 8.dp, vertical = 2.dp)
                 ) {
                     Text(
@@ -1450,7 +1408,7 @@ private fun StudentFastCardRow(
                 }
             }
 
-            // Reorder & Block Transfer & History Actions (lightweight Box buttons without IconButton CompositionLocal overhead)
+            // Reorder & Block Transfer & History Actions (lightweight Box buttons without clip or IconButton CompositionLocal overhead)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
@@ -1460,8 +1418,7 @@ private fun StudentFastCardRow(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .size(32.dp)
-                            .clip(CircleShape)
-                            .clickable { onReorder(true) }
+                            .clickable { onReorder(student, true) }
                     ) {
                         Icon(
                             imageVector = Icons.Default.ArrowUpward,
@@ -1476,8 +1433,7 @@ private fun StudentFastCardRow(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .size(32.dp)
-                            .clip(CircleShape)
-                            .clickable { onReorder(false) }
+                            .clickable { onReorder(student, false) }
                     ) {
                         Icon(
                             imageVector = Icons.Default.ArrowDownward,
@@ -1491,8 +1447,7 @@ private fun StudentFastCardRow(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(32.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onOpenMoveDialog)
+                        .clickable { onOpenMoveDialog(student) }
                         .testTag("move_student_button_${student.id}")
                 ) {
                     Icon(
@@ -1506,8 +1461,7 @@ private fun StudentFastCardRow(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(32.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onOpenDetailsDialog)
+                        .clickable { onOpenDetailsDialog(student) }
                         .testTag("details_student_button_${student.id}")
                 ) {
                     Icon(
@@ -1526,7 +1480,7 @@ private fun StudentFastCardRow(
             enabledCardsMask = enabledCardsMask,
             packedCardCounts = packedCardCounts,
             tagPrefix = "card_btn",
-            onCardClick = onAwardCard
+            onCardClick = { cardType -> onAwardCard(student, cardType) }
         )
     }
 }

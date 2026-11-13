@@ -49,6 +49,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -81,6 +82,9 @@ import com.example.data.sync.GitHubSmartSyncEngine
 import com.example.data.sync.GitHubVersionManifest
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.signOut
+import com.example.ui.components.LocalStudentQuickPeekController
+import com.example.ui.components.StudentHoldQuickPeekRootOverlay
+import com.example.ui.components.StudentQuickPeekController
 import com.example.ui.screens.GroupInvitationsScreen
 import com.example.ui.screens.GroupOnboardingScreen
 import com.example.ui.screens.HomeScreen
@@ -426,11 +430,17 @@ fun AuthenticatedKamApp(
     }
 
     // Root Box: Layer 1 is the fixed Scaffold (never shifts down when notifications appear);
-    // Layer 2 is the Floating Notification Overlay rendered on top (Alignment.TopCenter, zIndex = 10f).
-    Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            contentWindowInsets = WindowInsets.safeDrawing,
+    // Layer 2 is FloatingNotificationsOverlay (zIndex = 10f);
+    // Layer 3 is StudentHoldQuickPeekRootOverlay (zIndex = 20f, full screen edge-to-edge).
+    val quickPeekController = remember { StudentQuickPeekController() }
+    LaunchedEffect(currentTab) {
+        quickPeekController.dismiss()
+    }
+    CompositionLocalProvider(LocalStudentQuickPeekController provides quickPeekController) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Scaffold(
+                modifier = Modifier.fillMaxSize(),
+                contentWindowInsets = WindowInsets.safeDrawing,
             bottomBar = {
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -584,6 +594,13 @@ fun AuthenticatedKamApp(
                 .align(Alignment.TopCenter)
                 .zIndex(10f)
         )
+
+            // Layer 3: Full-screen edge-to-edge Student Quick Peek Preview (centered in RTL/LTR, covers status & nav bars)
+            StudentHoldQuickPeekRootOverlay(
+                request = quickPeekController.activeRequest,
+                modifier = Modifier.zIndex(20f)
+            )
+        }
     }
 }
 

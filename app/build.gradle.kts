@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.kamlite.rtyxqp"
     minSdk = 24
     targetSdk = 36
-    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 9
-    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.9"
+    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 10
+    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.10"
     val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
     val propEnableStrictMode = (project.findProperty("ENABLE_STRICT_MODE") as? String)?.toBoolean() ?: false
     versionCode = propVersionCode
@@ -98,8 +98,8 @@ tasks.register<Copy>("syncReleaseApk") {
   into(rootProject.layout.projectDirectory.dir("releases"))
   rename { "kAM-Lite.apk" }
 
-  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 9
-  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.9"
+  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 10
+  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.10"
   val repoSlug = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
   val releasesDir = rootProject.layout.projectDirectory.dir("releases").asFile
   val readmeFile = rootProject.layout.projectDirectory.file("README.md").asFile

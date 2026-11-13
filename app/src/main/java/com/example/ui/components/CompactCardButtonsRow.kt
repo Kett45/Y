@@ -15,7 +15,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -125,8 +124,10 @@ fun CompactCardButtonsRow(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(buttonSize)
-                    .clip(CardButtonCornerShape)
-                    .background(if (isAwarded) cardColor else PreallocatedCardUnawardedBg[ordinal])
+                    .background(
+                        color = if (isAwarded) cardColor else PreallocatedCardUnawardedBg[ordinal],
+                        shape = CardButtonCornerShape
+                    )
                     .border(
                         border = if (isAwarded) PreallocatedAwardedBorder[ordinal] else PreallocatedUnawardedBorder[ordinal],
                         shape = CardButtonCornerShape

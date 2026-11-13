@@ -507,3 +507,52 @@ test("8. Decoupled student avatars collection (groups/{groupId}/avatars/{student
   );
 });
 
+test("9. Group Admin can toggle enforceWeeklyCardLimit and update policies (even on legacy group doc), while Servant cannot", async () => {
+  await seedGroupWithMembers(true);
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID).firestore();
+  const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
+
+  // Admin enables enforceWeeklyCardLimit and sets maxMonthlyPoints = 10000
+  await assertSucceeds(
+    adminDb.collection("groups").doc(GROUP_ID).update({
+      enforceWeeklyCardLimit: true,
+      maxMonthlyPoints: 10000,
+      updatedAt: new Date(),
+    })
+  );
+
+  // Servant cannot mutate enforceWeeklyCardLimit
+  await assertFails(
+    servantDb.collection("groups").doc(GROUP_ID).update({
+      enforceWeeklyCardLimit: false,
+      updatedAt: new Date(),
+    })
+  );
+
+  // Legacy group document without createdAt field can still be updated by Admin
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("groups").doc("KAMLEGACY").set({
+      inviteCode: "KAMLEGACY",
+      name: "فصل قديم",
+      adminId: ADMIN_UID,
+      adminName: "أمين الفصل",
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      allowServantUndo: true,
+      enforceWeeklyCardLimit: false,
+      maxMonthlyPoints: 0,
+      attendanceIsCardOnly: true,
+      showLeaderboard: true,
+      autoStudentNumber: true,
+      updatedAt: new Date(),
+    });
+  });
+
+  await assertSucceeds(
+    adminDb.collection("groups").doc("KAMLEGACY").update({
+      enforceWeeklyCardLimit: true,
+      updatedAt: new Date(),
+    })
+  );
+});
+
+

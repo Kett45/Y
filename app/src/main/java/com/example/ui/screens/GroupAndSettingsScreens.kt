@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -60,6 +62,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -79,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import com.example.data.model.CardType
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
@@ -884,6 +888,8 @@ fun SettingsScreen(
 
     LaunchedEffect(Unit) {
         KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_SETTINGS, scrolling = false)
+        // Wait until the tab transition settles before publishing snapshot metrics to avoid an entry jank spike
+        delay(360L)
         KamPerformanceTracker.publishFrameMetricsToState()
     }
 
@@ -894,23 +900,31 @@ fun SettingsScreen(
         return
     }
 
-    var allowServantUndo by rememberSaveable(group?.allowServantUndo) {
-        mutableStateOf(group?.allowServantUndo ?: true)
-    }
-    var enforceWeeklyLimit by rememberSaveable(group?.enforceWeeklyCardLimit) {
-        mutableStateOf(group?.enforceWeeklyCardLimit ?: false)
-    }
+    val allowServantUndo = group?.allowServantUndo ?: true
+    val enforceWeeklyLimit = group?.enforceWeeklyCardLimit ?: false
+    val attendanceIsCardOnly = group?.attendanceIsCardOnly ?: true
+    val showLeaderboard = group?.showLeaderboard ?: true
+    val autoStudentNumber = group?.autoStudentNumber ?: true
     var maxMonthlyPtsText by rememberSaveable(group?.maxMonthlyPoints) {
         mutableStateOf((group?.maxMonthlyPoints ?: 0L).toString())
     }
-    var attendanceIsCardOnly by rememberSaveable(group?.attendanceIsCardOnly) {
-        mutableStateOf(group?.attendanceIsCardOnly ?: true)
-    }
-    var showLeaderboard by rememberSaveable(group?.showLeaderboard) {
-        mutableStateOf(group?.showLeaderboard ?: true)
-    }
-    var autoStudentNumber by rememberSaveable(group?.autoStudentNumber) {
-        mutableStateOf(group?.autoStudentNumber ?: true)
+
+    fun persistGroupPolicies(
+        nextAllowServantUndo: Boolean = allowServantUndo,
+        nextEnforceWeeklyLimit: Boolean = enforceWeeklyLimit,
+        nextMaxMonthlyPoints: Long = maxMonthlyPtsText.toLongOrNull() ?: (group?.maxMonthlyPoints ?: 0L),
+        nextAttendanceIsCardOnly: Boolean = attendanceIsCardOnly,
+        nextShowLeaderboard: Boolean = showLeaderboard,
+        nextAutoStudentNumber: Boolean = autoStudentNumber
+    ) {
+        onSaveGroupPolicies(
+            nextAllowServantUndo,
+            nextEnforceWeeklyLimit,
+            nextMaxMonthlyPoints,
+            nextAttendanceIsCardOnly,
+            nextShowLeaderboard,
+            nextAutoStudentNumber
+        )
     }
 
     LazyColumn(
@@ -918,17 +932,17 @@ fun SettingsScreen(
             .fillMaxSize()
             .testTag("settings_lazy_column"),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // 0. Appearance & Themes Dedicated Screen Entry Button ("المظهر والسمات")
-        item(key = "appearance_and_icon_settings") {
+        item(key = "appearance_and_icon_settings", contentType = "settings_card") {
             AppearanceSettingsEntryCard(
                 onOpenAppearanceScreen = { showAppearanceFullScreen = true }
             )
         }
 
         // 0. Multi-Group Switcher Card ("التبديل بين المجموعات من شاشة المجموعة والإعدادات فقط")
-        item(key = "multi_group_switcher_in_settings") {
+        item(key = "multi_group_switcher_in_settings", contentType = "settings_card") {
             MultiGroupSwitcherCard(
                 state = state,
                 onSwitchGroup = onSwitchGroup,
@@ -937,248 +951,258 @@ fun SettingsScreen(
             )
         }
 
-        // 1. Personal Card Visibility Settings ("كل خادم يفعّل ويخفي الكروت من الإعدادات بشكل مستقل")
-        item(key = "personal_cards_settings") {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        // 1. Personal Card Visibility Settings — flattened header + discrete LazyColumn rows for fast opening
+        item(key = "personal_cards_settings_header", contentType = "settings_section_header") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = "إظهار / إخفاء الكروت السبعة (تفضيل شخصي)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = "إظهار / إخفاء الكروت السبعة (تفضيل شخصي)",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "الكروت المفعّلة هنا فقط تظهر تحت اسم كل طفل في شاشتك الرئيسية ولا تؤثر على باقي الخدام.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    HorizontalDivider()
-
-                    CardType.entries.forEach { card ->
-                        val isEnabled = card.id in enabledIds
-                        val cardColor = KamSemanticColors.cardColor(card)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = cardColor.copy(alpha = 0.2f),
-                                    border = BorderStroke(1.dp, cardColor)
-                                ) {
-                                    Text(
-                                        text = "${card.badgeSymbol} +${card.points}",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = cardColor,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column {
-                                    Text(
-                                        text = "كارت ${card.arabicTitle}",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "${card.points} نقاط",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-
-                            Switch(
-                                checked = isEnabled,
-                                onCheckedChange = { checked ->
-                                    onToggleCardVisibility(card, checked)
-                                },
-                                modifier = Modifier.testTag("switch_card_${card.id}")
-                            )
-                        }
+                        Text(
+                            text = "الكروت المفعّلة هنا فقط تظهر تحت اسم كل طفل في شاشتك الرئيسية ولا تؤثر على باقي الخدام.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
+                HorizontalDivider()
+            }
+        }
+
+        items(
+            items = CardType.entries,
+            key = { card -> "personal_card_row_${card.id}" },
+            contentType = { "settings_switch_row" }
+        ) { card ->
+            val isEnabled = card.id in enabledIds
+            val cardColor = KamSemanticColors.cardColor(card)
+            val isLast = card == CardType.entries.last()
+            val rowShape = if (isLast) {
+                RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
+            } else {
+                RoundedCornerShape(0.dp)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, rowShape)
+                    .clickable { onToggleCardVisibility(card, !isEnabled) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .background(cardColor.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+                            .border(1.dp, cardColor, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "${card.badgeSymbol} +${card.points}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = cardColor,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "كارت ${card.arabicTitle}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "${card.points} نقاط",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Switch(
+                    checked = isEnabled,
+                    onCheckedChange = { checked ->
+                        onToggleCardVisibility(card, checked)
+                    },
+                    modifier = Modifier.testTag("switch_card_${card.id}")
+                )
             }
         }
 
         // 1b. Personal Block Visibility Settings ("إخفاء بلوك عندي فقط - تفضيل شخصي")
         if (state.blocks.isNotEmpty()) {
-            item(key = "personal_blocks_visibility_settings") {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            item(key = "personal_blocks_visibility_settings", contentType = "settings_card") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Text(
-                            text = "إظهار / إخفاء البلوكات في شاشتي (تفضيل شخصي)",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "تُحفظ حالة طي وإخفاء البلوكات في حسابك الشخصي فقط دون التأثير على باقي أعضاء المجموعة.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Text(
+                        text = "إظهار / إخفاء البلوكات في شاشتي (تفضيل شخصي)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "تُحفظ حالة طي وإخفاء البلوكات في حسابك الشخصي فقط دون التأثير على باقي أعضاء المجموعة.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-                        HorizontalDivider()
+                    HorizontalDivider()
 
-                        state.blocks.forEach { blk ->
-                            val isVisibleOnHome = blk.id !in state.hiddenBlockIds
-                            val blkColor = KamSemanticColors.blockColor(blk.colorHex)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(14.dp)
-                                            .clip(CircleShape)
-                                            .background(blkColor)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Text(
-                                        text = "بلوك ${blk.servantName}",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                                Switch(
-                                    checked = isVisibleOnHome,
-                                    onCheckedChange = { onToggleBlockHidden(blk.id) },
-                                    modifier = Modifier.testTag("switch_block_visible_${blk.id}")
+                    state.blocks.forEach { blk ->
+                        val isVisibleOnHome = blk.id !in state.hiddenBlockIds
+                        val blkColor = KamSemanticColors.blockColor(blk.colorHex)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggleBlockHidden(blk.id) }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(14.dp)
+                                        .background(blkColor, CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "بلوك ${blk.servantName}",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
+                            Switch(
+                                checked = isVisibleOnHome,
+                                onCheckedChange = { onToggleBlockHidden(blk.id) },
+                                modifier = Modifier.testTag("switch_block_visible_${blk.id}")
+                            )
                         }
                     }
                 }
             }
         }
 
-        // 2. Group Policy Decisions (Section 5 rules configurable by Admin)
-        item(key = "group_policy_settings") {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        // 2. Group Policy Decisions (Auto-saved immediately on toggle + dedicated Save button for maxMonthlyPoints)
+        item(key = "group_policy_settings", contentType = "settings_policy_card") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "قواعد وقرارات الفصل (يضبطها الأمين)",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
+                Text(
+                    text = "قواعد وقرارات الفصل (يضبطها الأمين — حفظ فوري)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
 
-                    PolicySwitchRow(
-                        title = "السماح للخادم بإلغاء كارت سجّله بالخطأ",
-                        subtitle = "عند الإيقاف، الأمين فقط يمكنه إلغاء الكارت من سجل الطفل",
-                        checked = allowServantUndo,
-                        enabled = state.isAdmin,
-                        onCheckedChange = { allowServantUndo = it }
-                    )
-
-                    PolicySwitchRow(
-                        title = "الكارت يُعطى مرة واحدة فقط في الأسبوع لكل طفل",
-                        subtitle = "عند الإيقاف، يمكن إعطاء الكارت أكثر من مرة خلال الشهر (مع منع الضغط المزدوج)",
-                        checked = enforceWeeklyLimit,
-                        enabled = state.isAdmin,
-                        onCheckedChange = { enforceWeeklyLimit = it }
-                    )
-
-                    PolicySwitchRow(
-                        title = "الترقيم التلقائي المتسلسل للأطفال",
-                        subtitle = "عند الإيقاف، يُدخل الخادم رقم الطفل يدوياً عند الإضافة",
-                        checked = autoStudentNumber,
-                        enabled = state.isAdmin,
-                        onCheckedChange = { autoStudentNumber = it }
-                    )
-
-                    PolicySwitchRow(
-                        title = "إظهار لوحة الشرف وترتيب النقاط الشهري",
-                        subtitle = "عرض أعلى ٥ أطفال بالنقاط في الشاشة الرئيسية",
-                        checked = showLeaderboard,
-                        enabled = state.isAdmin,
-                        onCheckedChange = { showLeaderboard = it }
-                    )
-
-                    PolicySwitchRow(
-                        title = "الحضور هو كارت 'الحضور' (٣ نقاط)",
-                        subtitle = "اعتماد كارت الحضور كآلية موحدة وسريعة لتسجيل حضور الطفل",
-                        checked = attendanceIsCardOnly,
-                        enabled = state.isAdmin,
-                        onCheckedChange = { attendanceIsCardOnly = it }
-                    )
-
-                    OutlinedTextField(
-                        value = maxMonthlyPtsText,
-                        onValueChange = { maxMonthlyPtsText = it.filter { ch -> ch.isDigit() } },
-                        label = { Text("الحد الأقصى الشهري للنقاط لكل طفل (0 = بدون حد)") },
-                        enabled = state.isAdmin,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    if (state.isAdmin) {
-                        Button(
-                            onClick = {
-                                val maxPts = maxMonthlyPtsText.toLongOrNull() ?: 0L
-                                onSaveGroupPolicies(
-                                    allowServantUndo,
-                                    enforceWeeklyLimit,
-                                    maxPts,
-                                    attendanceIsCardOnly,
-                                    showLeaderboard,
-                                    autoStudentNumber
-                                )
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                                .testTag("save_group_policies_button"),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text("حفظ قواعد المجموعة")
-                        }
-                    } else {
-                        Text(
-                            text = "ملاحظة: هذه القواعد للعرض، وتعديلها متاح لأمين المجموعة فقط.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                PolicySwitchRow(
+                    title = "السماح للخادم بإلغاء كارت سجّله بالخطأ",
+                    subtitle = "عند الإيقاف، الأمين فقط يمكنه إلغاء الكارت من سجل الطفل",
+                    checked = allowServantUndo,
+                    enabled = state.isAdmin,
+                    testTag = "switch_policy_allow_servant_undo",
+                    onCheckedChange = { checked ->
+                        persistGroupPolicies(nextAllowServantUndo = checked)
                     }
+                )
+
+                PolicySwitchRow(
+                    title = "الكارت يُعطى مرة واحدة فقط في الأسبوع لكل طفل",
+                    subtitle = "عند الإيقاف، يمكن إعطاء الكارت أكثر من مرة خلال الشهر (مع منع الضغط المزدوج)",
+                    checked = enforceWeeklyLimit,
+                    enabled = state.isAdmin,
+                    testTag = "switch_policy_enforce_weekly_limit",
+                    onCheckedChange = { checked ->
+                        persistGroupPolicies(nextEnforceWeeklyLimit = checked)
+                    }
+                )
+
+                PolicySwitchRow(
+                    title = "الترقيم التلقائي المتسلسل للأطفال",
+                    subtitle = "عند الإيقاف، يُدخل الخادم رقم الطفل يدوياً عند الإضافة",
+                    checked = autoStudentNumber,
+                    enabled = state.isAdmin,
+                    testTag = "switch_policy_auto_student_number",
+                    onCheckedChange = { checked ->
+                        persistGroupPolicies(nextAutoStudentNumber = checked)
+                    }
+                )
+
+                PolicySwitchRow(
+                    title = "إظهار لوحة الشرف وترتيب النقاط الشهري",
+                    subtitle = "عرض أعلى ٥ أطفال بالنقاط في الشاشة الرئيسية",
+                    checked = showLeaderboard,
+                    enabled = state.isAdmin,
+                    testTag = "switch_policy_show_leaderboard",
+                    onCheckedChange = { checked ->
+                        persistGroupPolicies(nextShowLeaderboard = checked)
+                    }
+                )
+
+                PolicySwitchRow(
+                    title = "الحضور هو كارت 'الحضور' (٣ نقاط)",
+                    subtitle = "اعتماد كارت الحضور كآلية موحدة وسريعة لتسجيل حضور الطفل",
+                    checked = attendanceIsCardOnly,
+                    enabled = state.isAdmin,
+                    testTag = "switch_policy_attendance_card_only",
+                    onCheckedChange = { checked ->
+                        persistGroupPolicies(nextAttendanceIsCardOnly = checked)
+                    }
+                )
+
+                OutlinedTextField(
+                    value = maxMonthlyPtsText,
+                    onValueChange = { maxMonthlyPtsText = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("الحد الأقصى الشهري للنقاط لكل طفل (0 = بدون حد)") },
+                    enabled = state.isAdmin,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (state.isAdmin) {
+                    Button(
+                        onClick = {
+                            val maxPts = maxMonthlyPtsText.toLongOrNull() ?: 0L
+                            persistGroupPolicies(nextMaxMonthlyPoints = maxPts)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("save_group_policies_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("حفظ الحد الشهري وقواعد المجموعة")
+                    }
+                } else {
+                    Text(
+                        text = "ملاحظة: هذه القواعد للعرض فقط، وتعديلها متاح لأمين المجموعة (${group?.adminName.orEmpty()}).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -1721,19 +1745,54 @@ private fun PolicySwitchRow(
     subtitle: String,
     checked: Boolean,
     enabled: Boolean,
+    testTag: String = "",
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = 52.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .padding(horizontal = 6.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Box(
+                    modifier = Modifier
+                        .background(
+                            color = if (checked) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            shape = RoundedCornerShape(6.dp)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (checked) "مفعّل" else "متوقف",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (checked) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
@@ -1743,7 +1802,13 @@ private fun PolicySwitchRow(
         Switch(
             checked = checked,
             enabled = enabled,
-            onCheckedChange = onCheckedChange
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                uncheckedThumbColor = MaterialTheme.colorScheme.onSurface,
+                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                uncheckedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+            ),
+            modifier = if (testTag.isNotBlank()) Modifier.testTag(testTag) else Modifier
         )
     }
 }
@@ -1881,67 +1946,67 @@ private fun PerformanceMetricsSettingsCard() {
                 afterValue = "١ صف فقط (إجمالي الجلسة: ${metrics.studentRowRecompositionCount})"
             )
 
-            // Per-Context Jank Breakdown Table
+            // Per-Context Jank Breakdown Table (lightweight Column instead of nested Surface)
             if (metrics.contextBreakdowns.isNotEmpty()) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = "تفصيل الـ Jank حسب السياق (Context Breakdown):",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                            shape = RoundedCornerShape(12.dp)
                         )
-                        metrics.contextBreakdowns.forEach { ctx ->
-                            Text(
-                                text = String.format(
-                                    Locale.US,
-                                    "• %s: %.1f%% بطيء (%d/%d) | متوسط %.1fms | أسوأ %.1fms",
-                                    ctx.contextName,
-                                    ctx.jankPercentage,
-                                    ctx.jankFrames,
-                                    ctx.totalFrames,
-                                    ctx.avgFrameMs,
-                                    ctx.worstFrameMs
-                                ),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "تفصيل الـ Jank حسب السياق (Context Breakdown):",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    metrics.contextBreakdowns.forEach { ctx ->
+                        Text(
+                            text = String.format(
+                                Locale.US,
+                                "• %s: %.1f%% بطيء (%d/%d) | متوسط %.1fms | أسوأ %.1fms",
+                                ctx.contextName,
+                                ctx.jankPercentage,
+                                ctx.jankFrames,
+                                ctx.totalFrames,
+                                ctx.avgFrameMs,
+                                ctx.worstFrameMs
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
             }
 
             // Detailed StrictMode Violations Breakdown (if any occurred)
             if (metrics.strictModeViolationDetails.isNotEmpty()) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = "تفصيل مخالفات StrictMode (${metrics.strictModeViolationsCount}):",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.error,
-                            fontWeight = FontWeight.Bold
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                            shape = RoundedCornerShape(12.dp)
                         )
-                        metrics.strictModeViolationDetails.forEach { v ->
-                            Text(
-                                text = "• [${v.type}] ${v.fileAndLine} (${v.methodName}) — التكرار: ${v.count}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "تفصيل مخالفات StrictMode (${metrics.strictModeViolationsCount}):",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Bold
+                    )
+                    metrics.strictModeViolationDetails.forEach { v ->
+                        Text(
+                            text = "• [${v.type}] ${v.fileAndLine} (${v.methodName}) — التكرار: ${v.count}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
                     }
                 }
             }
@@ -1993,22 +2058,19 @@ private fun PerformanceMetricsSettingsCard() {
             }
 
             if (showRawLogs && metrics.recentTimingLogs.isNotEmpty()) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        metrics.recentTimingLogs.take(12).forEach { logLine ->
-                            Text(
-                                text = "• $logLine",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                    metrics.recentTimingLogs.take(12).forEach { logLine ->
+                        Text(
+                            text = "• $logLine",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -2022,38 +2084,36 @@ private fun PerformanceMetricComparisonRow(
     beforeValue: String,
     afterValue: String
 ) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 7.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1.3f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(10.dp)
             )
-            Column(horizontalAlignment = Alignment.End, modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "قبل: $beforeValue",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-                Text(
-                    text = "بعد: $afterValue",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1.3f)
+        )
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.weight(1f)) {
+            Text(
+                text = "قبل: $beforeValue",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            Text(
+                text = "بعد: $afterValue",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
         }
     }
 }

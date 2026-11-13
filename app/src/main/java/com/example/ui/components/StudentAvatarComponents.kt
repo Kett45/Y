@@ -27,6 +27,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -77,6 +78,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -87,6 +89,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -108,8 +111,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalViewConfiguration
-import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onClick
@@ -122,6 +123,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
@@ -130,6 +132,7 @@ import com.example.data.model.Student
 import com.example.util.KamPerformanceTracker
 import android.os.SystemClock
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -170,6 +173,52 @@ object StudentAvatarImageHelper {
     private val framedAvatarCache = object : LruCache<Int, ImageBitmap>(240) {}
     private val fullPhotoCache = object : LruCache<Int, ImageBitmap>(80) {}
     private val localPackedAvatarByStudentId = ConcurrentHashMap<String, String>()
+
+    @Volatile
+    var isScrollActive: Boolean = false
+        private set
+
+    fun setScrollActive(active: Boolean) {
+        isScrollActive = active
+    }
+
+    suspend fun awaitScrollSettled() {
+        var waitCycles = 0
+        while (isScrollActive && waitCycles < 20) {
+            delay(70L)
+            waitCycles++
+        }
+    }
+
+    fun peekCachedLocalAlbumRaw(studentId: String): String {
+        if (studentId.isBlank()) return ""
+        return localPackedAvatarByStudentId[studentId].orEmpty()
+    }
+
+    fun prewarmVisibleAvatarsAsync(context: Context?, students: List<Student>, limit: Int = 18) {
+        if (context == null || students.isEmpty()) return
+        val appCtx = context.applicationContext ?: context
+        val targets = students.asSequence()
+            .filter { it.effectiveHasAvatar || it.avatarBase64.isNotBlank() }
+            .take(limit)
+            .toList()
+        if (targets.isEmpty()) return
+        avatarIoScope.launch {
+            for (stu in targets) {
+                if (getCachedBitmapForStudent(stu) != null) continue
+                val packed = resolveStudentPackedAvatar(appCtx, stu)
+                if (packed.isNotBlank()) {
+                    val mainEntry = extractMainPhotoBase64(packed)
+                    val alias = "student_${stu.id}_${stu.effectiveAvatarKey}".hashCode()
+                    decodeBase64ToImageBitmap(
+                        base64 = mainEntry,
+                        context = appCtx,
+                        studentKeyAlias = alias
+                    )
+                }
+            }
+        }
+    }
 
     /**
      * Hook wired by `KamViewModel` to lazily fetch `groups/{groupId}/avatars/{studentId}`
@@ -1004,11 +1053,48 @@ object StudentAvatarImageHelper {
     }
 }
 
+@Immutable
+data class StudentQuickPeekRequest(
+    val student: Student,
+    val blockAccent: Color,
+    val blockLabel: String?,
+    val fullPhotoBitmap: ImageBitmap?,
+    val isLoadingFullPhoto: Boolean = false
+)
+
+class StudentQuickPeekController {
+    var activeRequest by mutableStateOf<StudentQuickPeekRequest?>(null)
+        private set
+
+    fun show(request: StudentQuickPeekRequest) {
+        activeRequest = request
+    }
+
+    fun updatePhoto(studentId: String, fullPhotoBitmap: ImageBitmap?, isLoadingFullPhoto: Boolean) {
+        val current = activeRequest ?: return
+        if (current.student.id == studentId) {
+            activeRequest = current.copy(
+                fullPhotoBitmap = fullPhotoBitmap ?: current.fullPhotoBitmap,
+                isLoadingFullPhoto = isLoadingFullPhoto
+            )
+        }
+    }
+
+    fun dismiss(studentId: String? = null) {
+        val current = activeRequest ?: return
+        if (studentId == null || current.student.id == studentId) {
+            activeRequest = null
+        }
+    }
+}
+
+val LocalStudentQuickPeekController = staticCompositionLocalOf<StudentQuickPeekController?> { null }
+
 /**
  * Circular thumbnail for a child.
- * - Single tap (`onTap`): invokes [onClick] (e.g., opens the profile photo & album dialog).
- * - Fast press-and-hold (`onLongPress`): immediately opens the floating Quick Peek popup showing
- *   the student's full photo (or large initials if no photo is set), full name, student number,
+ * - Single tap (`onTap`): invokes [onClick] (opens the profile photo & album dialog).
+ * - Fast press-and-hold (`onLongPress`): immediately opens the root-level full-screen Quick Peek
+ *   overlay showing the child's highest-resolution photo (~85% of the preview height), name, number,
  *   and block badge, and automatically dismisses the instant the finger is lifted.
  */
 @Composable
@@ -1022,22 +1108,29 @@ fun StudentAvatarCircle(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val peekController = LocalStudentQuickPeekController.current
     val currentOnClick by rememberUpdatedState(onClick)
+    val hasPhotoInModel = student.effectiveHasAvatar || student.avatarBase64.isNotBlank()
 
     val avatarIdentityKey = remember(student.id, student.avatarBase64, student.hasAvatar, student.avatarHash) {
         "${student.id}_${student.effectiveAvatarKey}_${student.effectiveHasAvatar}"
     }
     var resolvedPackedAvatar by remember(avatarIdentityKey) {
-        mutableStateOf(student.avatarBase64)
+        mutableStateOf(
+            student.avatarBase64.ifBlank { StudentAvatarImageHelper.peekCachedLocalAlbumRaw(student.id) }
+        )
     }
     var imageBitmap by remember(avatarIdentityKey) {
         mutableStateOf(StudentAvatarImageHelper.getCachedBitmapForStudent(student))
     }
     var isHoldPreviewVisible by remember(student.id) { mutableStateOf(false) }
 
-    // Lazily load from local disk or groups/{groupId}/avatars/{studentId} on background thread when visible
-    if ((student.effectiveHasAvatar || student.avatarBase64.isNotBlank()) && imageBitmap == null) {
+    // Lazily load 160px circular thumbnail when visible, pausing non-cached decodes during active fling
+    if (hasPhotoInModel && imageBitmap == null) {
         LaunchedEffect(avatarIdentityKey) {
+            if (StudentAvatarImageHelper.isScrollActive) {
+                StudentAvatarImageHelper.awaitScrollSettled()
+            }
             val packed = StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
             if (packed.isNotBlank()) {
                 resolvedPackedAvatar = packed
@@ -1054,97 +1147,151 @@ fun StudentAvatarCircle(
         }
     }
 
-    val baseViewConfig = LocalViewConfiguration.current
-    val avatarBoxContent: @Composable () -> Unit = {
-        Box(
-            modifier = Modifier
-                .size(size)
-                .clip(CircleShape)
-                .background(blockAccent.copy(alpha = 0.25f))
-                .border(
-                    width = if (isHoldPreviewVisible) 2.2.dp else 1.5.dp,
-                    color = blockAccent,
-                    shape = CircleShape
-                )
-                .semantics(mergeDescendants = true) {
-                    role = Role.Button
-                    onClick(label = "فتح صورة ${student.name}") {
-                        currentOnClick()
-                        true
+    val openHoldPreview = {
+        val currentPacked = resolvedPackedAvatar
+            .ifBlank { student.avatarBase64 }
+            .ifBlank { StudentAvatarImageHelper.peekCachedLocalAlbumRaw(student.id) }
+        val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(currentPacked)
+        val cachedFull = if (mainEntry.isNotBlank()) {
+            StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainEntry)
+        } else {
+            null
+        }
+        isHoldPreviewVisible = true
+        peekController?.show(
+            StudentQuickPeekRequest(
+                student = student,
+                blockAccent = blockAccent,
+                blockLabel = blockLabel,
+                fullPhotoBitmap = cachedFull ?: if (hasPhotoInModel) imageBitmap else null,
+                isLoadingFullPhoto = hasPhotoInModel && cachedFull == null
+            )
+        )
+    }
+
+    val closeHoldPreview = {
+        if (isHoldPreviewVisible) {
+            isHoldPreviewVisible = false
+            peekController?.dismiss(student.id)
+        }
+    }
+
+    DisposableEffect(student.id, peekController) {
+        onDispose {
+            peekController?.dismiss(student.id)
+        }
+    }
+
+    // When hold preview is active, decode highest resolution available (1080px local HD -> 520px cloud full)
+    if (isHoldPreviewVisible && hasPhotoInModel) {
+        LaunchedEffect(isHoldPreviewVisible, student.id, student.effectiveAvatarKey) {
+            val packed = resolvedPackedAvatar
+                .ifBlank { student.avatarBase64 }
+                .ifBlank { StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student) }
+            if (packed.isNotBlank()) {
+                resolvedPackedAvatar = packed
+                val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(packed)
+                if (mainEntry.isNotBlank()) {
+                    val cachedFull = StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainEntry)
+                    val fullBmp = cachedFull ?: withContext(Dispatchers.Default) {
+                        StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainEntry)
                     }
-                    onLongClick(label = "معاينة سريعة لصورة ${student.name}") {
-                        isHoldPreviewVisible = true
-                        true
+                    if (isHoldPreviewVisible) {
+                        peekController?.updatePhoto(
+                            studentId = student.id,
+                            fullPhotoBitmap = fullBmp,
+                            isLoadingFullPhoto = false
+                        )
                     }
                 }
-                .pointerInput(student.id) {
-                    detectTapGestures(
-                        onPress = {
-                            try {
-                                tryAwaitRelease()
-                            } finally {
-                                isHoldPreviewVisible = false
-                            }
-                        },
-                        onTap = {
-                            isHoldPreviewVisible = false
-                            currentOnClick()
-                        },
-                        onLongPress = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            isHoldPreviewVisible = true
-                        }
-                    )
-                }
-                .testTag(testTag),
-            contentAlignment = Alignment.Center
-        ) {
-            val bmp = imageBitmap
-            if (bmp != null) {
-                Image(
-                    bitmap = bmp,
-                    contentDescription = "صورة ${student.name}",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(CircleShape)
-                )
             } else {
-                Text(
-                    text = student.avatarInitials,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold
-                )
+                peekController?.updatePhoto(student.id, null, isLoadingFullPhoto = false)
             }
         }
     }
 
-    avatarBoxContent()
+    Box(
+        modifier = Modifier
+            .size(size)
+            .background(blockAccent.copy(alpha = 0.25f), CircleShape)
+            .border(
+                width = if (isHoldPreviewVisible) 2.2.dp else 1.5.dp,
+                color = blockAccent,
+                shape = CircleShape
+            )
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                onClick(label = "فتح صورة ${student.name}") {
+                    currentOnClick()
+                    true
+                }
+                onLongClick(label = "معاينة سريعة لصورة ${student.name}") {
+                    openHoldPreview()
+                    true
+                }
+            }
+            .pointerInput(student.id) {
+                detectTapGestures(
+                    onPress = {
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            closeHoldPreview()
+                        }
+                    },
+                    onTap = {
+                        closeHoldPreview()
+                        currentOnClick()
+                    },
+                    onLongPress = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        openHoldPreview()
+                    }
+                )
+            }
+            .testTag(testTag),
+        contentAlignment = Alignment.Center
+    ) {
+        val bmp = imageBitmap
+        if (bmp != null) {
+            Image(
+                bitmap = bmp,
+                contentDescription = "صورة ${student.name}",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+            )
+        } else {
+            Text(
+                text = student.avatarInitials,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
 
-    if (isHoldPreviewVisible) {
+    // Fallback Popup only when StudentAvatarCircle is rendered outside MainActivity (e.g., isolated unit tests)
+    if (isHoldPreviewVisible && peekController == null) {
         val mainBase64 = remember(resolvedPackedAvatar, student.avatarBase64) {
             StudentAvatarImageHelper.extractMainPhotoBase64(
                 resolvedPackedAvatar.ifBlank { student.avatarBase64 }
             )
         }
-        var fullImageBitmap by remember(mainBase64) {
+        var fallbackFullBmp by remember(mainBase64) {
             mutableStateOf(
                 if (mainBase64.isBlank()) null else StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainBase64)
             )
         }
-        if ((mainBase64.isNotBlank() || student.effectiveHasAvatar) && fullImageBitmap == null) {
-            LaunchedEffect(student.id, mainBase64, student.effectiveAvatarKey) {
-                val packed = if (mainBase64.isNotBlank()) {
-                    mainBase64
-                } else {
-                    val fetched = StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
-                    resolvedPackedAvatar = fetched
-                    StudentAvatarImageHelper.extractMainPhotoBase64(fetched)
-                }
-                if (packed.isNotBlank()) {
-                    fullImageBitmap = withContext(Dispatchers.Default) {
-                        StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, packed)
+        if (hasPhotoInModel && fallbackFullBmp == null) {
+            LaunchedEffect(student.id, mainBase64) {
+                val packed = resolvedPackedAvatar
+                    .ifBlank { StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student) }
+                val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(packed)
+                if (mainEntry.isNotBlank()) {
+                    fallbackFullBmp = withContext(Dispatchers.Default) {
+                        StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainEntry)
                     }
                 }
             }
@@ -1153,24 +1300,42 @@ fun StudentAvatarCircle(
             student = student,
             blockAccent = blockAccent,
             blockLabel = blockLabel,
-            fullPhotoBitmap = fullImageBitmap ?: imageBitmap,
-            framedAvatarBitmap = imageBitmap
+            fullPhotoBitmap = fallbackFullBmp ?: if (hasPhotoInModel) imageBitmap else null,
+            framedAvatarBitmap = null
         )
     }
 }
 
 /**
- * Instant, non-focus-stealing floating modal shown while the user holds their finger on [StudentAvatarCircle].
- * Automatically disappears the exact moment the user lifts their finger.
+ * Root-level full-screen Quick Peek overlay rendered directly inside MainActivity's root Box
+ * so dim backdrop covers 100% of screen (including status/nav bars) and the preview card is
+ * centered symmetrically in both RTL and LTR without interrupting hold-to-view pointer ownership.
  */
-@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun StudentHoldQuickPeekRootOverlay(
+    request: StudentQuickPeekRequest?,
+    modifier: Modifier = Modifier
+) {
+    if (request == null) return
+    StudentHoldQuickPeekOverlayContent(
+        student = request.student,
+        blockAccent = request.blockAccent,
+        blockLabel = request.blockLabel,
+        fullPhotoBitmap = request.fullPhotoBitmap,
+        modifier = modifier
+    )
+}
+
+/**
+ * Backward-compatible Popup wrapper retained for isolated tests/screens without [LocalStudentQuickPeekController].
+ */
 @Composable
 fun StudentHoldQuickPeekPopup(
     student: Student,
     blockAccent: Color,
     blockLabel: String?,
     fullPhotoBitmap: ImageBitmap?,
-    framedAvatarBitmap: ImageBitmap?
+    framedAvatarBitmap: ImageBitmap? = null
 ) {
     val nonFocusablePopupProps = remember {
         PopupProperties(
@@ -1185,190 +1350,203 @@ fun StudentHoldQuickPeekPopup(
         alignment = Alignment.Center,
         properties = nonFocusablePopupProps
     ) {
-        Box(
+        StudentHoldQuickPeekOverlayContent(
+            student = student,
+            blockAccent = blockAccent,
+            blockLabel = blockLabel,
+            fullPhotoBitmap = fullPhotoBitmap
+        )
+    }
+}
+
+@Composable
+private fun StudentHoldQuickPeekOverlayContent(
+    student: Student,
+    blockAccent: Color,
+    blockLabel: String?,
+    fullPhotoBitmap: ImageBitmap?,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.78f))
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
+            .testTag("student_quick_peek_popup_${student.id}"),
+        contentAlignment = Alignment.Center
+    ) {
+        val cardMaxHeight = (maxHeight * 0.84f).coerceIn(340.dp, 680.dp)
+        val hasFullPhoto = fullPhotoBitmap != null
+
+        Surface(
             modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.72f))
-                .padding(horizontal = 20.dp, vertical = 28.dp)
-                .testTag("student_quick_peek_popup_${student.id}"),
-            contentAlignment = Alignment.Center
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth(0.92f)
-                    .widthIn(max = 360.dp),
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 12.dp,
-                shadowElevation = 20.dp,
-                border = BorderStroke(2.dp, blockAccent)
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // 1. Hero Photo or Large Initials Preview Area
-                    if (fullPhotoBitmap != null) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 240.dp, max = 360.dp)
-                                .background(Color(0xFF0B1120)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                bitmap = fullPhotoBitmap,
-                                contentDescription = "الصورة الكاملة للطالب ${student.name}",
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 240.dp, max = 360.dp)
-                                    .testTag("student_quick_peek_full_image_${student.id}")
-                            )
-
-                            // Small circular framed avatar badge in the corner
-                            if (framedAvatarBitmap != null) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        .padding(12.dp)
-                                        .size(54.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF0F172A))
-                                        .border(2.dp, blockAccent, CircleShape)
-                                ) {
-                                    Image(
-                                        bitmap = framedAvatarBitmap,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(CircleShape)
-                                    )
-                                }
-                            }
-                        }
+                .fillMaxWidth()
+                .widthIn(max = 420.dp)
+                .then(
+                    if (hasFullPhoto) {
+                        Modifier.height(cardMaxHeight)
                     } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(210.dp)
-                                .background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            blockAccent.copy(alpha = 0.28f),
-                                            MaterialTheme.colorScheme.surface
-                                        )
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(112.dp)
-                                        .clip(CircleShape)
-                                        .background(blockAccent.copy(alpha = 0.22f))
-                                        .border(3.dp, blockAccent, CircleShape)
-                                        .testTag("student_quick_peek_initials_${student.id}"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = student.avatarInitials,
-                                        style = MaterialTheme.typography.displaySmall,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                }
-                                Text(
-                                    text = "بدون صورة مضافة بعد",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                        Modifier.heightIn(min = 280.dp, max = cardMaxHeight)
                     }
-
-                    HorizontalDivider(color = blockAccent.copy(alpha = 0.35f))
-
-                    // 2. Student Name, Number & Block Metadata Bar
-                    Column(
+                ),
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 10.dp,
+            shadowElevation = 20.dp,
+            border = BorderStroke(1.5.dp, blockAccent)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // 1. Hero Photo (~85% of card height when photo exists) or Initials Header
+                if (fullPhotoBitmap != null) {
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                            .weight(1f)
+                            .background(Color(0xFF0B1120)),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = student.name,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.ExtraBold,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.testTag("student_quick_peek_name_${student.id}")
-                        )
-
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            // Student Number Badge
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer
-                            ) {
-                                Text(
-                                    text = "رقم #${student.studentNumber}",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier
-                                        .padding(horizontal = 12.dp, vertical = 5.dp)
-                                        .testTag("student_quick_peek_number_${student.id}")
-                                )
-                            }
-
-                            // Servant Block Badge
-                            val resolvedBlockLabel = blockLabel?.takeIf { it.isNotBlank() } ?: "بدون بلوك"
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = blockAccent.copy(alpha = 0.2f),
-                                border = BorderStroke(1.dp, blockAccent)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(blockAccent)
-                                    )
-                                    Text(
-                                        text = resolvedBlockLabel,
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.testTag("student_quick_peek_block_${student.id}")
-                                    )
-                                }
-                            }
-                        }
-
-                        Text(
-                            text = "ارفع إصبعك لإغلاق المعاينة السريعة",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        Image(
+                            bitmap = fullPhotoBitmap,
+                            contentDescription = "الصورة الكاملة للطالب ${student.name}",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("student_quick_peek_full_image_${student.id}")
                         )
                     }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(210.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        blockAccent.copy(alpha = 0.25f),
+                                        MaterialTheme.colorScheme.surface
+                                    )
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(104.dp)
+                                    .background(blockAccent.copy(alpha = 0.20f), CircleShape)
+                                    .border(2.5.dp, blockAccent, CircleShape)
+                                    .testTag("student_quick_peek_initials_${student.id}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = student.avatarInitials,
+                                    style = MaterialTheme.typography.displaySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                            Text(
+                                text = "بدون صورة مضافة بعد",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = blockAccent.copy(alpha = 0.28f))
+
+                // 2. Compact Bottom Metadata Bar (~15% height: 16sp Name, 12sp Badges, 11sp Single-line Hint)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        text = student.name,
+                        fontSize = 16.sp,
+                        lineHeight = 20.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("student_quick_peek_name_${student.id}")
+                    )
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .background(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 9.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = "رقم #${student.studentNumber}",
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.testTag("student_quick_peek_number_${student.id}")
+                            )
+                        }
+
+                        val resolvedBlockLabel = blockLabel?.takeIf { it.isNotBlank() } ?: "بدون بلوك"
+                        Row(
+                            modifier = Modifier
+                                .background(
+                                    color = blockAccent.copy(alpha = 0.16f),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .border(1.dp, blockAccent.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 9.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .background(blockAccent, CircleShape)
+                            )
+                            Text(
+                                text = resolvedBlockLabel,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("student_quick_peek_block_${student.id}")
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "ارفع إصبعك لإغلاق المعاينة",
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.68f),
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }

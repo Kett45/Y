@@ -419,14 +419,8 @@ object KamPerformanceTracker {
             }
         }
 
-        // Only publish to UI StateFlow when NOT actively scrolling AND at most once every 1.5s
-        if (!isHomeScrollingActive) {
-            val nowNs = SystemClock.elapsedRealtimeNanos()
-            if (nowNs - lastMetricsPublishNanos >= METRICS_PUBLISH_INTERVAL_NANOS) {
-                lastMetricsPublishNanos = nowNs
-                publishFrameMetricsToState()
-            }
-        }
+        // Keep frame tracking purely lock-free atomic here so idle UI (especially SettingsScreen)
+        // never recomposes periodically in the background. Published on scroll end or explicit refresh.
     }
 
     fun recordScrollBenchmarkResult(avgFrameMs: Double, worstFrameMs: Double, jankPct: Double, framesCount: Long) {

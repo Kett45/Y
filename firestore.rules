@@ -106,7 +106,7 @@ service cloud.firestore {
           'inviteCode', 'name', 'adminId', 'adminName', 'memberUids',
           'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
           'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
-          'createdAt', 'updatedAt'
+          'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'inviteCode', 'name', 'adminId', 'adminName', 'memberUids',
@@ -117,14 +117,14 @@ service cloud.firestore {
         ]) &&
         data.inviteCode == groupId &&
         isNonEmptyString(data.inviteCode, 20) &&
-        isNonEmptyString(data.name, 80) &&
+        isNonEmptyString(data.name, 100) &&
         isNonEmptyString(data.adminId, 64) &&
-        isNonEmptyString(data.adminName, 80) &&
+        isNonEmptyString(data.adminName, 100) &&
         isBoundedStringList(data.memberUids, 1, 10) &&
         data.adminId in data.memberUids &&
         data.allowServantUndo is bool &&
         data.enforceWeeklyCardLimit is bool &&
-        data.maxMonthlyPoints is int && data.maxMonthlyPoints >= 0 && data.maxMonthlyPoints <= 5000 &&
+        data.maxMonthlyPoints is int && data.maxMonthlyPoints >= 0 && data.maxMonthlyPoints <= 10000 &&
         data.attendanceIsCardOnly is bool &&
         data.showLeaderboard is bool &&
         data.autoStudentNumber is bool &&
@@ -132,7 +132,7 @@ service cloud.firestore {
         (!('bannedServantEntries' in data) || isBoundedStringList(data.bannedServantEntries, 0, 50)) &&
         (!('dailyInviteToken' in data) || isOptionalString(data.dailyInviteToken, 16)) &&
         (!('inviteCodeUpdatedAtMillis' in data) || (data.inviteCodeUpdatedAtMillis is int && data.inviteCodeUpdatedAtMillis >= 0)) &&
-        data.createdAt is timestamp &&
+        (!('createdAt' in data) || data.createdAt is timestamp) &&
         data.updatedAt is timestamp;
     }
 
@@ -305,19 +305,29 @@ service cloud.firestore {
 
       allow create: if isSignedIn() &&
         incoming().adminId == uid() &&
+        'createdAt' in incoming() &&
         isValidGroup(incoming(), groupId);
 
       // Admin can update group settings & memberUids;
-      // A joining servant can append ONLY their own UID to memberUids (up to 7 members total) if not banned,
-      // or a leaving servant can remove ONLY their own UID from memberUids.
+      // A member can update non-policy fields (e.g. rotating daily invite token or leaving),
+      // and a joining non-banned servant can append ONLY their own UID to memberUids.
       allow update: if isSignedIn() &&
         isValidGroup(incoming(), groupId) &&
         incoming().adminId == existing().adminId &&
         incoming().inviteCode == existing().inviteCode &&
-        incoming().createdAt == existing().createdAt &&
+        (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
         (
           existing().adminId == uid() ||
-          uid() in existing().memberUids ||
+          (
+            uid() in existing().memberUids &&
+            incoming().name == existing().name &&
+            incoming().allowServantUndo == existing().allowServantUndo &&
+            incoming().enforceWeeklyCardLimit == existing().enforceWeeklyCardLimit &&
+            incoming().maxMonthlyPoints == existing().maxMonthlyPoints &&
+            incoming().attendanceIsCardOnly == existing().attendanceIsCardOnly &&
+            incoming().showLeaderboard == existing().showLeaderboard &&
+            incoming().autoStudentNumber == existing().autoStudentNumber
+          ) ||
           (
             uid() in incoming().memberUids &&
             !('bannedUids' in existing() && uid() in existing().bannedUids) &&
@@ -326,7 +336,10 @@ service cloud.firestore {
             incoming().name == existing().name &&
             incoming().allowServantUndo == existing().allowServantUndo &&
             incoming().enforceWeeklyCardLimit == existing().enforceWeeklyCardLimit &&
-            incoming().maxMonthlyPoints == existing().maxMonthlyPoints
+            incoming().maxMonthlyPoints == existing().maxMonthlyPoints &&
+            incoming().attendanceIsCardOnly == existing().attendanceIsCardOnly &&
+            incoming().showLeaderboard == existing().showLeaderboard &&
+            incoming().autoStudentNumber == existing().autoStudentNumber
           )
         );
 
