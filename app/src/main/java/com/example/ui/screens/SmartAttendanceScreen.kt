@@ -84,6 +84,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.cache.LocalClassroomCache
 import com.example.data.model.ArabicInitialsHelper
 import com.example.data.model.AttendanceRecord
@@ -180,8 +181,18 @@ fun SmartAttendanceScreen(
             ?: "خادم"
     }
 
-    val kamRepository = remember { KamRepository(FirebaseFirestore.getInstance()) }
-    val chatRepository = remember { ChatRepository() }
+    val firestoreDb = remember(context) {
+        val databaseId = runCatching {
+            context.applicationContext.getString(R.string.firestore_database_id)
+        }.getOrDefault("")
+        if (databaseId.isNotBlank()) {
+            FirebaseFirestore.getInstance(databaseId)
+        } else {
+            FirebaseFirestore.getInstance()
+        }
+    }
+    val kamRepository = remember(firestoreDb) { KamRepository(firestoreDb) }
+    val chatRepository = remember(firestoreDb) { ChatRepository(firestoreDb) }
 
     // 1. Order students strictly by Block sortOrder, then student position/sortOrder/studentNumber
     val orderedStudents = remember(state.students, state.blocks) {
@@ -446,15 +457,13 @@ fun SmartAttendanceScreen(
             recordsByStudentId.remove(stu.id)
             queueOrUpdateSystemChatEvent(stu, null, "")
             LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
-            if (state.isAdmin) {
-                val docId = AttendanceRecord.buildDocId(activeWeekKey, stu.id)
-                attendanceIoScope.launch {
-                    kamRepository.deleteAttendanceRecord(
-                        groupId = groupId,
-                        docId = docId,
-                        waitForServerAck = false
-                    )
-                }
+            val docId = AttendanceRecord.buildDocId(activeWeekKey, stu.id)
+            attendanceIoScope.launch {
+                kamRepository.deleteAttendanceRecord(
+                    groupId = groupId,
+                    docId = docId,
+                    waitForServerAck = false
+                )
             }
         } else {
             optimisticOverrides[stu.id] = prev
@@ -486,11 +495,11 @@ fun SmartAttendanceScreen(
 
     fun adminDeleteRecord(student: Student) {
         val existing = recordsByStudentId[student.id] ?: return
-        if (!state.isAdmin) {
-            permissionErrorMessage = "الأمين فقط يمكنه حذف تسجيل التحضير."
+        if (!state.isAdmin && existing.servantId != currentUserId) {
+            permissionErrorMessage = "الأمين فقط يمكنه حذف تسجيل خادم آخر."
             return
         }
-        optimisticOverrides.remove(student.id)
+        optimisticOverrides[student.id] = null
         recordsByStudentId.remove(student.id)
         queueOrUpdateSystemChatEvent(student, null, "")
         LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
@@ -1044,7 +1053,7 @@ private fun SmartAttendanceSwipeCardContent(
                         Spacer(modifier = Modifier.height(8.dp))
                         ExistingAttendanceBadgeStrip(
                             record = existingRecord,
-                            canDelete = isAdmin,
+                            canDelete = isAdmin || existingRecord.servantId == currentUserId,
                             onDelete = onAdminDeleteRecord
                         )
                     }
@@ -1552,7 +1561,7 @@ private fun SmartAttendanceSummaryView(
                         record = rec,
                         badgeColor = Color(0xFFEF4444),
                         canEdit = isAdmin || rec?.servantId == currentUserId,
-                        canDelete = isAdmin,
+                        canDelete = isAdmin || rec?.servantId == currentUserId,
                         onEdit = { if (idx >= 0) onSelectStudentToEdit(idx) },
                         onDelete = { onAdminDeleteRecord(stu) }
                     )
@@ -1582,7 +1591,7 @@ private fun SmartAttendanceSummaryView(
                         record = rec,
                         badgeColor = Color(0xFFF59E0B),
                         canEdit = isAdmin || rec?.servantId == currentUserId,
-                        canDelete = isAdmin,
+                        canDelete = isAdmin || rec?.servantId == currentUserId,
                         onEdit = { if (idx >= 0) onSelectStudentToEdit(idx) },
                         onDelete = { onAdminDeleteRecord(stu) }
                     )
@@ -1612,7 +1621,7 @@ private fun SmartAttendanceSummaryView(
                         record = rec,
                         badgeColor = Color(0xFF10B981),
                         canEdit = isAdmin || rec?.servantId == currentUserId,
-                        canDelete = isAdmin,
+                        canDelete = isAdmin || rec?.servantId == currentUserId,
                         onEdit = { if (idx >= 0) onSelectStudentToEdit(idx) },
                         onDelete = { onAdminDeleteRecord(stu) }
                     )

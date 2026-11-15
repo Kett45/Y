@@ -1,6 +1,8 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.security.MessageDigest
 import java.time.Duration
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 plugins {
   alias(libs.plugins.android.application)
@@ -131,6 +133,7 @@ tasks.register<Copy>("syncReleaseApk") {
       ""
     }
     val shortCommit = if (apkSha256.length >= 12) apkSha256.take(12) else "latest"
+    val nowIsoUtc = Instant.now().truncatedTo(ChronoUnit.SECONDS).toString()
 
     File(releasesDir, "version.json").writeText(
       """
@@ -142,10 +145,10 @@ tasks.register<Copy>("syncReleaseApk") {
         "requiresFullInstall": true,
         "commitSha": "$shortCommit",
         "apkSha256": "$apkSha256",
-        "updatedAt": "2026-11-11T16:45:00Z",
+        "updatedAt": "$nowIsoUtc",
         "apkDirectUrl": "$singleAutoUrl",
         "deltaSyncUrl": "$deltaUrl",
-        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName - نسخة Release مضغوطة بـ R8): فصل صور الأطفال لمجموعة avatars منفصلة وتحميل كسول + تحديثات تفاضلية للـ Listeners مع دمج التحديثات + تخزين لوحة الشرف مسبقاً + لوحة قياس الأوقات (KAM_PERF)."
+        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): التحضير الذكي بسحب صور الأطفال + الشات داخل التطبيق (نصوص وصور وتسجيلات صوتية) + بروفايل الخادم ورقم الواتساب ($shortCommit)."
       }
       """.trimIndent() + "\n"
     )
@@ -158,15 +161,15 @@ tasks.register<Copy>("syncReleaseApk") {
         "minCompatibleBaseVersion": $minDeltaBase,
         "commitSha": "$shortCommit",
         "apkSha256": "$apkSha256",
-        "updatedAt": "2026-11-11T16:45:00Z",
-        "deltaSummaryArabic": "الإصدار $verName (نجم الكارت v$verName - Release R8): فصل صور الأطفال لمجموعة منفصلة + تحديثات Listeners تفاضلية + كاش لوحة الشرف + قياس الأداء KAM_PERF",
+        "updatedAt": "$nowIsoUtc",
+        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): التحضير الذكي بسحب صور الأطفال + الشات داخل التطبيق + بروفايل الخادم",
         "latestApkDirectUrl": "$singleAutoUrl",
         "changedModules": [
-          "r8_minified_shrunk_release_apk",
-          "lazy_avatars_collection_and_local_files",
-          "incremental_firestore_document_changes",
-          "precomputed_leaderboard_cache",
-          "kam_perf_timing_metrics_panel"
+          "smart_swipe_attendance_cards",
+          "in_app_group_and_dm_chat_media",
+          "servant_profile_whatsapp_hint_wizard",
+          "instant_0ms_local_classroom_cache",
+          "single_auto_updating_github_apk_link"
         ],
         "dynamicConfig": {
           "maxStudentsPerGroup": 150,

@@ -662,7 +662,7 @@ service cloud.firestore {
       // Read/List: Group members (via memberUids or group membership).
       // Create: Any group member (servantId == uid() and status in ['PRESENT', 'ABSENT', 'ISSUE']).
       // Update: Only the servant who recorded it OR the Group Admin (الأمين فقط يعدّل تسجيل خادم تاني).
-      // Delete: Strictly Group Admin ONLY (والأمين بس يحذف).
+      // Delete: Group Admin can delete any record, and a Servant can delete their own record for Undo.
       match /attendance/{attendanceId} {
         allow get, list: if isSignedIn() && (
           ('memberUids' in existing() && uid() in existing().memberUids) ||
@@ -677,7 +677,8 @@ service cloud.firestore {
           incoming().studentId == existing().studentId &&
           incoming().weekKey == existing().weekKey &&
           (existing().servantId == uid() || isGroupAdmin(groupId));
-        allow delete: if isGroupAdmin(groupId);
+        allow delete: if isGroupAdmin(groupId) ||
+          (isGroupMember(groupId) && existing().servantId == uid());
       }
     }
 

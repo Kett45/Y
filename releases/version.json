@@ -4,10 +4,10 @@
   "minDeltaBaseVersionCode": 7,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
-  "commitSha": "25176b0fae89",
-  "apkSha256": "4ab4cb845fd4b980d8f42aff6ad61da8c7b64854041688fd632cb169ddce3e6c",
-  "updatedAt": "2026-11-15T12:46:24Z",
+  "commitSha": "2bcdcaaab4ff",
+  "apkSha256": "2bcdcaaab4ff33ce43bcc279bf1f0b8f5b945d74844981593d440e759a24c939",
+  "updatedAt": "2026-11-15T22:38:44Z",
   "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.10 (نجم الكارت v1.10): تحديث تلقائي مباشر بأحدث بصمة للـ APK (25176b0fae89)."
+  "releaseNotesArabic": "الإصدار 1.10 (نجم الكارت v1.10): التحضير الذكي بسحب صور الأطفال + الشات داخل التطبيق (نصوص وصور وتسجيلات صوتية) + بروفايل الخادم ورقم الواتساب (2bcdcaaab4ff)."
 }

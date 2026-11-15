@@ -2,16 +2,16 @@
   "targetVersionCode": 10,
   "targetVersionName": "1.10",
   "minCompatibleBaseVersion": 7,
-  "commitSha": "25176b0fae89",
-  "apkSha256": "4ab4cb845fd4b980d8f42aff6ad61da8c7b64854041688fd632cb169ddce3e6c",
-  "updatedAt": "2026-11-15T12:46:24Z",
-  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.10 (25176b0fae89)",
+  "commitSha": "2bcdcaaab4ff",
+  "apkSha256": "2bcdcaaab4ff33ce43bcc279bf1f0b8f5b945d74844981593d440e759a24c939",
+  "updatedAt": "2026-11-15T22:38:44Z",
+  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.10 (2bcdcaaab4ff): التحضير الذكي بسحب صور الأطفال + الشات داخل التطبيق + بروفايل الخادم",
   "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "changedModules": [
+    "smart_swipe_attendance_cards",
+    "in_app_group_and_dm_chat_media",
+    "servant_profile_whatsapp_hint_wizard",
     "instant_0ms_local_classroom_cache",
-    "sunlight_high_contrast_light_theme",
-    "dedicated_appearance_screen_star_icon",
-    "cloud_and_local_user_preferences_sync",
     "single_auto_updating_github_apk_link"
   ],
   "dynamicConfig": {
