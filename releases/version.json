@@ -4,10 +4,10 @@
   "minDeltaBaseVersionCode": 7,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
-  "commitSha": "4ab4cb845fd4",
+  "commitSha": "25176b0fae89",
   "apkSha256": "4ab4cb845fd4b980d8f42aff6ad61da8c7b64854041688fd632cb169ddce3e6c",
-  "updatedAt": "2026-11-11T16:45:00Z",
+  "updatedAt": "2026-11-15T12:46:24Z",
   "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.10 (نجم الكارت v1.10 - نسخة Release مضغوطة بـ R8): فصل صور الأطفال لمجموعة avatars منفصلة وتحميل كسول + تحديثات تفاضلية للـ Listeners مع دمج التحديثات + تخزين لوحة الشرف مسبقاً + لوحة قياس الأوقات (KAM_PERF)."
+  "releaseNotesArabic": "الإصدار 1.10 (نجم الكارت v1.10): تحديث تلقائي مباشر بأحدث بصمة للـ APK (25176b0fae89)."
 }
