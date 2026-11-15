@@ -555,4 +555,89 @@ test("9. Group Admin can toggle enforceWeeklyCardLimit and update policies (even
   );
 });
 
+test("10. ServantMemberProfile (groups/{groupId}/members/{memberUid}) allows group members to read, owner to write with phoneVerified=false, and rejects cross-servant writes or outsider reads", async () => {
+  await seedGroupWithMembers(true);
+  const now = new Date();
+  const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID).firestore();
+  const outsiderDb = testEnv.authenticatedContext(OUTSIDER_UID).firestore();
+
+  const servantMemberRef = servantDb
+    .collection("groups")
+    .doc(GROUP_ID)
+    .collection("members")
+    .doc(SERVANT_UID);
+
+  // Servant creates own member profile with phone, primaryPhone, secondaryPhone, showPhone, phoneHidden, and phoneVerified = false
+  await assertSucceeds(
+    servantMemberRef.set({
+      uid: SERVANT_UID,
+      groupId: GROUP_ID,
+      displayName: "مايكل",
+      phone: "+201012345678",
+      primaryPhone: "+201012345678",
+      secondaryPhone: "+201298765432",
+      phoneVerified: false,
+      showPhone: true,
+      phoneHidden: false,
+      hasAvatar: true,
+      avatarHash: "hash_srv_1",
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Admin (fellow group member) can read and list members
+  await assertSucceeds(
+    adminDb
+      .collection("groups")
+      .doc(GROUP_ID)
+      .collection("members")
+      .doc(SERVANT_UID)
+      .get()
+  );
+
+  // Servant cannot spoof phoneVerified = true
+  await assertFails(
+    servantMemberRef.update({
+      phoneVerified: true,
+      updatedAt: new Date(),
+    })
+  );
+
+  // Servant cannot overwrite Admin's member profile
+  await assertFails(
+    servantDb
+      .collection("groups")
+      .doc(GROUP_ID)
+      .collection("members")
+      .doc(ADMIN_UID)
+      .set({
+        uid: ADMIN_UID,
+        groupId: GROUP_ID,
+        displayName: "مزيف",
+        phone: "+201000000000",
+        primaryPhone: "+201000000000",
+        secondaryPhone: "",
+        phoneVerified: false,
+        showPhone: true,
+        phoneHidden: false,
+        createdAt: now,
+        updatedAt: now,
+      })
+  );
+
+  // Outsider cannot read member profiles
+  await assertFails(
+    outsiderDb
+      .collection("groups")
+      .doc(GROUP_ID)
+      .collection("members")
+      .doc(SERVANT_UID)
+      .get()
+  );
+});
+
+
 

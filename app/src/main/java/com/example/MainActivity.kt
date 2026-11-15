@@ -35,9 +35,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -70,29 +73,38 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.Color
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.cache.LocalClassroomCache
+import com.example.data.model.ChatFormatHelper
+import com.example.data.repository.ChatRepository
 import com.example.data.repository.KamRepository
 import com.example.data.sync.GitHubSmartSyncEngine
 import com.example.data.sync.GitHubVersionManifest
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.signOut
 import com.example.ui.components.LocalStudentQuickPeekController
+import com.example.ui.components.ServantPhoneOnboardingWizardDialog
 import com.example.ui.components.StudentHoldQuickPeekRootOverlay
 import com.example.ui.components.StudentQuickPeekController
 import com.example.ui.screens.GroupInvitationsScreen
 import com.example.ui.screens.GroupOnboardingScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.MessagesScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.KamLiteTheme
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalAppAppearanceController
 import com.example.ui.theme.LocalUiScaleController
+import com.example.ui.viewmodel.ChatViewModel
 import com.example.ui.viewmodel.KamViewModel
 import com.example.util.KamPerformanceTracker
 import com.google.firebase.Firebase
@@ -107,6 +119,7 @@ import kotlinx.coroutines.flow.callbackFlow
 
 enum class KamBottomTab(val routeId: String, val labelRes: Int) {
     HOME("home", R.string.tab_home),
+    MESSAGES("messages", R.string.tab_messages),
     GROUP("group", R.string.tab_group),
     SETTINGS("settings", R.string.tab_settings)
 }
@@ -136,20 +149,22 @@ class MainActivity : ComponentActivity() {
             }
         }
         enableEdgeToEdge()
-        setupFrameMetricsListener()
         LocalClassroomCache.init(applicationContext)
         com.example.ui.theme.AppAppearanceController.preloadAsync(applicationContext)
         com.example.ui.theme.UiScaleController.preloadAsync(applicationContext)
-        runCatching {
-            Firebase.auth.currentUser?.uid?.let { uid ->
-                LocalClassroomCache.preloadForUser(applicationContext, uid)
-            }
-        }
-        GitHubSmartSyncEngine.initializeFromLocalCache(applicationContext)
         setContent {
             KamLiteTheme {
                 AppNavigation()
             }
+        }
+        window.decorView.post {
+            setupFrameMetricsListener()
+            runCatching {
+                Firebase.auth.currentUser?.uid?.let { uid ->
+                    LocalClassroomCache.preloadForUser(applicationContext, uid)
+                }
+            }
+            GitHubSmartSyncEngine.initializeFromLocalCache(applicationContext)
         }
     }
 
@@ -287,10 +302,60 @@ fun AuthenticatedKamApp(
         }
     )
 
+    val chatViewModel: ChatViewModel = viewModel(
+        key = "chat_$sessionKey",
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY])
+                val databaseId = runCatching { app.getString(R.string.firestore_database_id) }.getOrDefault("")
+                val db = if (databaseId.isNotBlank()) FirebaseFirestore.getInstance(databaseId) else FirebaseFirestore.getInstance()
+                ChatViewModel(
+                    currentUserId = user.uid,
+                    initialDisplayName = user.displayName ?: "خادم الفصل",
+                    chatRepository = ChatRepository(db),
+                    kamRepository = KamRepository(db)
+                )
+            }
+        }
+    )
+
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val chatState by chatViewModel.chatState.collectAsStateWithLifecycle()
     val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
     val githubSyncState by GitHubSmartSyncEngine.syncState.collectAsStateWithLifecycle()
     var currentTab by rememberSaveable(sessionKey) { mutableStateOf(KamBottomTab.HOME) }
+
+    val ownServantName = remember(state.blocks, state.userProfile, user.uid, user.displayName) {
+        state.blocks.firstOrNull { it.servantId == user.uid }?.servantName?.takeIf { it.isNotBlank() }
+            ?: state.userProfile?.displayName?.takeIf { it.isNotBlank() }
+            ?: user.displayName
+            ?: "خادم الفصل"
+    }
+
+    LaunchedEffect(state.group, state.memberProfiles, state.blocks, ownServantName) {
+        chatViewModel.syncWithClassroomState(
+            group = state.group,
+            memberProfiles = state.memberProfiles,
+            blocks = state.blocks,
+            ownDisplayName = ownServantName
+        )
+        if (state.group != null) {
+            chatViewModel.touchOwnLastSeenThrottled()
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, state.group?.inviteCode) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_STOP) {
+                chatViewModel.touchOwnLastSeenThrottled()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     // Wire appearance & UI scale changes to sync with user's cloud profile & local cache
     DisposableEffect(appearanceController, uiScaleController, viewModel) {
@@ -433,6 +498,12 @@ fun AuthenticatedKamApp(
     // Layer 2 is FloatingNotificationsOverlay (zIndex = 10f);
     // Layer 3 is StudentHoldQuickPeekRootOverlay (zIndex = 20f, full screen edge-to-edge).
     val quickPeekController = remember { StudentQuickPeekController() }
+    var showPhoneWizardModal by rememberSaveable(sessionKey) { mutableStateOf(false) }
+    var isInitialFrameSettled by remember(sessionKey) { mutableStateOf(false) }
+    LaunchedEffect(sessionKey) {
+        delay(600L)
+        isInitialFrameSettled = true
+    }
     LaunchedEffect(currentTab) {
         quickPeekController.dismiss()
     }
@@ -447,7 +518,10 @@ fun AuthenticatedKamApp(
                 ) {
                     NavigationBarItem(
                         selected = currentTab == KamBottomTab.HOME,
-                        onClick = { currentTab = KamBottomTab.HOME },
+                        onClick = {
+                            chatViewModel.closeActiveChat()
+                            currentTab = KamBottomTab.HOME
+                        },
                         icon = {
                             Icon(
                                 imageVector = Icons.Default.Home,
@@ -465,8 +539,48 @@ fun AuthenticatedKamApp(
                         modifier = Modifier.testTag("nav_tab_home")
                     )
                     NavigationBarItem(
+                        selected = currentTab == KamBottomTab.MESSAGES,
+                        onClick = { currentTab = KamBottomTab.MESSAGES },
+                        icon = {
+                            val badgeText = ChatFormatHelper.formatUnreadBadge(chatState.totalUnreadCount)
+                            BadgedBox(
+                                badge = {
+                                    if (badgeText.isNotBlank()) {
+                                        Badge(
+                                            containerColor = Color(0xFFEF4444),
+                                            contentColor = Color.White,
+                                            modifier = Modifier.testTag("nav_messages_unread_badge")
+                                        ) {
+                                            Text(
+                                                text = badgeText,
+                                                fontWeight = FontWeight.ExtraBold
+                                            )
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Email,
+                                    contentDescription = stringResource(R.string.tab_messages)
+                                )
+                            }
+                        },
+                        label = {
+                            Text(
+                                text = stringResource(R.string.tab_messages),
+                                maxLines = 1,
+                                softWrap = false,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        },
+                        modifier = Modifier.testTag("nav_tab_messages")
+                    )
+                    NavigationBarItem(
                         selected = currentTab == KamBottomTab.GROUP,
-                        onClick = { currentTab = KamBottomTab.GROUP },
+                        onClick = {
+                            chatViewModel.closeActiveChat()
+                            currentTab = KamBottomTab.GROUP
+                        },
                         icon = {
                             Icon(
                                 imageVector = Icons.Default.Groups,
@@ -485,7 +599,10 @@ fun AuthenticatedKamApp(
                     )
                     NavigationBarItem(
                         selected = currentTab == KamBottomTab.SETTINGS,
-                        onClick = { currentTab = KamBottomTab.SETTINGS },
+                        onClick = {
+                            chatViewModel.closeActiveChat()
+                            currentTab = KamBottomTab.SETTINGS
+                        },
                         icon = {
                             Icon(
                                 imageVector = Icons.Default.Settings,
@@ -531,7 +648,31 @@ fun AuthenticatedKamApp(
                             onDeleteStudent = viewModel::deleteStudent,
                             onToggleBlockCollapsed = viewModel::toggleBlockCollapsed,
                             onMergeDuplicateStudents = viewModel::mergeDuplicateStudentRecords,
-                            onKeepBothDuplicateStudents = viewModel::keepBothDuplicateStudents
+                            onKeepBothDuplicateStudents = viewModel::keepBothDuplicateStudents,
+                            onUpdateOwnServantAvatar = viewModel::updateOwnServantAvatar,
+                            onOpenPhoneWizard = { showPhoneWizardModal = true }
+                        )
+                    }
+
+                    KamBottomTab.MESSAGES -> {
+                        MessagesScreen(
+                            chatState = chatState,
+                            memberProfiles = state.memberProfiles,
+                            currentUserId = user.uid,
+                            mediaStorage = chatViewModel.mediaStorage,
+                            onOpenGroupChat = chatViewModel::openGroupChat,
+                            onOpenDirectChat = chatViewModel::openDirectChat,
+                            onCloseActiveChat = chatViewModel::closeActiveChat,
+                            onSendMessage = { text -> chatViewModel.sendMessage(text) },
+                            onSendImageMessage = { uri, caption ->
+                                chatViewModel.sendImageMessage(context, uri, caption)
+                            },
+                            onSendAudioMessage = { file, durationSec ->
+                                chatViewModel.sendAudioMessage(context, file, durationSec)
+                            },
+                            onClearMediaError = chatViewModel::clearMediaError,
+                            onDeleteOwnMessage = chatViewModel::deleteOwnMessage,
+                            onLoadOlderMessages = chatViewModel::loadOlderMessages
                         )
                     }
 
@@ -563,7 +704,12 @@ fun AuthenticatedKamApp(
                             onSwitchGroup = viewModel::switchActiveGroup,
                             onJoinGroupByCode = viewModel::joinGroupByCode,
                             onCreateNewGroup = viewModel::createGroup,
-                            onToggleBlockHidden = viewModel::toggleBlockHidden
+                            onToggleBlockHidden = viewModel::toggleBlockHidden,
+                            currentUserId = user.uid,
+                            onOpenPhoneWizard = { showPhoneWizardModal = true },
+                            onUpdateOwnServantAvatar = viewModel::updateOwnServantAvatar,
+                            onToggleHideOwnPhone = viewModel::toggleHideOwnPhoneNumber,
+                            onDeleteOwnPhones = viewModel::deleteOwnPhoneNumbers
                         )
                     }
                 }
@@ -600,6 +746,27 @@ fun AuthenticatedKamApp(
                 request = quickPeekController.activeRequest,
                 modifier = Modifier.zIndex(20f)
             )
+
+            // Layer 4: Step-by-step WhatsApp Phone Onboarding & Editing Wizard Overlay (in-window, no separate DialogWindow)
+            if (showPhoneWizardModal || (isInitialFrameSettled && state.shouldPromptPhoneOnboarding)) {
+                Box(modifier = Modifier.fillMaxSize().zIndex(25f)) {
+                    ServantPhoneOnboardingWizardDialog(
+                        initialPrimaryPhone = state.ownPrimaryPhone,
+                        initialSecondaryPhone = state.ownSecondaryPhone,
+                        onSavePhones = { primary, secondary ->
+                            viewModel.saveOwnPhoneNumbers(
+                                primaryPhone = primary,
+                                secondaryPhone = secondary,
+                                phoneHidden = state.ownPhoneHidden
+                            )
+                        },
+                        onSkipOrDismiss = {
+                            showPhoneWizardModal = false
+                            viewModel.skipPhoneOnboarding()
+                        }
+                    )
+                }
+            }
         }
     }
 }

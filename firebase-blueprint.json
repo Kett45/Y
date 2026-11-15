@@ -546,6 +546,193 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "ServantMemberProfile": {
+      "title": "ServantMemberProfile",
+      "description": "Group-scoped public profile for a Servant or Admin stored at /groups/{groupId}/members/{memberUid}. Visible only to members of the same group, and writable only by the document owner.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the servant matching the document ID."
+        },
+        "groupId": {
+          "type": "string",
+          "description": "Parent group ID (sole query filter)."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the servant in the group."
+        },
+        "phone": {
+          "type": "string",
+          "description": "Primary WhatsApp/mobile phone number in international format (e.g., +2010...), or empty string."
+        },
+        "primaryPhone": {
+          "type": "string",
+          "description": "Primary WhatsApp/mobile phone number in international format (e.g., +2010...), or empty string."
+        },
+        "secondaryPhone": {
+          "type": "string",
+          "description": "Optional secondary phone number in international format (e.g., +2012...), or empty string."
+        },
+        "phoneVerified": {
+          "type": "boolean",
+          "description": "Always false (no SMS or WhatsApp OTP verification on Spark free tier)."
+        },
+        "showPhone": {
+          "type": "boolean",
+          "description": "Whether the servant's phone number and WhatsApp/Call buttons are visible to other servants in the group."
+        },
+        "phoneHidden": {
+          "type": "boolean",
+          "description": "Whether the servant hides their phone numbers and contact buttons from other servants."
+        },
+        "avatar": {
+          "type": "string",
+          "description": "Optional compressed (<50KB) JPEG photo of the servant synced with the group and cached locally."
+        },
+        "hasAvatar": {
+          "type": "boolean",
+          "description": "Optional flag indicating whether this servant has a custom photo."
+        },
+        "avatarHash": {
+          "type": "string",
+          "description": "Optional short hash of the servant photo for local disk cache invalidation."
+        },
+        "avatarBase64": {
+          "type": "string",
+          "description": "Optional compressed (<50KB) JPEG photo of the servant synced with the group and cached locally."
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Bounded list (1 to 10) of group member UIDs."
+        },
+        "lastSeenAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the servant's last activity (updated at most once every 5 minutes)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "uid",
+        "groupId",
+        "displayName",
+        "phone",
+        "primaryPhone",
+        "secondaryPhone",
+        "phoneVerified",
+        "showPhone",
+        "phoneHidden",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "GroupChatMeta": {
+      "title": "GroupChatMeta",
+      "description": "Group chat metadata stored at /groups/{groupId}/chatMeta/main with last message summary and totalMessagesCount counter.",
+      "type": "object",
+      "properties": {
+        "groupId": { "type": "string", "description": "Parent group ID." },
+        "lastMessageId": { "type": "string", "description": "ID of the last message." },
+        "lastMessageText": { "type": "string", "description": "Preview of the last message." },
+        "lastMessageType": { "type": "string", "enum": ["TEXT", "IMAGE", "AUDIO", "SYSTEM"] },
+        "lastMessageSenderUid": { "type": "string", "description": "UID of the last message sender." },
+        "lastMessageSenderName": { "type": "string", "description": "Display name of the last message sender." },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "totalMessagesCount": { "type": "integer", "description": "Monotonically increasing total message counter." },
+        "memberUids": { "type": "array", "description": "Group member UIDs for zero-get() authorization." },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["groupId", "memberUids", "updatedAt"]
+    },
+    "DmChatMeta": {
+      "title": "DmChatMeta",
+      "description": "Private 1-to-1 chat room metadata stored at /dms/{chatId} where chatId = dm_{uidA}_{uidB} sorted.",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string" },
+        "groupId": { "type": "string" },
+        "participants": { "type": "array", "description": "Sorted 2-element list of participant UIDs." },
+        "participantNames": { "type": "object" },
+        "lastMessageId": { "type": "string" },
+        "lastMessageText": { "type": "string" },
+        "lastMessageType": { "type": "string", "enum": ["TEXT", "IMAGE", "AUDIO", "SYSTEM"] },
+        "lastMessageSenderUid": { "type": "string" },
+        "lastMessageSenderName": { "type": "string" },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "totalMessagesCount": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["participants", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Chat message stored in /groups/{groupId}/messages/{messageId} or /dms/{chatId}/messages/{messageId}.",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string" },
+        "groupId": { "type": "string" },
+        "senderUid": { "type": "string" },
+        "senderName": { "type": "string" },
+        "type": { "type": "string", "enum": ["TEXT", "IMAGE", "AUDIO", "SYSTEM"] },
+        "text": { "type": "string", "description": "Message text up to 1000 chars." },
+        "mediaBase64": { "type": "string", "description": "Compressed Base64 payload for IMAGE (<= 60KB, <= 1024px) or AUDIO (<= 100KB, <= 30s)." },
+        "mediaUrl": { "type": "string", "description": "Optional replaceable external media URL." },
+        "mediaMimeType": { "type": "string", "description": "MIME type (e.g., image/jpeg or audio/mp4)." },
+        "imageWidth": { "type": "integer", "description": "Downscaled image width in pixels (<= 1024)." },
+        "imageHeight": { "type": "integer", "description": "Downscaled image height in pixels (<= 1024)." },
+        "audioDurationSec": { "type": "integer", "description": "Voice note duration in seconds (1..30)." },
+        "isDeleted": { "type": "boolean" },
+        "memberUids": { "type": "array" },
+        "participants": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderUid", "senderName", "type", "text", "isDeleted", "createdAt", "updatedAt"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Smart Swipe Attendance record stored at /groups/{groupId}/attendance/{weekKey}_{studentId} (separate from card points).",
+      "type": "object",
+      "properties": {
+        "groupId": { "type": "string", "description": "Parent group ID." },
+        "studentId": { "type": "string", "description": "Student document ID." },
+        "studentName": { "type": "string", "description": "Student full name." },
+        "status": {
+          "type": "string",
+          "enum": ["PRESENT", "ABSENT", "ISSUE"],
+          "description": "Attendance status (PRESENT, ABSENT, or ISSUE)."
+        },
+        "weekKey": { "type": "string", "description": "Saturday-based week key (e.g. 2026-11-W1)." },
+        "servantId": { "type": "string", "description": "UID of the servant who recorded the status." },
+        "servantName": { "type": "string", "description": "Name of the servant who recorded the status." },
+        "note": { "type": "string", "description": "Optional short note (up to 200 chars), typically for ISSUE status." },
+        "memberUids": { "type": "array", "description": "Bounded list (1..10) of group member UIDs." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "studentId",
+        "studentName",
+        "status",
+        "weekKey",
+        "servantId",
+        "servantName",
+        "note",
+        "createdAt",
+        "memberUids"
+      ]
     }
   },
   "firestore": {
@@ -580,6 +767,30 @@
     "/groups/{groupId}/monthlyBalances/{balanceId}": {
       "schema": { "$ref": "#/entities/MonthlyBalance" },
       "description": "Shared per-month points balance summaries per student."
+    },
+    "/groups/{groupId}/members/{memberUid}": {
+      "schema": { "$ref": "#/entities/ServantMemberProfile" },
+      "description": "Group-scoped servant public profiles (photo, name, WhatsApp/phone numbers, phoneHidden, lastSeenAt) readable only by group members and writable only by the servant who owns memberUid."
+    },
+    "/groups/{groupId}/chatMeta/{metaId}": {
+      "schema": { "$ref": "#/entities/GroupChatMeta" },
+      "description": "Group chat metadata document (main) with last message preview and total message counter."
+    },
+    "/groups/{groupId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Group chat messages verified via memberUids."
+    },
+    "/groups/{groupId}/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Smart Swipe Attendance records keyed deterministically by {weekKey}_{studentId}."
+    },
+    "/dms/{chatId}": {
+      "schema": { "$ref": "#/entities/DmChatMeta" },
+      "description": "Private 1-to-1 chat room metadata verified via participants array."
+    },
+    "/dms/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Private 1-to-1 chat messages verified via participants array."
     }
   }
 }

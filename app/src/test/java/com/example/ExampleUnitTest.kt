@@ -94,10 +94,10 @@ class ExampleUnitTest {
         assertNotNull(week2.copticTransitionBadge)
         assertTrue(week2.copticTransitionBadge!!.contains("هاتور"))
 
-        // December 2026 is a future month relative to Nov 1, 2026 -> locked & empty weeks
+        // December 2026 is a future month relative to Nov 1, 2026 -> marked as future with future weeks
         val december = tree2026.months[1]
         assertTrue(december.isFutureMonth)
-        assertTrue(december.weeks.isEmpty())
+        assertTrue(december.weeks.all { it.isFutureWeek })
     }
 
     @Test

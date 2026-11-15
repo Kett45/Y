@@ -93,8 +93,12 @@ import com.example.data.model.CardEvent
 import com.example.data.model.CardType
 import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.model.ServantBlock
+import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
 import com.example.ui.components.CompactCardButtonsRow
+import com.example.ui.components.ServantAvatarCircle
+import com.example.ui.components.ServantBlockContactRows
+import com.example.ui.components.ServantPhotoPickerDialog
 import com.example.ui.components.StudentAvatarCircle
 import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.components.StudentPhotoAlbumSection
@@ -130,10 +134,13 @@ fun HomeScreen(
     onDeleteStudent: (Student) -> Unit,
     onToggleBlockCollapsed: (String) -> Unit = {},
     onMergeDuplicateStudents: (Student, Student) -> Unit = { _, _ -> },
-    onKeepBothDuplicateStudents: (String) -> Unit = {}
+    onKeepBothDuplicateStudents: (String) -> Unit = {},
+    onUpdateOwnServantAvatar: (String) -> Unit = {},
+    onOpenPhoneWizard: () -> Unit = {}
 ) {
     val localCollapsedOverrides = remember { mutableStateMapOf<String, Boolean>() }
     var showLeaderboardExpanded by rememberSaveable { mutableStateOf(false) }
+    var showSmartAttendanceScreen by rememberSaveable { mutableStateOf(false) }
 
     // Dialog states
     var showAddMenuDialog by rememberSaveable { mutableStateOf(false) }
@@ -143,6 +150,7 @@ fun HomeScreen(
     var showMonthWeekTreeDialog by rememberSaveable { mutableStateOf(false) }
     var showDuplicateAlertsDialog by rememberSaveable { mutableStateOf(false) }
     var showDuplicateNamesDialog by rememberSaveable { mutableStateOf(false) }
+    var showOwnServantPhotoDialog by rememberSaveable { mutableStateOf(false) }
     var studentForMoveSheet by remember { mutableStateOf<Student?>(null) }
     var studentForDetailsSheet by remember { mutableStateOf<Student?>(null) }
     var studentForPhotoDialog by remember { mutableStateOf<Student?>(null) }
@@ -224,7 +232,13 @@ fun HomeScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (showLeaderboardExpanded) {
+        if (showSmartAttendanceScreen) {
+            SmartAttendanceScreen(
+                state = state,
+                currentUserId = currentUserId,
+                onClose = { showSmartAttendanceScreen = false }
+            )
+        } else if (showLeaderboardExpanded) {
             FullClassLeaderboardScreen(
                 state = state,
                 onBackToHome = { showLeaderboardExpanded = false },
@@ -239,12 +253,13 @@ fun HomeScreen(
                 contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 92.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // 1. Compact 56dp Top Header Bar: Group Name, Month/Week Chip, Search Icon, Leaderboard Icon, Bell + Badge
+                // 1. Compact 56dp Top Header Bar: Group Name, Month/Week Chip, Search Icon, Leaderboard Icon, Smart Attendance Button, Bell + Badge
                 item(key = "header_controls", contentType = "header_controls") {
                     HomeTopControlCard(
                         state = state,
                         showLeaderboardExpanded = showLeaderboardExpanded,
                         onToggleLeaderboard = { showLeaderboardExpanded = true },
+                        onOpenSmartAttendance = { showSmartAttendanceScreen = true },
                         onMonthOffset = onMonthOffset,
                         onOpenMonthWeekTree = { showMonthWeekTreeDialog = true },
                         onOpenDuplicateAlerts = { showDuplicateAlertsDialog = true },
@@ -344,13 +359,20 @@ fun HomeScreen(
                         key = "block_header_${block.id}",
                         contentType = "servant_block_header"
                     ) {
+                        val isOwnBlock = block.servantId.isNotBlank() && block.servantId == currentUserId
+                        val servantProfile = state.memberProfileForServant(block.servantId)
                         ServantBlockHeaderCard(
                             block = block,
+                            groupId = state.group?.id.orEmpty(),
                             groupName = state.group?.name.orEmpty(),
                             studentsCount = blockStudents.size,
                             blockAccent = blockAccent,
                             isCollapsed = isCollapsed,
-                            onToggleCollapse = { toggleBlockCollapse(block.id) }
+                            servantProfile = servantProfile,
+                            isOwnBlock = isOwnBlock,
+                            onToggleCollapse = { toggleBlockCollapse(block.id) },
+                            onAvatarClick = if (isOwnBlock) ({ showOwnServantPhotoDialog = true }) else null,
+                            onAddOwnPhoneClick = onOpenPhoneWizard
                         )
                     }
 
@@ -608,6 +630,31 @@ fun HomeScreen(
             }
         )
     }
+
+    if (showOwnServantPhotoDialog) {
+        val ownBlock = state.blocks.firstOrNull { it.servantId == currentUserId }
+        val ownAccent = if (ownBlock != null) {
+            KamSemanticColors.blockColor(ownBlock.colorHex)
+        } else {
+            MaterialTheme.colorScheme.primary
+        }
+        val ownProfile = state.memberProfileForServant(currentUserId)
+        val ownName = ownBlock?.servantName?.ifBlank { null }
+            ?: state.userProfile?.displayName?.ifBlank { null }
+            ?: "خادم"
+        ServantPhotoPickerDialog(
+            servantUid = currentUserId,
+            servantName = ownName,
+            groupId = state.group?.id.orEmpty(),
+            memberProfile = ownProfile,
+            accentColor = ownAccent,
+            onDismiss = { showOwnServantPhotoDialog = false },
+            onSaveBase64 = { newBase64 ->
+                onUpdateOwnServantAvatar(newBase64)
+                showOwnServantPhotoDialog = false
+            }
+        )
+    }
 }
 
 /**
@@ -624,6 +671,7 @@ private fun HomeTopControlCard(
     state: KamScreenState,
     showLeaderboardExpanded: Boolean,
     onToggleLeaderboard: () -> Unit,
+    onOpenSmartAttendance: () -> Unit = {},
     @Suppress("UNUSED_PARAMETER") onMonthOffset: (Int) -> Unit,
     onOpenMonthWeekTree: () -> Unit,
     onOpenDuplicateAlerts: () -> Unit,
@@ -778,6 +826,35 @@ private fun HomeTopControlCard(
                                 contentDescription = "ترتيب ونقاط الفصل بالكامل",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(19.dp)
+                            )
+                        }
+                    }
+
+                    // Smart Swipe Attendance Compact Button ("التحضير الذكي بسحب الصور")
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .height(38.dp)
+                            .clickable(onClick = onOpenSmartAttendance)
+                            .testTag("open_smart_attendance_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text(
+                                text = "📋",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            Text(
+                                text = "تحضير",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontWeight = FontWeight.ExtraBold,
+                                maxLines = 1
                             )
                         }
                     }
@@ -987,11 +1064,16 @@ private fun EmptyClassroomPromptCard(
 @Composable
 private fun ServantBlockHeaderCard(
     block: ServantBlock,
+    groupId: String,
     groupName: String,
     studentsCount: Int,
     blockAccent: Color,
     isCollapsed: Boolean,
-    onToggleCollapse: () -> Unit
+    servantProfile: ServantMemberProfile? = null,
+    isOwnBlock: Boolean = false,
+    onToggleCollapse: () -> Unit,
+    onAvatarClick: (() -> Unit)? = null,
+    onAddOwnPhoneClick: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier
@@ -1000,68 +1082,83 @@ private fun ServantBlockHeaderCard(
                 width = 1.5.dp,
                 color = blockAccent.copy(alpha = 0.65f),
                 shape = RoundedCornerShape(18.dp)
-            ),
+            )
+            .testTag("servant_block_header_card_${block.id}"),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(blockAccent.copy(alpha = 0.22f))
-                .clickable(onClick = onToggleCollapse)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(blockAccent.copy(alpha = 0.22f))
+                    .clickable(onClick = onToggleCollapse)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(14.dp)
-                        .clip(CircleShape)
-                        .background(blockAccent)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Column {
-                    Text(
-                        text = "بلوك ${block.servantName}",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.Bold
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    ServantAvatarCircle(
+                        servantUid = block.servantId.ifBlank { block.id },
+                        servantName = block.servantName,
+                        groupId = groupId,
+                        memberProfile = servantProfile,
+                        accentColor = blockAccent,
+                        size = 42.dp,
+                        isEditable = isOwnBlock,
+                        onClick = onAvatarClick
                     )
-                    Text(
-                        text = "$groupName • $studentsCount طفل",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "بلوك ${block.servantName}",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "$groupName • $studentsCount طفل",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = blockAccent.copy(alpha = 0.25f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "$studentsCount",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = blockAccent,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                            contentDescription = if (isCollapsed) "عرض الأطفال" else "طي البلوك",
+                            tint = blockAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
 
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = blockAccent.copy(alpha = 0.25f)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "$studentsCount",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = blockAccent,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                        contentDescription = if (isCollapsed) "عرض الأطفال" else "طي البلوك",
-                        tint = blockAccent,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
+            ServantBlockContactRows(
+                blockId = block.id,
+                servantProfile = servantProfile,
+                isOwnBlock = isOwnBlock,
+                blockAccent = blockAccent,
+                onAddOwnPhoneClick = onAddOwnPhoneClick
+            )
         }
     }
 }

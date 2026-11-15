@@ -385,9 +385,56 @@ class KamRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertEquals(samplePackedAvatar, fetchedAvatar)
     }
 
+    @Test
+    fun servantMemberProfile_syncsPhonesPrivacyAndDecoupledAvatarAcrossGroupMembers() = runBlocking {
+        val groupCode = "KAMP" + UUID.randomUUID().toString().replace("-", "").uppercase().take(5)
+        val repository = KamRepository(firestore)
+
+        val adminUid = signInTestUser("admin_ph_${groupCode}@test.com")
+        val createdGroup = withTimeout(TIMEOUT_MS) {
+            repository.ensureUserProfile("الأمين مينا", "admin_ph@test.com").getOrThrow()
+            repository.createGroup("فصل التواصل", "الأمين مينا", groupCode).getOrThrow()
+        }
+
+        val sampleServantAvatar = "F3|0|0.0|0.0|1.0|c2VydmFudF9hdmF0YXJfYmFzZTY0"
+        val servantUid = signInTestUser("servant_ph_${groupCode}@test.com")
+        withTimeout(TIMEOUT_MS) {
+            repository.ensureUserProfile("الخادم كيرلس", "servant_ph@test.com").getOrThrow()
+            repository.joinGroupByCode(createdGroup.fullDailyInviteCode, "الخادم كيرلس").getOrThrow()
+            repository.upsertOwnMemberProfile(
+                groupId = groupCode,
+                displayName = "الخادم كيرلس",
+                primaryPhone = "+201012345678",
+                secondaryPhone = "+201287654321",
+                phoneHidden = false,
+                avatarBase64 = sampleServantAvatar
+            ).getOrThrow()
+        }
+
+        // Admin observes member profiles and sees Servant's phones and avatar hash
+        signInTestUser("admin_ph_${groupCode}@test.com")
+        val profiles = withTimeout(FLOW_TIMEOUT_MS) {
+            repository.observeGroupMembers(groupCode).first { list ->
+                list.any { it.uid == servantUid && it.primaryPhone == "+201012345678" && it.hasAvatar }
+            }
+        }
+        val servantProfile = profiles.first { it.uid == servantUid }
+        assertEquals("+201012345678", servantProfile.primaryPhone)
+        assertEquals("+201287654321", servantProfile.secondaryPhone)
+        assertFalse(servantProfile.phoneVerified)
+        assertFalse(servantProfile.phoneHidden)
+        assertTrue(servantProfile.hasAvatar)
+
+        val fetchedServantAvatar = withTimeout(TIMEOUT_MS) {
+            repository.fetchServantAvatar(groupCode, servantUid)
+        }
+        assertEquals(sampleServantAvatar, fetchedServantAvatar)
+    }
+
     private companion object {
         const val TIMEOUT_MS = 5000L
         const val FLOW_TIMEOUT_MS = 3000L
     }
 }
+
 

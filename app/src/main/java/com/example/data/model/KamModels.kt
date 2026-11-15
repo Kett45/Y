@@ -194,6 +194,150 @@ data class ServantBlock(
 
 @Immutable
 @IgnoreExtraProperties
+data class ServantMemberProfile(
+    @DocumentId val id: String = "",
+    val uid: String = "",
+    val groupId: String = "",
+    val displayName: String = "",
+    val phone: String = "",
+    val primaryPhone: String = "",
+    val secondaryPhone: String = "",
+    val phoneVerified: Boolean = false,
+    val showPhone: Boolean = true,
+    val phoneHidden: Boolean = false,
+    val avatar: String = "",
+    val hasAvatar: Boolean = false,
+    val avatarHash: String = "",
+    val avatarBase64: String = "",
+    val memberUids: List<String> = emptyList(),
+    val lastSeenAt: Timestamp? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val effectiveUid: String
+        get() = uid.ifBlank { id }
+
+    val localAvatarKey: String
+        get() = "servant_$effectiveUid"
+
+    val effectiveAvatarBase64: String
+        get() = avatarBase64.ifBlank { avatar }
+
+    val effectiveHasAvatar: Boolean
+        get() = hasAvatar || avatarHash.isNotBlank() || avatarBase64.isNotBlank() || avatar.isNotBlank()
+
+    val effectiveAvatarKey: String
+        get() = when {
+            avatarHash.isNotBlank() -> avatarHash
+            effectiveAvatarBase64.isNotBlank() -> Student.computeAvatarHash(effectiveAvatarBase64)
+            else -> ""
+        }
+
+    val effectivePrimaryPhone: String
+        get() = primaryPhone.ifBlank { phone }.trim()
+
+    val effectiveShowPhone: Boolean
+        get() = !phoneHidden && showPhone
+
+    val nonEmptyPhones: List<String>
+        get() = listOf(effectivePrimaryPhone, secondaryPhone.trim())
+            .filter { it.isNotBlank() }
+            .distinct()
+}
+
+@Immutable
+data class CountryDialCodeOption(
+    val dialCode: String,
+    val countryNameArabic: String,
+    val flagEmoji: String
+)
+
+object PhoneNumberFormatHelper {
+    val countryOptions: List<CountryDialCodeOption> = listOf(
+        CountryDialCodeOption("+20", "مصر", "🇪🇬"),
+        CountryDialCodeOption("+966", "السعودية", "🇸🇦"),
+        CountryDialCodeOption("+971", "الإمارات", "🇦🇪"),
+        CountryDialCodeOption("+965", "الكويت", "🇰🇼"),
+        CountryDialCodeOption("+962", "الأردن", "🇯🇴"),
+        CountryDialCodeOption("+1", "أمريكا / كندا", "🇺🇸"),
+        CountryDialCodeOption("+44", "بريطانيا", "🇬🇧"),
+        CountryDialCodeOption("+49", "ألمانيا", "🇩🇪"),
+        CountryDialCodeOption("+33", "فرنسا", "🇫🇷"),
+        CountryDialCodeOption("+61", "أستراليا", "🇦🇺")
+    )
+
+    fun normalizeDigits(raw: String): String {
+        val sb = StringBuilder(raw.length)
+        for (ch in raw) {
+            when (ch) {
+                in '٠'..'٩' -> sb.append(('0'.code + (ch.code - '٠'.code)).toChar())
+                in '۰'..'۹' -> sb.append(('0'.code + (ch.code - '۰'.code)).toChar())
+                else -> sb.append(ch)
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Converts a raw phone number (from Google Phone Number Hint API or manual input)
+     * into international format (`+2010...`).
+     */
+    fun toInternationalPhone(rawInput: String, defaultDialCode: String = "+20"): String {
+        val normalized = normalizeDigits(rawInput).trim()
+        if (normalized.isBlank()) return ""
+
+        val cleanDial = normalizeDigits(defaultDialCode).let { code ->
+            val digits = code.filter { it.isDigit() }
+            if (digits.isBlank()) "+20" else "+$digits"
+        }
+
+        val hasExplicitPlus = normalized.startsWith("+")
+        val hasDoubleZero = normalized.startsWith("00")
+        val digitsOnly = normalized.filter { it.isDigit() }
+        if (digitsOnly.isBlank()) return ""
+
+        if (hasExplicitPlus) {
+            return normalizeEgyptTrunkZero("+$digitsOnly").take(24)
+        }
+        if (hasDoubleZero && digitsOnly.length > 4) {
+            return normalizeEgyptTrunkZero("+${digitsOnly.drop(2)}").take(24)
+        }
+
+        val dialDigits = cleanDial.removePrefix("+")
+        if (digitsOnly.startsWith(dialDigits) && digitsOnly.length >= dialDigits.length + 9) {
+            return normalizeEgyptTrunkZero("+$digitsOnly").take(24)
+        }
+
+        val localPart = digitsOnly.trimStart('0')
+        if (localPart.isBlank()) return ""
+        return "$cleanDial$localPart".take(24)
+    }
+
+    private fun normalizeEgyptTrunkZero(phoneWithPlus: String): String {
+        return if (phoneWithPlus.startsWith("+200") && phoneWithPlus.length >= 13) {
+            "+20" + phoneWithPlus.removePrefix("+200")
+        } else {
+            phoneWithPlus
+        }
+    }
+
+    fun isValidPhoneInput(rawInput: String, defaultDialCode: String = "+20"): Boolean {
+        val formatted = toInternationalPhone(rawInput, defaultDialCode)
+        if (!formatted.startsWith("+")) return false
+        val digits = formatted.drop(1)
+        return digits.length in 9..15 && digits.all { it.isDigit() }
+    }
+
+    /**
+     * Returns digits-only string for `https://wa.me/<digits>` (e.g. `201012345678`).
+     */
+    fun toWhatsAppDigits(internationalPhone: String): String {
+        return normalizeDigits(internationalPhone).filter { it.isDigit() }
+    }
+}
+
+@Immutable
+@IgnoreExtraProperties
 data class Student(
     @DocumentId val id: String = "",
     val groupId: String = "",
@@ -278,7 +422,7 @@ data class CardEvent(
         if (ts != null && ts.seconds > 0L) {
             return ts.toDate().time
         }
-        return ServiceCalendarHelper.computeFallbackTimestampMillis(monthKey = monthKey, weekKey = weekKey)
+        return SaturdayCalendarHelper.computeFallbackTimestampMillis(monthKey = monthKey, weekKey = weekKey)
     }
 }
 
@@ -982,6 +1126,49 @@ object SaturdayCalendarHelper {
 
 typealias ServiceCalendarHelper = SaturdayCalendarHelper
 
+enum class AttendanceStatus(
+    val id: String,
+    val arabicLabel: String,
+    val shortArabicLabel: String
+) {
+    PRESENT("PRESENT", "حاضر في الكنيسة", "حاضر"),
+    ABSENT("ABSENT", "غايب", "غايب"),
+    ISSUE("ISSUE", "عمل مشكلة", "مشكلة");
 
+    companion object {
+        fun fromId(raw: String?): AttendanceStatus {
+            return entries.firstOrNull { it.id.equals(raw, ignoreCase = true) } ?: PRESENT
+        }
+    }
+}
 
+@Immutable
+@IgnoreExtraProperties
+data class AttendanceRecord(
+    @DocumentId val id: String = "",
+    val groupId: String = "",
+    val studentId: String = "",
+    val studentName: String = "",
+    val status: String = AttendanceStatus.PRESENT.id,
+    val weekKey: String = "",
+    val servantId: String = "",
+    val servantName: String = "",
+    val note: String = "",
+    val memberUids: List<String> = emptyList(),
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val attendanceStatus: AttendanceStatus
+        get() = AttendanceStatus.fromId(status)
 
+    val effectiveId: String
+        get() = id.ifBlank { buildDocId(weekKey, studentId) }
+
+    companion object {
+        const val MAX_NOTE_LENGTH = 200
+
+        fun buildDocId(weekKey: String, studentId: String): String {
+            return "${weekKey.trim()}_${studentId.trim()}"
+        }
+    }
+}

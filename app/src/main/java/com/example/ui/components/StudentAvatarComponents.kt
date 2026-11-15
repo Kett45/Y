@@ -221,6 +221,60 @@ object StudentAvatarImageHelper {
     }
 
     /**
+     * Fast 0ms memory-only lookup for the large attendance card photo if already preloaded.
+     */
+    fun getCachedLargeAttendancePhoto(student: Student): ImageBitmap? {
+        val raw = student.avatarBase64.ifBlank { localPackedAvatarByStudentId[student.id].orEmpty() }
+        if (raw.isNotBlank()) {
+            getCachedFullPhotoBitmap(raw)?.let { return it }
+            getCachedBitmap(raw)?.let { return it }
+        }
+        return getCachedBitmapForStudent(student)
+    }
+
+    /**
+     * Loads and decodes a student's large photo on `Dispatchers.IO` for the Smart Swipe Attendance card.
+     */
+    suspend fun loadLargeAttendancePhotoBitmap(context: Context?, student: Student): ImageBitmap? {
+        getCachedLargeAttendancePhoto(student)?.let { return it }
+        if (context == null) return null
+        val appCtx = context.applicationContext ?: context
+        return withContext(Dispatchers.IO) {
+            val packed = resolveStudentPackedAvatar(appCtx, student)
+            if (packed.isBlank()) return@withContext null
+            val mainEntry = extractMainPhotoBase64(packed)
+            if (mainEntry.isBlank()) return@withContext null
+            decodeFullPhotoToImageBitmap(appCtx, mainEntry)
+                ?: decodeBase64ToImageBitmap(
+                    base64 = mainEntry,
+                    context = appCtx,
+                    studentKeyAlias = "student_${student.id}_${student.effectiveAvatarKey}".hashCode()
+                )
+        }
+    }
+
+    /**
+     * Preloads and decodes the closest [count] (default 3) upcoming students' photos on `Dispatchers.IO`
+     * so swiping between cards in Smart Attendance is instantaneous with zero Main Thread work.
+     */
+    fun preloadNextAttendancePhotosAsync(
+        context: Context?,
+        upcomingStudents: List<Student>,
+        count: Int = 3
+    ) {
+        if (context == null || upcomingStudents.isEmpty() || count <= 0) return
+        val appCtx = context.applicationContext ?: context
+        val targets = upcomingStudents.take(count)
+        avatarIoScope.launch {
+            for (stu in targets) {
+                if (!stu.effectiveHasAvatar && stu.avatarBase64.isBlank()) continue
+                if (getCachedLargeAttendancePhoto(stu) != null) continue
+                loadLargeAttendancePhotoBitmap(appCtx, stu)
+            }
+        }
+    }
+
+    /**
      * Hook wired by `KamViewModel` to lazily fetch `groups/{groupId}/avatars/{studentId}`
      * on demand when a visible student has `hasAvatar == true` and isn't cached on local disk yet.
      */

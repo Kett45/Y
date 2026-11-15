@@ -21,8 +21,10 @@ import com.example.data.model.Group
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
 import com.example.data.model.MonthlyBalance
+import com.example.data.model.PhoneNumberFormatHelper
 import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.model.ServantBlock
+import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
 import com.example.data.model.UserProfile
 import com.example.data.repository.KamRepository
@@ -92,8 +94,16 @@ class PrecomputedClassroomIndices(
     val cardEvents: List<CardEvent>,
     val monthlyBalances: List<MonthlyBalance>,
     val selectedWeekKey: String?,
-    val dismissedDuplicateNames: Set<String>
+    val dismissedDuplicateNames: Set<String>,
+    val memberProfiles: List<ServantMemberProfile> = emptyList()
 ) {
+    val membersByUid: Map<String, ServantMemberProfile> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        if (memberProfiles.isEmpty()) {
+            emptyMap()
+        } else {
+            memberProfiles.associateBy { it.effectiveUid }
+        }
+    }
     val enabledCardTypes: List<CardType> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         val ids = userProfile?.enabledCards ?: CardType.defaultEnabledIds
         CardType.entries.filter { it.id in ids }
@@ -250,17 +260,20 @@ class PrecomputedClassroomIndices(
         evList: List<CardEvent>,
         balList: List<MonthlyBalance>,
         weekKey: String?,
-        dismissed: Set<String>
+        dismissed: Set<String>,
+        members: List<ServantMemberProfile> = emptyList()
     ): Boolean {
         return userProfile === profile &&
             students === stuList &&
             cardEvents === evList &&
             monthlyBalances === balList &&
             selectedWeekKey == weekKey &&
-            dismissedDuplicateNames === dismissed
+            dismissedDuplicateNames === dismissed &&
+            memberProfiles === members
     }
 
     fun prewarmAll() {
+        membersByUid
         enabledCardTypes
         enabledCardsMask
         collapsedBlockIds
@@ -285,6 +298,7 @@ data class KamScreenState(
     val userGroups: List<Group> = emptyList(),
     val isAdmin: Boolean = false,
     val blocks: List<ServantBlock> = emptyList(),
+    val memberProfiles: List<ServantMemberProfile> = emptyList(),
     val students: List<Student> = emptyList(),
     val cardEvents: List<CardEvent> = emptyList(),
     val monthlyBalances: List<MonthlyBalance> = emptyList(),
@@ -299,6 +313,11 @@ data class KamScreenState(
     val hasPendingWrites: Boolean = false,
     val dismissedDuplicateNames: Set<String> = emptySet(),
     val previousGroupId: String = "",
+    val shouldPromptPhoneOnboarding: Boolean = false,
+    val ownPrimaryPhone: String = "",
+    val ownSecondaryPhone: String = "",
+    val ownPhoneHidden: Boolean = false,
+    val ownAvatarHash: String = "",
     val precomputedIndices: PrecomputedClassroomIndices? = null
 ) {
     private val indices: PrecomputedClassroomIndices by lazy(LazyThreadSafetyMode.PUBLICATION) {
@@ -309,7 +328,8 @@ data class KamScreenState(
                 evList = cardEvents,
                 balList = monthlyBalances,
                 weekKey = selectedWeekKey,
-                dismissed = dismissedDuplicateNames
+                dismissed = dismissedDuplicateNames,
+                members = memberProfiles
             )
         ) {
             existing
@@ -320,9 +340,15 @@ data class KamScreenState(
                 cardEvents = cardEvents,
                 monthlyBalances = monthlyBalances,
                 selectedWeekKey = selectedWeekKey,
-                dismissedDuplicateNames = dismissedDuplicateNames
+                dismissedDuplicateNames = dismissedDuplicateNames,
+                memberProfiles = memberProfiles
             )
         }
+    }
+
+    fun memberProfileForServant(servantUid: String): ServantMemberProfile? {
+        if (servantUid.isBlank()) return null
+        return indices.membersByUid[servantUid]
     }
 
     val remainingStudentCapacity: Int
@@ -421,225 +447,25 @@ data class KamScreenState(
      * Includes every student (even those with 0 points or 0 attendance) sorted from highest to lowest points.
      */
     /**
-     * Returns `true` if the leaderboard for [selectedMonths] and [selectedWeekOverride] is already
-     * precomputed and cached in memory for the current classroom data snapshot.
-     */
-    fun isLeaderboardCached(
-        selectedMonths: Set<String> = setOf(selectedMonthKey),
-        selectedWeekOverride: String? = null
-    ): Boolean {
-        val targetMonths = selectedMonths.filter { it.isNotBlank() }.toSortedSet().ifEmpty {
-            if (selectedMonthKey.isNotBlank()) sortedSetOf(selectedMonthKey) else sortedSetOf()
-        }
-        val cacheKey = "${targetMonths.joinToString(",")}|${selectedWeekOverride.orEmpty()}|${enabledCardTypes.size}|${effectiveAllCardEvents.size}|${effectiveAllMonthlyBalances.size}|${students.size}"
-        return indices.leaderboardCache.containsKey(cacheKey)
-    }
-
-    /**
      * Computes the full-class leaderboard and per-card breakdown for ALL students in the classroom
-     * across either:
-     * - A single week ([selectedWeekOverride] != null), OR
-     * - One or more selected months ([selectedMonths], defaulting to [selectedMonthKey]).
-     * Memoizes the result in [PrecomputedClassroomIndices.leaderboardCache] so repeated opens or
-     * recompositions without actual data changes return in 0ms without recalculating.
+     * across either a single week ([selectedWeekOverride] != null) or one or more selected months ([selectedMonths]).
+     * Delegates to [computeClassLeaderboardEntriesForSelection] so all leaderboard calculations share a single path.
      */
     fun computeClassLeaderboardEntries(
         selectedMonths: Set<String> = setOf(selectedMonthKey),
         selectedWeekOverride: String? = null
     ): List<StudentDetailedLeaderboardEntry> {
-        if (students.isEmpty()) return emptyList()
-        val allEvents = effectiveAllCardEvents
-        val allBalances = effectiveAllMonthlyBalances
-        val activeCards = enabledCardTypes.ifEmpty { CardType.entries }
-        val targetMonths = selectedMonths.filter { it.isNotBlank() }.toSortedSet().ifEmpty {
-            if (selectedMonthKey.isNotBlank()) sortedSetOf(selectedMonthKey) else sortedSetOf()
-        }
-        val cacheKey = "${targetMonths.joinToString(",")}|${selectedWeekOverride.orEmpty()}|${activeCards.size}|${allEvents.size}|${allBalances.size}|${students.size}"
-        indices.leaderboardCache[cacheKey]?.let { cached ->
-            return cached
-        }
-
-        val scopedEvents = if (!selectedWeekOverride.isNullOrBlank()) {
-            allEvents.filter { it.weekKey == selectedWeekOverride }
-        } else if (targetMonths.isNotEmpty()) {
-            allEvents.filter { it.monthKey in targetMonths }
+        return if (!selectedWeekOverride.isNullOrBlank()) {
+            computeClassLeaderboardEntriesForSelection(
+                selectedMonthKeys = emptySet(),
+                selectedWeekKeys = setOf(selectedWeekOverride)
+            )
         } else {
-            allEvents
-        }
-
-        // Pre-index scoped events by studentId and balances by (studentId, monthKey) for O(1) lookup per student
-        val scopedEventsByStudentId = scopedEvents.groupBy { it.studentId }
-        val balanceByStudentAndMonth = HashMap<Pair<String, String>, Long>(allBalances.size.coerceAtLeast(16))
-        allBalances.forEach { bal ->
-            balanceByStudentAndMonth[bal.studentId to bal.monthKey] = bal.totalPoints
-        }
-
-        val unsorted = students.map { student ->
-            val stuEvents = scopedEventsByStudentId[student.id].orEmpty()
-            val eventsByType = if (stuEvents.isEmpty()) emptyMap() else stuEvents.groupBy { it.cardType }
-
-            val breakdown = activeCards.map { cardType ->
-                val matching = eventsByType[cardType.id].orEmpty()
-                StudentCardTypeBreakdown(
-                    cardType = cardType,
-                    count = matching.size,
-                    points = matching.sumOf { it.points }
-                )
-            }
-
-            val totalPoints = if (!selectedWeekOverride.isNullOrBlank()) {
-                stuEvents.sumOf { it.points }
-            } else {
-                val eventsByMonth = if (stuEvents.isEmpty()) emptyMap() else stuEvents.groupBy { it.monthKey }
-                targetMonths.sumOf { mKey ->
-                    val monthEvents = eventsByMonth[mKey].orEmpty()
-                    if (monthEvents.isNotEmpty()) {
-                        monthEvents.sumOf { it.points }
-                    } else {
-                        balanceByStudentAndMonth[student.id to mKey] ?: 0L
-                    }
-                }
-            }
-
-            val attendanceEvents = eventsByType[CardType.ATTENDANCE.id].orEmpty()
-            StudentDetailedLeaderboardEntry(
-                student = student,
-                rank = 0,
-                totalPoints = totalPoints,
-                totalCardsCount = stuEvents.size,
-                attendanceCount = attendanceEvents.size,
-                attendancePoints = attendanceEvents.sumOf { it.points },
-                breakdownByCard = breakdown
+            computeClassLeaderboardEntriesForSelection(
+                selectedMonthKeys = selectedMonths,
+                selectedWeekKeys = emptySet()
             )
         }
-
-        val computed = unsorted
-            .sortedWith(
-                compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
-                    .thenByDescending { it.attendanceCount }
-                    .thenByDescending { it.attendancePoints }
-                    .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
-                    .thenBy { it.student.studentNumber }
-            )
-            .mapIndexed { idx, entry ->
-                entry.copy(rank = idx + 1)
-            }
-        indices.leaderboardCache[cacheKey] = computed
-        return computed
-    }
-
-    /**
-     * Returns `true` if the leaderboard for the custom date range `[startMillis, endMillis]` is already
-     * precomputed and cached in memory for the current classroom data snapshot.
-     */
-    fun isLeaderboardDateRangeCached(
-        startMillis: Long,
-        endMillis: Long,
-        extraHistoricalEventsCount: Int = 0
-    ): Boolean {
-        val startBound = SaturdayCalendarHelper.normalizeStartOfDayMillis(startMillis)
-        val endBound = SaturdayCalendarHelper.normalizeEndOfDayMillis(endMillis)
-        val activeCards = enabledCardTypes.ifEmpty { CardType.entries }
-        val cacheKey = "RANGE|${startBound / 86_400_000L}|${endBound / 86_400_000L}|${activeCards.size}|${effectiveAllCardEvents.size}|$extraHistoricalEventsCount|${students.size}"
-        return indices.leaderboardCache.containsKey(cacheKey)
-    }
-
-    /**
-     * Computes the full-class leaderboard and per-card breakdown for ALL students in the classroom
-     * across an arbitrary custom date range `[startMillis, endMillis]` strictly from `cardEvents`
-     * (never from `monthlyBalances`).
-     * - Uses `event.effectiveTimestampMillis()` which reads `createdAt` and falls back to `weekKey`/`monthKey`
-     *   if an older event lacks a valid `createdAt`.
-     * - Memoizes the sorted result in [PrecomputedClassroomIndices.leaderboardCache] so repeated opens
-     *   or filter changes return in 0ms without recalculating.
-     */
-    fun computeClassLeaderboardEntriesForDateRange(
-        startMillis: Long,
-        endMillis: Long,
-        extraHistoricalEvents: List<CardEvent> = emptyList()
-    ): List<StudentDetailedLeaderboardEntry> {
-        if (students.isEmpty()) return emptyList()
-        val startBound = SaturdayCalendarHelper.normalizeStartOfDayMillis(startMillis)
-        val endBound = SaturdayCalendarHelper.normalizeEndOfDayMillis(endMillis)
-        val allEvents = effectiveAllCardEvents
-        val activeCards = enabledCardTypes.ifEmpty { CardType.entries }
-        val cacheKey = "RANGE|${startBound / 86_400_000L}|${endBound / 86_400_000L}|${activeCards.size}|${allEvents.size}|${extraHistoricalEvents.size}|${students.size}"
-        indices.leaderboardCache[cacheKey]?.let { cached ->
-            return cached
-        }
-
-        // Merge in-memory events with any fetched historical range events (deduplicated by id)
-        val combinedEvents = if (extraHistoricalEvents.isEmpty()) {
-            allEvents
-        } else {
-            val byId = LinkedHashMap<String, CardEvent>(allEvents.size + extraHistoricalEvents.size)
-            for (i in 0 until allEvents.size) {
-                val ev = allEvents[i]
-                val key = ev.id.ifBlank { "${ev.studentId}_${ev.cardType}_${ev.weekKey}_${ev.servantId}" }
-                byId[key] = ev
-            }
-            for (i in 0 until extraHistoricalEvents.size) {
-                val ev = extraHistoricalEvents[i]
-                val key = ev.id.ifBlank { "${ev.studentId}_${ev.cardType}_${ev.weekKey}_${ev.servantId}" }
-                if (!byId.containsKey(key)) {
-                    byId[key] = ev
-                }
-            }
-            byId.values.toList()
-        }
-
-        val scopedEvents = ArrayList<CardEvent>(combinedEvents.size)
-        for (i in 0 until combinedEvents.size) {
-            val ev = combinedEvents[i]
-            val ts = ev.effectiveTimestampMillis()
-            if (ts in startBound..endBound) {
-                scopedEvents.add(ev)
-            }
-        }
-
-        val scopedEventsByStudentId = scopedEvents.groupBy { it.studentId }
-
-        val unsorted = students.map { student ->
-            val stuEvents = scopedEventsByStudentId[student.id].orEmpty()
-            val eventsByType = if (stuEvents.isEmpty()) emptyMap() else stuEvents.groupBy { it.cardType }
-
-            val breakdown = activeCards.map { cardType ->
-                val matching = eventsByType[cardType.id].orEmpty()
-                StudentCardTypeBreakdown(
-                    cardType = cardType,
-                    count = matching.size,
-                    points = matching.sumOf { it.points }
-                )
-            }
-
-            // Strictly sum points from cardEvents in the date range (never monthlyBalances)
-            val totalPoints = stuEvents.sumOf { it.points }
-            val attendanceEvents = eventsByType[CardType.ATTENDANCE.id].orEmpty()
-
-            StudentDetailedLeaderboardEntry(
-                student = student,
-                rank = 0,
-                totalPoints = totalPoints,
-                totalCardsCount = stuEvents.size,
-                attendanceCount = attendanceEvents.size,
-                attendancePoints = attendanceEvents.sumOf { it.points },
-                breakdownByCard = breakdown
-            )
-        }
-
-        val computed = unsorted
-            .sortedWith(
-                compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
-                    .thenByDescending { it.attendanceCount }
-                    .thenByDescending { it.attendancePoints }
-                    .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
-                    .thenBy { it.student.studentNumber }
-            )
-            .mapIndexed { idx, entry ->
-                entry.copy(rank = idx + 1)
-            }
-        indices.leaderboardCache[cacheKey] = computed
-        return computed
     }
 
     /**
@@ -773,6 +599,9 @@ class KamViewModel(
     private val _localPrefsOverride = MutableStateFlow<LocalUserPreferences?>(
         LocalClassroomCache.getMemoryUserPreferences(currentUserId)?.takeIf { it.updatedAtMillis > 0L }
     )
+    @Volatile
+    private var hasLoadedPrefsFromDisk: Boolean =
+        LocalClassroomCache.getMemoryUserPreferences(currentUserId) != null
 
     private suspend fun resolveCachedSnapshot(): CachedClassroomSnapshot? {
         initialCachedSnapshot?.let { return it }
@@ -794,6 +623,7 @@ class KamViewModel(
     private val _optimisticAddedEvents = MutableStateFlow<Map<String, CardEvent>>(emptyMap())
     private val _optimisticRemovedEventIds = MutableStateFlow<Set<String>>(emptySet())
     private val _optimisticStudentOverrides = MutableStateFlow<Map<String, Student>>(emptyMap())
+    private val _optimisticMemberOverrides = MutableStateFlow<Map<String, ServantMemberProfile>>(emptyMap())
     private val _optimisticGroupPolicyOverride = MutableStateFlow<Group?>(null)
     private var policyMutationSeq: Long = 0L
 
@@ -803,6 +633,7 @@ class KamViewModel(
     private val recentTapTimestamps = mutableMapOf<String, Long>()
     private var lastMigratedGroupKey: String = ""
     private var lastMigratedInlineAvatarsGroupKey: String = ""
+    private var lastSyncedMemberGroupKey: String = ""
     private var lastSavedCacheSignature: String = ""
     private var lastAutoRotatedGroupKey: String = ""
     private var lastEjectedBannedGroupId: String = ""
@@ -827,15 +658,20 @@ class KamViewModel(
     }
 
     init {
-        StudentAvatarImageHelper.cloudAvatarFetcher = { groupId, studentId ->
-            repository.fetchStudentAvatar(groupId, studentId)
+        StudentAvatarImageHelper.cloudAvatarFetcher = { groupId, targetId ->
+            if (targetId.startsWith("servant_")) {
+                repository.fetchServantAvatar(groupId, targetId.removePrefix("servant_"))
+            } else {
+                repository.fetchStudentAvatar(groupId, targetId)
+            }
         }
         historicalRangeFetcher = { groupId, startMillis, endMillis ->
             repository.fetchCardEventsForDateRange(groupId, startMillis, endMillis).getOrDefault(emptyList())
         }
         viewModelScope.launch(Dispatchers.IO) {
             val loadedPrefs = LocalClassroomCache.loadUserPreferencesAsync(currentUserId)
-            if (loadedPrefs.updatedAtMillis > 0L && _localPrefsOverride.value == null) {
+            hasLoadedPrefsFromDisk = true
+            if (_localPrefsOverride.value == null) {
                 _localPrefsOverride.value = loadedPrefs
             }
         }
@@ -874,7 +710,12 @@ class KamViewModel(
                     uiScaleFactor = profile.uiScaleFactor.toFloat().takeIf { it in 0.70f..1.30f }
                         ?: existingLocal?.uiScaleFactor ?: 0.85f,
                     showFloatingAddButton = profile.showFloatingAddButton,
-                    activeGroupId = profile.groupId
+                    activeGroupId = profile.groupId,
+                    phoneOnboardingDone = existingLocal?.phoneOnboardingDone ?: false,
+                    primaryPhone = existingLocal?.primaryPhone.orEmpty(),
+                    secondaryPhone = existingLocal?.secondaryPhone.orEmpty(),
+                    phoneHidden = existingLocal?.phoneHidden ?: false,
+                    servantAvatarHash = existingLocal?.servantAvatarHash.orEmpty()
                 )
                 _localPrefsOverride.value = mergedPrefs
                 LocalClassroomCache.saveUserPreferences(currentUserId, mergedPrefs)
@@ -1017,6 +858,26 @@ class KamViewModel(
         }
     }
 
+    private val memberProfilesFlow: Flow<List<ServantMemberProfile>> = activeGroupIdFlow.flatMapLatest { groupId ->
+        if (groupId.isBlank()) {
+            flowOf(emptyList())
+        } else {
+            repository.observeGroupMembers(groupId)
+                .onStart {
+                    val cachedMembers = resolveCachedSnapshot()?.memberProfiles.orEmpty()
+                        .filter { it.groupId == groupId || it.groupId.isBlank() }
+                    emit(cachedMembers)
+                }
+                .debounceSubsequentCloudEmissions(200L)
+                .catch { err ->
+                    Log.w(TAG, "Error observing group members", err)
+                    val cachedMembers = resolveCachedSnapshot()?.memberProfiles.orEmpty()
+                        .filter { it.groupId == groupId || it.groupId.isBlank() }
+                    emit(cachedMembers)
+                }
+        }
+    }
+
     /**
      * Heavy classroom data processing flow: runs on [Dispatchers.Default] ONLY when actual
      * classroom data, selected month/week, or optimistic overlays change.
@@ -1027,8 +888,8 @@ class KamViewModel(
         combine(userProfileFlow, groupFlow, userGroupsFlow, blocksFlow, _localPrefsOverride) { profile, group, userGroups, blocks, localPrefs ->
             arrayOf<Any?>(profile, group, userGroups, blocks, localPrefs)
         },
-        combine(studentsFlow, allCardEventsFlow, allMonthlyBalancesFlow, invitationsFlow) { students, allEvents, allBalances, invites ->
-            arrayOf<Any?>(students, allEvents, allBalances, invites)
+        combine(studentsFlow, allCardEventsFlow, allMonthlyBalancesFlow, invitationsFlow, memberProfilesFlow) { students, allEvents, allBalances, invites, members ->
+            arrayOf<Any?>(students, allEvents, allBalances, invites, members)
         },
         combine(_selectedMonthKey, _selectedWeekKey, _dismissedDuplicateNames) { month, week, dismissed ->
             arrayOf<Any?>(month, week, dismissed)
@@ -1037,9 +898,10 @@ class KamViewModel(
             _optimisticAddedEvents,
             _optimisticRemovedEventIds,
             _optimisticStudentOverrides,
-            _optimisticGroupPolicyOverride
-        ) { optAdd, optRem, optStu, optGroup ->
-            arrayOf<Any?>(optAdd, optRem, optStu, optGroup)
+            _optimisticGroupPolicyOverride,
+            _optimisticMemberOverrides
+        ) { optAdd, optRem, optStu, optGroup, optMembers ->
+            arrayOf<Any?>(optAdd, optRem, optStu, optGroup, optMembers)
         }
     ) { groupArr, dataArr, filterArr, optArr ->
         val rawProfile = groupArr[0] as UserProfile?
@@ -1089,6 +951,8 @@ class KamViewModel(
         val allBalances = dataArr[2] as List<MonthlyBalance>
         @Suppress("UNCHECKED_CAST")
         val invitations = dataArr[3] as List<Invitation>
+        @Suppress("UNCHECKED_CAST")
+        val cloudMembers = dataArr[4] as List<ServantMemberProfile>
 
         val selectedMonth = filterArr[0] as String
         val selectedWeek = filterArr[1] as String?
@@ -1101,6 +965,17 @@ class KamViewModel(
         val optimisticRemoved = optArr[1] as Set<String>
         @Suppress("UNCHECKED_CAST")
         val optimisticStudents = optArr[2] as Map<String, Student>
+        @Suppress("UNCHECKED_CAST")
+        val optimisticMembers = optArr[4] as Map<String, ServantMemberProfile>
+
+        val mergedMembers = if (optimisticMembers.isEmpty()) {
+            cloudMembers
+        } else {
+            val map = LinkedHashMap<String, ServantMemberProfile>(cloudMembers.size + optimisticMembers.size)
+            cloudMembers.forEach { m -> map[m.effectiveUid] = m }
+            optimisticMembers.forEach { (uid, m) -> map[uid] = m }
+            map.values.sortedBy { it.effectiveUid }
+        }
 
         val rawStudents = if (optimisticStudents.isEmpty()) {
             cloudStudents
@@ -1193,12 +1068,65 @@ class KamViewModel(
             }
         }
 
+        // Sync current servant's public member profile inside groups/{groupId}/members/{currentUserId}
+        val ownCloudMember = mergedMembers.find { it.effectiveUid == currentUserId }
+        val effectiveLocalPrefs = if (
+            activeGroup != null &&
+            currentUserId in activeGroup.memberUids &&
+            ownCloudMember != null &&
+            ownCloudMember.effectivePrimaryPhone.isNotBlank() &&
+            localPrefs?.primaryPhone.isNullOrBlank() &&
+            !(localPrefs?.phoneOnboardingDone ?: false)
+        ) {
+            val basePrefs = localPrefs ?: LocalUserPreferences()
+            val syncedPrefs = basePrefs.copy(
+                phoneOnboardingDone = true,
+                primaryPhone = ownCloudMember.effectivePrimaryPhone,
+                secondaryPhone = ownCloudMember.secondaryPhone,
+                phoneHidden = !ownCloudMember.effectiveShowPhone,
+                servantAvatarHash = ownCloudMember.avatarHash.ifBlank { basePrefs.servantAvatarHash }
+            )
+            LocalClassroomCache.saveUserPreferences(currentUserId, syncedPrefs)
+            syncedPrefs
+        } else {
+            localPrefs
+        }
+
+        if (activeGroup != null && currentUserId in activeGroup.memberUids) {
+            // Ensure groups/{groupId}/members/{currentUserId} exists or reflects local phone/avatar
+            val syncMemberKey = "${activeGroup.inviteCode}_${effectiveLocalPrefs?.primaryPhone.orEmpty()}_${effectiveLocalPrefs?.secondaryPhone.orEmpty()}_${effectiveLocalPrefs?.phoneHidden ?: false}_${effectiveLocalPrefs?.servantAvatarHash.orEmpty()}"
+            val needsMemberUpsert = ownCloudMember == null || (
+                !effectiveLocalPrefs?.primaryPhone.isNullOrBlank() &&
+                    ownCloudMember.effectivePrimaryPhone.isBlank()
+                )
+            if (needsMemberUpsert && syncMemberKey != lastSyncedMemberGroupKey) {
+                lastSyncedMemberGroupKey = syncMemberKey
+                val servantDisplayName = blocks.find { it.servantId == currentUserId }?.servantName
+                    ?.takeIf { it.isNotBlank() }
+                    ?: profile?.displayName?.takeIf { it.isNotBlank() }
+                    ?: initialDisplayName.ifBlank { "خادم" }
+                viewModelScope.launch(Dispatchers.IO) {
+                    repository.upsertOwnMemberProfile(
+                        groupId = activeGroup.inviteCode,
+                        displayName = servantDisplayName,
+                        primaryPhone = effectiveLocalPrefs?.primaryPhone?.takeIf { it.isNotBlank() },
+                        secondaryPhone = effectiveLocalPrefs?.secondaryPhone?.takeIf { it.isNotBlank() },
+                        phoneHidden = effectiveLocalPrefs?.phoneHidden,
+                        avatarBase64 = null,
+                        memberUids = activeGroup.memberUids,
+                        existingProfile = ownCloudMember,
+                        waitForServerAck = false
+                    )
+                }
+            }
+        }
+
         // Compute global sequential student numbering (1, 2, 3, 4...) across the entire group in memory
         val sequentiallyNumberedStudents = computeSequentiallyNumberedStudents(rawStudents, blocks)
 
         // Save classroom snapshot locally on device (debounced 3000ms on background IO thread, without photos)
         if (profile != null) {
-            val cacheSig = "${profile.groupId}_${activeGroup?.inviteCode}_${blocks.size}_${sequentiallyNumberedStudents.size}_${cloudEvents.size}_${profile.enabledCards.size}_${profile.collapsedBlockIds.size}_${profile.hiddenBlockIds.size}_${profile.themeId}_${profile.uiScaleMode}_${profile.uiScaleFactor}_${profile.showFloatingAddButton}"
+            val cacheSig = "${profile.groupId}_${activeGroup?.inviteCode}_${blocks.size}_${mergedMembers.size}_${sequentiallyNumberedStudents.size}_${cloudEvents.size}_${profile.enabledCards.size}_${profile.collapsedBlockIds.size}_${profile.hiddenBlockIds.size}_${profile.themeId}_${profile.uiScaleMode}_${profile.uiScaleFactor}_${profile.showFloatingAddButton}"
             if (cacheSig != lastSavedCacheSignature) {
                 lastSavedCacheSignature = cacheSig
                 LocalClassroomCache.saveClassroomSnapshot(
@@ -1209,7 +1137,8 @@ class KamViewModel(
                     blocks = blocks,
                     students = sequentiallyNumberedStudents,
                     cardEvents = cloudEvents,
-                    monthlyBalances = allBalances
+                    monthlyBalances = allBalances,
+                    memberProfiles = mergedMembers
                 )
             }
         }
@@ -1220,6 +1149,7 @@ class KamViewModel(
         }
 
         val effectiveBlocks = if (activeGroup == null) emptyList() else blocks
+        val effectiveMembers = if (activeGroup == null) emptyList() else mergedMembers
         val effectiveStudents = if (activeGroup == null) emptyList() else sequentiallyNumberedStudents
         val effectiveEvents = if (activeGroup == null) emptyList() else events
         val effectiveBalances = if (activeGroup == null) emptyList() else balances
@@ -1233,8 +1163,20 @@ class KamViewModel(
             cardEvents = effectiveEvents,
             monthlyBalances = effectiveBalances,
             selectedWeekKey = selectedWeek,
-            dismissedDuplicateNames = dismissedDuplicates
+            dismissedDuplicateNames = dismissedDuplicates,
+            memberProfiles = effectiveMembers
         ).also { it.prewarmAll() }
+
+        val effectiveOwnPrimary = effectiveLocalPrefs?.primaryPhone?.takeIf { it.isNotBlank() }
+            ?: ownCloudMember?.effectivePrimaryPhone.orEmpty()
+        val effectiveOwnSecondary = effectiveLocalPrefs?.secondaryPhone?.takeIf { it.isNotBlank() }
+            ?: ownCloudMember?.secondaryPhone.orEmpty()
+        val effectiveOwnHidden = effectiveLocalPrefs?.phoneHidden ?: (ownCloudMember?.let { !it.effectiveShowPhone } ?: false)
+        val effectiveOwnAvatarHash = effectiveLocalPrefs?.servantAvatarHash?.takeIf { it.isNotBlank() }
+            ?: ownCloudMember?.effectiveAvatarKey.orEmpty()
+        val onboardingDone = (effectiveLocalPrefs?.phoneOnboardingDone == true) ||
+            effectiveOwnPrimary.isNotBlank() ||
+            effectiveOwnSecondary.isNotBlank()
 
         val builtState = KamScreenState(
             isLoading = profile == null,
@@ -1243,6 +1185,7 @@ class KamViewModel(
             userGroups = userGroups.filter { currentUserId !in it.bannedUids },
             isAdmin = activeGroup?.adminId == currentUserId,
             blocks = effectiveBlocks,
+            memberProfiles = effectiveMembers,
             students = effectiveStudents,
             cardEvents = effectiveEvents,
             monthlyBalances = effectiveBalances,
@@ -1254,6 +1197,11 @@ class KamViewModel(
             currentWeekKey = currentYearWeek(),
             dismissedDuplicateNames = dismissedDuplicates,
             previousGroupId = fallbackPrevGroup,
+            shouldPromptPhoneOnboarding = profile != null && activeGroup != null && hasLoadedPrefsFromDisk && !onboardingDone,
+            ownPrimaryPhone = effectiveOwnPrimary,
+            ownSecondaryPhone = effectiveOwnSecondary,
+            ownPhoneHidden = effectiveOwnHidden,
+            ownAvatarHash = effectiveOwnAvatarHash,
             precomputedIndices = precomputed
         )
         // Prewarm the default current-month selection leaderboard on Dispatchers.Default so opening the Leaderboard screen is 0ms
@@ -1315,11 +1263,13 @@ class KamViewModel(
         bannerJob?.cancel()
         recentTapTimestamps.clear()
         lastMigratedGroupKey = ""
+        lastSyncedMemberGroupKey = ""
         lastAutoRotatedGroupKey = ""
         lastEjectedBannedGroupId = ""
         _optimisticAddedEvents.value = emptyMap()
         _optimisticRemovedEventIds.value = emptySet()
         _optimisticStudentOverrides.value = emptyMap()
+        _optimisticMemberOverrides.value = emptyMap()
         _optimisticGroupPolicyOverride.value = null
         policyMutationSeq = 0L
         _operationError.value = null
@@ -1520,7 +1470,8 @@ class KamViewModel(
 
     private fun currentEffectiveLocalPrefs(): LocalUserPreferences {
         _localPrefsOverride.value?.let { return it }
-        val profile = uiState.value.userProfile
+        val currentState = uiState.value
+        val profile = currentState.userProfile
         return LocalUserPreferences(
             enabledCards = profile?.enabledCards ?: CardType.defaultEnabledIds,
             collapsedBlockIds = profile?.collapsedBlockIds ?: emptyList(),
@@ -1529,7 +1480,14 @@ class KamViewModel(
             uiScaleMode = profile?.uiScaleMode ?: "AUTO",
             uiScaleFactor = (profile?.uiScaleFactor ?: 0.85).toFloat(),
             showFloatingAddButton = profile?.showFloatingAddButton ?: true,
-            activeGroupId = profile?.groupId.orEmpty()
+            activeGroupId = profile?.groupId.orEmpty(),
+            phoneOnboardingDone = !currentState.shouldPromptPhoneOnboarding ||
+                currentState.ownPrimaryPhone.isNotBlank() ||
+                currentState.ownSecondaryPhone.isNotBlank(),
+            primaryPhone = currentState.ownPrimaryPhone,
+            secondaryPhone = currentState.ownSecondaryPhone,
+            phoneHidden = currentState.ownPhoneHidden,
+            servantAvatarHash = currentState.ownAvatarHash
         )
     }
 
@@ -2116,7 +2074,8 @@ class KamViewModel(
                 it.servantId != currentUserId
         }
 
-        val deterministicEventId = "ev_${group.inviteCode}_${student.id}_${cardType.id}_${currentUserId}_$slotKey"
+        val safeSlot = slotKey.replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+        val deterministicEventId = "evt_${student.id}_${cardType.id}_${safeSlot}_${currentUserId}".take(120)
         val optimisticEvent = CardEvent(
             id = deterministicEventId,
             groupId = group.inviteCode,
@@ -2149,8 +2108,8 @@ class KamViewModel(
                 currentMonthEventsCount = currentEventsCount,
                 memberUids = group.memberUids,
                 waitForServerAck = false
-            ).onSuccess {
-                _optimisticAddedEvents.update { it - deterministicEventId }
+            ).onSuccess { savedId ->
+                _optimisticAddedEvents.update { (it - deterministicEventId) - savedId }
                 if (otherServantEvent != null) {
                     showBanner(
                         "تنبيه: الطفل ${student.name} أخد كارت ${cardType.arabicTitle} مرتين: ${otherServantEvent.servantName} و$servantName"
@@ -2356,6 +2315,271 @@ class KamViewModel(
         }
     }
 
+    // --- Servant Public Profile (Phone Numbers & <50KB Avatar inside groups/{groupId}/members/{uid}) ---
+
+    private fun resolveOwnServantDisplayName(state: KamScreenState): String {
+        return state.blocks.find { it.servantId == currentUserId }?.servantName?.takeIf { it.isNotBlank() }
+            ?: state.userProfile?.displayName?.takeIf { it.isNotBlank() }
+            ?: initialDisplayName.ifBlank { "خادم" }
+    }
+
+    fun skipPhoneOnboarding() {
+        val prefs = currentEffectiveLocalPrefs()
+        val nextPrefs = prefs.copy(phoneOnboardingDone = true)
+        _localPrefsOverride.value = nextPrefs
+        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
+    }
+
+    fun saveOwnPhoneNumbers(
+        primaryPhone: String,
+        secondaryPhone: String = "",
+        phoneHidden: Boolean = currentEffectiveLocalPrefs().phoneHidden
+    ) {
+        val cleanPrimary = if (primaryPhone.isNotBlank()) {
+            PhoneNumberFormatHelper.toInternationalPhone(primaryPhone)
+        } else {
+            ""
+        }
+        val cleanSecondary = if (secondaryPhone.isNotBlank()) {
+            PhoneNumberFormatHelper.toInternationalPhone(secondaryPhone)
+        } else {
+            ""
+        }.let { sec -> if (sec == cleanPrimary) "" else sec }
+
+        val prefs = currentEffectiveLocalPrefs()
+        val nextPrefs = prefs.copy(
+            phoneOnboardingDone = true,
+            primaryPhone = cleanPrimary,
+            secondaryPhone = cleanSecondary,
+            phoneHidden = phoneHidden
+        )
+        _localPrefsOverride.value = nextPrefs
+        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
+
+        val state = uiState.value
+        val group = state.group
+        if (group != null) {
+            val existing = state.memberProfileForServant(currentUserId)
+            val displayName = resolveOwnServantDisplayName(state)
+            val optimisticProfile = (existing ?: ServantMemberProfile(
+                id = currentUserId,
+                uid = currentUserId,
+                groupId = group.inviteCode,
+                displayName = displayName,
+                memberUids = group.memberUids
+            )).copy(
+                displayName = displayName,
+                phone = cleanPrimary,
+                primaryPhone = cleanPrimary,
+                secondaryPhone = cleanSecondary,
+                phoneVerified = false,
+                showPhone = !phoneHidden,
+                phoneHidden = phoneHidden
+            )
+            _optimisticMemberOverrides.update { it + (currentUserId to optimisticProfile) }
+
+            viewModelScope.launch {
+                repository.upsertOwnMemberProfile(
+                    groupId = group.inviteCode,
+                    displayName = displayName,
+                    primaryPhone = cleanPrimary,
+                    secondaryPhone = cleanSecondary,
+                    phoneHidden = phoneHidden,
+                    avatarBase64 = null,
+                    memberUids = group.memberUids,
+                    existingProfile = existing,
+                    waitForServerAck = false
+                ).onSuccess {
+                    _optimisticMemberOverrides.update { it - currentUserId }
+                    showBanner(
+                        if (cleanPrimary.isNotBlank()) "تم حفظ رقم الواتساب في بروفايل الخادم"
+                        else "تم تحديث بيانات الرقم"
+                    )
+                }.onFailure { err ->
+                    _optimisticMemberOverrides.update { it - currentUserId }
+                    _operationError.value = err.localizedMessage ?: "تعذر مزامنة رقم الموبايل مع المجموعة"
+                }
+            }
+        } else {
+            showBanner("تم حفظ رقم الواتساب وسيتم مزامنته تلقائياً عند دخول المجموعة")
+        }
+    }
+
+    fun toggleHideOwnPhoneNumber(hidden: Boolean) {
+        val prefs = currentEffectiveLocalPrefs()
+        val nextPrefs = prefs.copy(phoneHidden = hidden)
+        _localPrefsOverride.value = nextPrefs
+        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
+
+        val state = uiState.value
+        val group = state.group
+        if (group != null) {
+            val existing = state.memberProfileForServant(currentUserId)
+            val displayName = resolveOwnServantDisplayName(state)
+            val optimisticProfile = (existing ?: ServantMemberProfile(
+                id = currentUserId,
+                uid = currentUserId,
+                groupId = group.inviteCode,
+                displayName = displayName,
+                phone = nextPrefs.primaryPhone,
+                primaryPhone = nextPrefs.primaryPhone,
+                secondaryPhone = nextPrefs.secondaryPhone,
+                memberUids = group.memberUids
+            )).copy(
+                displayName = displayName,
+                showPhone = !hidden,
+                phoneHidden = hidden,
+                phoneVerified = false
+            )
+            _optimisticMemberOverrides.update { it + (currentUserId to optimisticProfile) }
+
+            viewModelScope.launch {
+                repository.upsertOwnMemberProfile(
+                    groupId = group.inviteCode,
+                    displayName = displayName,
+                    primaryPhone = nextPrefs.primaryPhone,
+                    secondaryPhone = nextPrefs.secondaryPhone,
+                    phoneHidden = hidden,
+                    avatarBase64 = null,
+                    memberUids = group.memberUids,
+                    existingProfile = existing,
+                    waitForServerAck = false
+                ).onSuccess {
+                    _optimisticMemberOverrides.update { it - currentUserId }
+                    showBanner(
+                        if (hidden) "تم إخفاء رقمك وأزرار التواصل عن باقي الخدام"
+                        else "تم إظهار رقمك وأزرار التواصل لخدام المجموعة"
+                    )
+                }.onFailure { err ->
+                    _optimisticMemberOverrides.update { it - currentUserId }
+                    _operationError.value = err.localizedMessage ?: "تعذر تحديث حالة إخفاء الرقم"
+                }
+            }
+        } else {
+            showBanner(
+                if (hidden) "تم تفعيل إخفاء الرقم عن باقي الخدام"
+                else "تم إلغاء إخفاء الرقم"
+            )
+        }
+    }
+
+    fun deleteOwnPhoneNumbers() {
+        val prefs = currentEffectiveLocalPrefs()
+        val nextPrefs = prefs.copy(
+            phoneOnboardingDone = true,
+            primaryPhone = "",
+            secondaryPhone = "",
+            phoneHidden = false
+        )
+        _localPrefsOverride.value = nextPrefs
+        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
+
+        val state = uiState.value
+        val group = state.group
+        if (group != null) {
+            val existing = state.memberProfileForServant(currentUserId)
+            val displayName = resolveOwnServantDisplayName(state)
+            val optimisticProfile = (existing ?: ServantMemberProfile(
+                id = currentUserId,
+                uid = currentUserId,
+                groupId = group.inviteCode,
+                displayName = displayName,
+                memberUids = group.memberUids
+            )).copy(
+                displayName = displayName,
+                phone = "",
+                primaryPhone = "",
+                secondaryPhone = "",
+                phoneVerified = false,
+                showPhone = true,
+                phoneHidden = false
+            )
+            _optimisticMemberOverrides.update { it + (currentUserId to optimisticProfile) }
+
+            viewModelScope.launch {
+                repository.upsertOwnMemberProfile(
+                    groupId = group.inviteCode,
+                    displayName = displayName,
+                    primaryPhone = "",
+                    secondaryPhone = "",
+                    phoneHidden = false,
+                    avatarBase64 = null,
+                    memberUids = group.memberUids,
+                    existingProfile = existing,
+                    waitForServerAck = false
+                ).onSuccess {
+                    _optimisticMemberOverrides.update { it - currentUserId }
+                    showBanner("تم حذف رقم الموبايل من بروفايل الخادم")
+                }.onFailure { err ->
+                    _optimisticMemberOverrides.update { it - currentUserId }
+                    _operationError.value = err.localizedMessage ?: "تعذر حذف رقم الموبايل"
+                }
+            }
+        } else {
+            showBanner("تم حذف رقم الموبايل")
+        }
+    }
+
+    fun updateOwnServantAvatar(avatarBase64: String) {
+        val cleanAvatar = avatarBase64.trim().take(50000)
+        val hasAvatar = cleanAvatar.isNotBlank()
+        val newHash = if (hasAvatar) Student.computeAvatarHash(cleanAvatar) else ""
+        StudentAvatarImageHelper.writeLocalAlbumRaw(null, "servant_$currentUserId", cleanAvatar)
+
+        val prefs = currentEffectiveLocalPrefs()
+        val nextPrefs = prefs.copy(servantAvatarHash = newHash)
+        _localPrefsOverride.value = nextPrefs
+        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
+
+        val state = uiState.value
+        val group = state.group
+        if (group != null) {
+            val existing = state.memberProfileForServant(currentUserId)
+            val displayName = resolveOwnServantDisplayName(state)
+            val optimisticProfile = (existing ?: ServantMemberProfile(
+                id = currentUserId,
+                uid = currentUserId,
+                groupId = group.inviteCode,
+                displayName = displayName,
+                phone = nextPrefs.primaryPhone,
+                primaryPhone = nextPrefs.primaryPhone,
+                secondaryPhone = nextPrefs.secondaryPhone,
+                showPhone = !nextPrefs.phoneHidden,
+                phoneHidden = nextPrefs.phoneHidden,
+                memberUids = group.memberUids
+            )).copy(
+                displayName = displayName,
+                avatar = cleanAvatar,
+                hasAvatar = hasAvatar,
+                avatarHash = newHash,
+                avatarBase64 = cleanAvatar
+            )
+            _optimisticMemberOverrides.update { it + (currentUserId to optimisticProfile) }
+
+            viewModelScope.launch {
+                repository.upsertOwnMemberProfile(
+                    groupId = group.inviteCode,
+                    displayName = displayName,
+                    primaryPhone = nextPrefs.primaryPhone.takeIf { it.isNotBlank() } ?: existing?.effectivePrimaryPhone.orEmpty(),
+                    secondaryPhone = nextPrefs.secondaryPhone.takeIf { it.isNotBlank() } ?: existing?.secondaryPhone.orEmpty(),
+                    phoneHidden = nextPrefs.phoneHidden,
+                    avatarBase64 = cleanAvatar,
+                    memberUids = group.memberUids,
+                    existingProfile = existing,
+                    waitForServerAck = false
+                ).onSuccess {
+                    _optimisticMemberOverrides.update { it - currentUserId }
+                    showBanner(if (hasAvatar) "تم تحديث صورة الخادم وحفظها في الجروب" else "تم حذف صورة الخادم")
+                }.onFailure { err ->
+                    _optimisticMemberOverrides.update { it - currentUserId }
+                    _operationError.value = err.localizedMessage ?: "تعذر تحديث صورة الخادم"
+                }
+            }
+        } else {
+            showBanner(if (hasAvatar) "تم حفظ صورة الخادم محلياً" else "تم حذف صورة الخادم")
+        }
+    }
+
     companion object {
         private const val TAG = "KamViewModel"
 
@@ -2398,6 +2622,17 @@ class KamViewModel(
                 }
             }
             val activeGroup = cached.group
+            val ownCachedMember = cached.memberProfiles.find { it.effectiveUid == currentUserId }
+            val ownPrimary = localPrefs?.primaryPhone?.takeIf { it.isNotBlank() }
+                ?: ownCachedMember?.effectivePrimaryPhone.orEmpty()
+            val ownSecondary = localPrefs?.secondaryPhone?.takeIf { it.isNotBlank() }
+                ?: ownCachedMember?.secondaryPhone.orEmpty()
+            val ownHidden = localPrefs?.phoneHidden ?: (ownCachedMember?.let { !it.effectiveShowPhone } ?: false)
+            val ownAvatarHash = localPrefs?.servantAvatarHash?.takeIf { it.isNotBlank() }
+                ?: ownCachedMember?.effectiveAvatarKey.orEmpty()
+            val onboardingDone = (localPrefs?.phoneOnboardingDone == true) ||
+                ownPrimary.isNotBlank() ||
+                ownSecondary.isNotBlank()
             return KamScreenState(
                 isLoading = false,
                 userProfile = effectiveProfile,
@@ -2405,6 +2640,7 @@ class KamViewModel(
                 userGroups = cached.userGroups,
                 isAdmin = activeGroup?.adminId == currentUserId,
                 blocks = if (activeGroup == null) emptyList() else cached.blocks,
+                memberProfiles = if (activeGroup == null) emptyList() else cached.memberProfiles,
                 students = if (activeGroup == null) emptyList() else cached.students,
                 cardEvents = if (activeGroup == null) emptyList() else cached.cardEvents.filter { it.monthKey == monthKey },
                 monthlyBalances = if (activeGroup == null) emptyList() else cached.monthlyBalances.filter { it.monthKey == monthKey },
@@ -2412,7 +2648,12 @@ class KamViewModel(
                 allGroupMonthlyBalances = if (activeGroup == null) emptyList() else cached.monthlyBalances,
                 selectedMonthKey = monthKey,
                 selectedWeekKey = weekKey,
-                currentWeekKey = weekKey
+                currentWeekKey = weekKey,
+                shouldPromptPhoneOnboarding = localPrefs != null && activeGroup != null && !onboardingDone,
+                ownPrimaryPhone = ownPrimary,
+                ownSecondaryPhone = ownSecondary,
+                ownPhoneHidden = ownHidden,
+                ownAvatarHash = ownAvatarHash
             )
         }
 

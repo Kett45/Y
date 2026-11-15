@@ -281,6 +281,187 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidGroupMemberProfile(data, groupId, memberUid) {
+      return data.keys().hasAll([
+          'uid', 'groupId', 'displayName', 'phoneVerified', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'groupId', 'displayName', 'phone', 'primaryPhone', 'secondaryPhone',
+          'phoneVerified', 'showPhone', 'phoneHidden', 'avatar', 'hasAvatar',
+          'avatarHash', 'avatarBase64', 'memberUids', 'lastSeenAt', 'createdAt', 'updatedAt'
+        ]) &&
+        data.uid == memberUid &&
+        data.groupId == groupId &&
+        isNonEmptyString(data.uid, 64) &&
+        isNonEmptyString(data.displayName, 100) &&
+        (!('phone' in data) || isOptionalString(data.phone, 24)) &&
+        (!('primaryPhone' in data) || isOptionalString(data.primaryPhone, 24)) &&
+        (!('secondaryPhone' in data) || isOptionalString(data.secondaryPhone, 24)) &&
+        data.phoneVerified is bool &&
+        data.phoneVerified == false &&
+        (!('showPhone' in data) || data.showPhone is bool) &&
+        (!('phoneHidden' in data) || data.phoneHidden is bool) &&
+        (!('avatar' in data) || isOptionalString(data.avatar, 50000)) &&
+        (!('hasAvatar' in data) || data.hasAvatar is bool) &&
+        (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
+        (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 50000)) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        (!('lastSeenAt' in data) || data.lastSeenAt is timestamp) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidChatMessagePayloadByType(data) {
+      return (
+        (data.type in ['TEXT', 'SYSTEM'] &&
+          data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
+          (!('mediaBase64' in data) || data.mediaBase64 == '')) ||
+        (data.type == 'IMAGE' &&
+          data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
+          'mediaBase64' in data && data.mediaBase64 is string &&
+          data.mediaBase64.size() > 0 && data.mediaBase64.size() <= 60000 &&
+          (!('mediaUrl' in data) || isOptionalString(data.mediaUrl, 500)) &&
+          (!('mediaMimeType' in data) || isOptionalString(data.mediaMimeType, 60)) &&
+          (!('imageWidth' in data) || (data.imageWidth is int && data.imageWidth >= 0 && data.imageWidth <= 1024)) &&
+          (!('imageHeight' in data) || (data.imageHeight is int && data.imageHeight >= 0 && data.imageHeight <= 1024))) ||
+        (data.type == 'AUDIO' &&
+          data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
+          'mediaBase64' in data && data.mediaBase64 is string &&
+          data.mediaBase64.size() > 0 && data.mediaBase64.size() <= 100000 &&
+          (!('mediaUrl' in data) || isOptionalString(data.mediaUrl, 500)) &&
+          (!('mediaMimeType' in data) || isOptionalString(data.mediaMimeType, 60)) &&
+          'audioDurationSec' in data && data.audioDurationSec is int &&
+          data.audioDurationSec >= 1 && data.audioDurationSec <= 30)
+      );
+    }
+
+    function isValidGroupChatMeta(data, groupId) {
+      return data.keys().hasAll([
+          'groupId', 'memberUids', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'groupId', 'lastMessageId', 'lastMessageText', 'lastMessageType',
+          'lastMessageSenderUid', 'lastMessageSenderName', 'lastMessageAt',
+          'totalMessagesCount', 'memberUids', 'updatedAt'
+        ]) &&
+        data.groupId == groupId &&
+        isBoundedStringList(data.memberUids, 1, 10) &&
+        uid() in data.memberUids &&
+        (!('lastMessageId' in data) || isOptionalString(data.lastMessageId, 120)) &&
+        (!('lastMessageText' in data) || isOptionalString(data.lastMessageText, 1000)) &&
+        (!('lastMessageType' in data) || data.lastMessageType in ['TEXT', 'IMAGE', 'AUDIO', 'SYSTEM']) &&
+        (!('lastMessageSenderUid' in data) || isOptionalString(data.lastMessageSenderUid, 64)) &&
+        (!('lastMessageSenderName' in data) || isOptionalString(data.lastMessageSenderName, 100)) &&
+        (!('lastMessageAt' in data) || data.lastMessageAt is timestamp) &&
+        (!('totalMessagesCount' in data) || (data.totalMessagesCount is int && data.totalMessagesCount >= 0)) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidGroupChatMessageCreate(data, groupId) {
+      return data.keys().hasAll([
+          'groupId', 'senderUid', 'senderName', 'type', 'text',
+          'isDeleted', 'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'chatId', 'groupId', 'senderUid', 'senderName', 'type', 'text',
+          'mediaBase64', 'mediaUrl', 'mediaMimeType', 'imageWidth', 'imageHeight', 'audioDurationSec',
+          'isDeleted', 'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        data.groupId == groupId &&
+        data.senderUid == uid() &&
+        isNonEmptyString(data.senderName, 100) &&
+        data.type in ['TEXT', 'IMAGE', 'AUDIO', 'SYSTEM'] &&
+        isValidChatMessagePayloadByType(data) &&
+        data.isDeleted == false &&
+        isBoundedStringList(data.memberUids, 1, 10) &&
+        uid() in data.memberUids &&
+        data.createdAt == request.time &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidChatMessageSoftDelete(newData, oldData) {
+      return oldData.senderUid == uid() &&
+        newData.senderUid == oldData.senderUid &&
+        (!('groupId' in oldData) || newData.groupId == oldData.groupId) &&
+        newData.createdAt == oldData.createdAt &&
+        newData.isDeleted == true &&
+        newData.text == 'تم حذف الرسالة' &&
+        (!('mediaBase64' in newData) || newData.mediaBase64 == '') &&
+        newData.updatedAt is timestamp;
+    }
+
+    function isValidDmChatMeta(data, chatId) {
+      return data.keys().hasAll([
+          'participants', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'chatId', 'groupId', 'participants', 'participantNames',
+          'lastMessageId', 'lastMessageText', 'lastMessageType',
+          'lastMessageSenderUid', 'lastMessageSenderName', 'lastMessageAt',
+          'totalMessagesCount', 'createdAt', 'updatedAt'
+        ]) &&
+        (!('chatId' in data) || data.chatId == chatId) &&
+        (!('groupId' in data) || isOptionalString(data.groupId, 40)) &&
+        isBoundedStringList(data.participants, 2, 2) &&
+        uid() in data.participants &&
+        (!('participantNames' in data) || data.participantNames is map) &&
+        (!('lastMessageId' in data) || isOptionalString(data.lastMessageId, 120)) &&
+        (!('lastMessageText' in data) || isOptionalString(data.lastMessageText, 1000)) &&
+        (!('lastMessageType' in data) || data.lastMessageType in ['TEXT', 'IMAGE', 'AUDIO', 'SYSTEM']) &&
+        (!('lastMessageSenderUid' in data) || isOptionalString(data.lastMessageSenderUid, 64)) &&
+        (!('lastMessageSenderName' in data) || isOptionalString(data.lastMessageSenderName, 100)) &&
+        (!('lastMessageAt' in data) || data.lastMessageAt is timestamp) &&
+        (!('totalMessagesCount' in data) || (data.totalMessagesCount is int && data.totalMessagesCount >= 0)) &&
+        (!('createdAt' in data) || data.createdAt is timestamp) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDmChatMessageCreate(data, chatId) {
+      return data.keys().hasAll([
+          'senderUid', 'senderName', 'type', 'text',
+          'isDeleted', 'participants', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'chatId', 'groupId', 'senderUid', 'senderName', 'type', 'text',
+          'mediaBase64', 'mediaUrl', 'mediaMimeType', 'imageWidth', 'imageHeight', 'audioDurationSec',
+          'isDeleted', 'participants', 'createdAt', 'updatedAt'
+        ]) &&
+        (!('chatId' in data) || data.chatId == chatId) &&
+        (!('groupId' in data) || isOptionalString(data.groupId, 40)) &&
+        data.senderUid == uid() &&
+        isNonEmptyString(data.senderName, 100) &&
+        data.type in ['TEXT', 'IMAGE', 'AUDIO', 'SYSTEM'] &&
+        isValidChatMessagePayloadByType(data) &&
+        data.isDeleted == false &&
+        isBoundedStringList(data.participants, 2, 2) &&
+        uid() in data.participants &&
+        data.createdAt == request.time &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAttendanceRecord(data, groupId, attendanceId) {
+      return data.keys().hasAll([
+          'studentId', 'studentName', 'status', 'weekKey',
+          'servantId', 'servantName', 'note', 'createdAt', 'memberUids'
+        ]) &&
+        data.keys().hasOnly([
+          'groupId', 'studentId', 'studentName', 'status', 'weekKey',
+          'servantId', 'servantName', 'note', 'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        (!('groupId' in data) || data.groupId == groupId) &&
+        attendanceId == (data.weekKey + '_' + data.studentId) &&
+        isNonEmptyString(data.studentId, 80) &&
+        isNonEmptyString(data.studentName, 100) &&
+        data.status in ['PRESENT', 'ABSENT', 'ISSUE'] &&
+        isNonEmptyString(data.weekKey, 20) &&
+        isNonEmptyString(data.servantId, 64) &&
+        isNonEmptyString(data.servantName, 80) &&
+        isOptionalString(data.note, 200) &&
+        isBoundedStringList(data.memberUids, 1, 10) &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
     // ===============================================================
     // Collection Rules
     // ===============================================================
@@ -431,6 +612,99 @@ service cloud.firestore {
           incoming().groupId == existing().groupId &&
           incoming().studentId == existing().studentId;
         allow delete: if isGroupMember(groupId);
+      }
+
+      // 2g. Group Servant Member Profiles (WhatsApp-style header profile above each block)
+      // Read/List: Strictly members of the same group ONLY.
+      // Create/Update: Strictly the servant who owns `memberUid` (`isDocOwner(memberUid)`) AND is a member of the group.
+      // Delete: The servant themselves OR the Group Admin.
+      match /members/{memberUid} {
+        allow get, list: if isGroupMember(groupId);
+        allow create: if isGroupMember(groupId) &&
+          isDocOwner(memberUid) &&
+          isValidGroupMemberProfile(incoming(), groupId, memberUid);
+        allow update: if isGroupMember(groupId) &&
+          isDocOwner(memberUid) &&
+          isValidGroupMemberProfile(incoming(), groupId, memberUid) &&
+          incoming().uid == existing().uid &&
+          incoming().groupId == existing().groupId &&
+          (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt);
+        allow delete: if isDocOwner(memberUid) || isGroupAdmin(groupId);
+      }
+
+      // 2h. Group Chat Metadata (groups/{groupId}/chatMeta/main)
+      // Verified directly via `memberUids` on the document without requiring `get()`.
+      match /chatMeta/{metaId} {
+        allow get, list: if isSignedIn() && (
+          resource == null ||
+          ('memberUids' in existing() && uid() in existing().memberUids) ||
+          isGroupMember(groupId)
+        );
+        allow create, update: if isSignedIn() && isValidGroupChatMeta(incoming(), groupId);
+        allow delete: if false;
+      }
+
+      // 2i. Group Chat Messages (groups/{groupId}/messages/{messageId})
+      // Verified directly via `memberUids` on the document without requiring `get()`.
+      match /messages/{messageId} {
+        allow get, list: if isSignedIn() && (
+          ('memberUids' in existing() && uid() in existing().memberUids) ||
+          isGroupMember(groupId)
+        );
+        allow create: if isSignedIn() && isValidGroupChatMessageCreate(incoming(), groupId);
+        allow update: if isSignedIn() &&
+          (('memberUids' in existing() && uid() in existing().memberUids) || isGroupMember(groupId)) &&
+          isValidChatMessageSoftDelete(incoming(), existing());
+        allow delete: if false;
+      }
+
+      // 2j. Smart Swipe Attendance Records (groups/{groupId}/attendance/{weekKey}_{studentId})
+      // Read/List: Group members (via memberUids or group membership).
+      // Create: Any group member (servantId == uid() and status in ['PRESENT', 'ABSENT', 'ISSUE']).
+      // Update: Only the servant who recorded it OR the Group Admin (الأمين فقط يعدّل تسجيل خادم تاني).
+      // Delete: Strictly Group Admin ONLY (والأمين بس يحذف).
+      match /attendance/{attendanceId} {
+        allow get, list: if isSignedIn() && (
+          ('memberUids' in existing() && uid() in existing().memberUids) ||
+          isGroupMember(groupId)
+        );
+        allow create: if isGroupMember(groupId) &&
+          incoming().servantId == uid() &&
+          isValidAttendanceRecord(incoming(), groupId, attendanceId);
+        allow update: if isGroupMember(groupId) &&
+          incoming().servantId == uid() &&
+          isValidAttendanceRecord(incoming(), groupId, attendanceId) &&
+          incoming().studentId == existing().studentId &&
+          incoming().weekKey == existing().weekKey &&
+          (existing().servantId == uid() || isGroupAdmin(groupId));
+        allow delete: if isGroupAdmin(groupId);
+      }
+    }
+
+    // 3. Private Direct Message Rooms (dms/{chatId} where chatId = dm_{uidA}_{uidB} sorted)
+    // Strictly restricted to the 2 participants via `participants` array without `get()`.
+    match /dms/{chatId} {
+      allow get: if isSignedIn() && (
+        resource == null ||
+        ('participants' in existing() && uid() in existing().participants)
+      );
+      allow list: if isSignedIn() && 'participants' in existing() && uid() in existing().participants;
+      allow create: if isSignedIn() && isValidDmChatMeta(incoming(), chatId);
+      allow update: if isSignedIn() &&
+        'participants' in existing() &&
+        uid() in existing().participants &&
+        incoming().participants == existing().participants &&
+        isValidDmChatMeta(incoming(), chatId);
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow get, list: if isSignedIn() && 'participants' in existing() && uid() in existing().participants;
+        allow create: if isSignedIn() && isValidDmChatMessageCreate(incoming(), chatId);
+        allow update: if isSignedIn() &&
+          'participants' in existing() &&
+          uid() in existing().participants &&
+          isValidChatMessageSoftDelete(incoming(), existing());
+        allow delete: if false;
       }
     }
   }

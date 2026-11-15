@@ -8,6 +8,7 @@ import com.example.data.model.CardType
 import com.example.data.model.Group
 import com.example.data.model.MonthlyBalance
 import com.example.data.model.ServantBlock
+import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
 import android.os.Looper
 import android.os.SystemClock
@@ -37,6 +38,7 @@ data class CachedClassroomSnapshot(
     val students: List<Student> = emptyList(),
     val cardEvents: List<CardEvent> = emptyList(),
     val monthlyBalances: List<MonthlyBalance> = emptyList(),
+    val memberProfiles: List<ServantMemberProfile> = emptyList(),
     val savedAtMillis: Long = System.currentTimeMillis()
 )
 
@@ -50,6 +52,11 @@ data class LocalUserPreferences(
     val uiScaleFactor: Float = 0.85f,
     val showFloatingAddButton: Boolean = true,
     val activeGroupId: String = "",
+    val phoneOnboardingDone: Boolean = false,
+    val primaryPhone: String = "",
+    val secondaryPhone: String = "",
+    val phoneHidden: Boolean = false,
+    val servantAvatarHash: String = "",
     val updatedAtMillis: Long = 0L
 )
 
@@ -159,7 +166,8 @@ object LocalClassroomCache {
         blocks: List<ServantBlock>,
         students: List<Student>,
         cardEvents: List<CardEvent>,
-        monthlyBalances: List<MonthlyBalance>
+        monthlyBalances: List<MonthlyBalance>,
+        memberProfiles: List<ServantMemberProfile> = emptyList()
     ) {
         if (userId.isBlank()) return
         val snapshot = CachedClassroomSnapshot(
@@ -170,6 +178,7 @@ object LocalClassroomCache {
             students = students,
             cardEvents = cardEvents,
             monthlyBalances = monthlyBalances,
+            memberProfiles = memberProfiles,
             savedAtMillis = System.currentTimeMillis()
         )
         memorySnapshots[userId] = snapshot
@@ -219,6 +228,11 @@ object LocalClassroomCache {
                 uiScaleFactor = obj.optDouble("uiScaleFactor", 0.85).toFloat().coerceIn(0.70f, 1.30f),
                 showFloatingAddButton = obj.optBoolean("showFloatingAddButton", true),
                 activeGroupId = obj.optString("activeGroupId", ""),
+                phoneOnboardingDone = obj.optBoolean("phoneOnboardingDone", false),
+                primaryPhone = obj.optString("primaryPhone", ""),
+                secondaryPhone = obj.optString("secondaryPhone", ""),
+                phoneHidden = obj.optBoolean("phoneHidden", false),
+                servantAvatarHash = obj.optString("servantAvatarHash", ""),
                 updatedAtMillis = obj.optLong("updatedAtMillis", 0L)
             )
             memoryPrefs[userId] = parsed
@@ -259,6 +273,11 @@ object LocalClassroomCache {
                     put("uiScaleFactor", stamped.uiScaleFactor.toDouble())
                     put("showFloatingAddButton", stamped.showFloatingAddButton)
                     put("activeGroupId", stamped.activeGroupId)
+                    put("phoneOnboardingDone", stamped.phoneOnboardingDone)
+                    put("primaryPhone", stamped.primaryPhone)
+                    put("secondaryPhone", stamped.secondaryPhone)
+                    put("phoneHidden", stamped.phoneHidden)
+                    put("servantAvatarHash", stamped.servantAvatarHash)
                     put("updatedAtMillis", stamped.updatedAtMillis)
                 }
                 ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -332,6 +351,9 @@ object LocalClassroomCache {
                 put("monthlyBalances", JSONArray().apply {
                     snapshot.monthlyBalances.take(150).forEach { put(serializeMonthlyBalance(it)) }
                 })
+                put("memberProfiles", JSONArray().apply {
+                    snapshot.memberProfiles.forEach { put(serializeMemberProfile(it)) }
+                })
             }
             val jsonBytes = root.toString().toByteArray(Charsets.UTF_8)
             file.writeBytes(jsonBytes)
@@ -380,6 +402,12 @@ object LocalClassroomCache {
                     arr.optJSONObject(i)?.let { monthlyBalances.add(deserializeMonthlyBalance(it)) }
                 }
             }
+            val memberProfiles = mutableListOf<ServantMemberProfile>()
+            root.optJSONArray("memberProfiles")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.let { memberProfiles.add(deserializeMemberProfile(it)) }
+                }
+            }
             CachedClassroomSnapshot(
                 userProfile = userProfile,
                 group = group,
@@ -388,6 +416,7 @@ object LocalClassroomCache {
                 students = students,
                 cardEvents = cardEvents,
                 monthlyBalances = monthlyBalances,
+                memberProfiles = memberProfiles,
                 savedAtMillis = root.optLong("savedAtMillis", 0L)
             )
         }.onFailure { e ->
@@ -659,6 +688,223 @@ object LocalClassroomCache {
         lastUpdatedByUid = obj.optString("lastUpdatedByUid", "")
     )
 
+    private fun serializeMemberProfile(m: ServantMemberProfile): JSONObject {
+        if (m.effectiveAvatarBase64.isNotBlank()) {
+            StudentAvatarImageHelper.writeLocalAlbumRaw(appContext, m.localAvatarKey, m.effectiveAvatarBase64)
+        }
+        val effectiveHasAvatar = m.effectiveHasAvatar
+        val effectiveHash = m.avatarHash.ifBlank {
+            if (m.effectiveAvatarBase64.isNotBlank()) Student.computeAvatarHash(m.effectiveAvatarBase64) else ""
+        }
+        val primary = m.effectivePrimaryPhone
+        val hidden = !m.effectiveShowPhone
+        return JSONObject().apply {
+            put("id", m.id.ifBlank { m.uid })
+            put("uid", m.uid.ifBlank { m.id })
+            put("groupId", m.groupId)
+            put("displayName", m.displayName)
+            put("phone", primary)
+            put("primaryPhone", primary)
+            put("secondaryPhone", m.secondaryPhone)
+            put("phoneVerified", false)
+            put("showPhone", !hidden)
+            put("phoneHidden", hidden)
+            put("hasAvatar", effectiveHasAvatar)
+            put("avatarHash", effectiveHash)
+            put("memberUids", JSONArray(m.memberUids))
+            m.lastSeenAt?.toDate()?.time?.let { put("lastSeenAtMillis", it) }
+        }
+    }
+
+    private fun deserializeMemberProfile(obj: JSONObject): ServantMemberProfile {
+        val uid = obj.optString("uid", obj.optString("id", ""))
+        val legacyBase64 = obj.optString("avatarBase64", obj.optString("avatar", ""))
+        if (legacyBase64.isNotBlank() && uid.isNotBlank()) {
+            StudentAvatarImageHelper.writeLocalAlbumRaw(appContext, "servant_$uid", legacyBase64)
+        }
+        val hasAvatar = obj.optBoolean("hasAvatar", legacyBase64.isNotBlank())
+        val avatarHash = obj.optString(
+            "avatarHash",
+            if (legacyBase64.isNotBlank()) Student.computeAvatarHash(legacyBase64) else ""
+        )
+        val primary = obj.optString("primaryPhone", obj.optString("phone", ""))
+        val hidden = if (obj.has("phoneHidden")) {
+            obj.optBoolean("phoneHidden", false)
+        } else {
+            !obj.optBoolean("showPhone", true)
+        }
+        val lastSeenMillis = obj.optLong("lastSeenAtMillis", 0L)
+        val parsedLastSeen = if (lastSeenMillis > 0L) Timestamp(Date(lastSeenMillis)) else null
+        return ServantMemberProfile(
+            id = obj.optString("id", uid),
+            uid = uid,
+            groupId = obj.optString("groupId", ""),
+            displayName = obj.optString("displayName", ""),
+            phone = primary,
+            primaryPhone = primary,
+            secondaryPhone = obj.optString("secondaryPhone", ""),
+            phoneVerified = false,
+            showPhone = !hidden,
+            phoneHidden = hidden,
+            hasAvatar = hasAvatar,
+            avatarHash = avatarHash,
+            avatarBase64 = "",
+            memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids")),
+            lastSeenAt = parsedLastSeen
+        )
+    }
+
+    private val memoryChatReadCounts = ConcurrentHashMap<String, ConcurrentHashMap<String, Long>>()
+
+    suspend fun loadChatReadCountsAsync(userId: String): Map<String, Long> {
+        if (userId.isBlank()) return emptyMap()
+        memoryChatReadCounts[userId]?.let { return it.toMap() }
+        return withContext(Dispatchers.IO) {
+            loadChatReadCountsFromDiskInternal(userId)
+        }
+    }
+
+    fun getMemoryChatReadCounts(userId: String): Map<String, Long> {
+        if (userId.isBlank()) return emptyMap()
+        return memoryChatReadCounts[userId]?.toMap() ?: emptyMap()
+    }
+
+    private fun loadChatReadCountsFromDiskInternal(userId: String): Map<String, Long> {
+        if (userId.isBlank()) return emptyMap()
+        memoryChatReadCounts[userId]?.let { return it.toMap() }
+        val ctx = appContext ?: return emptyMap()
+        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val rawJson = prefs.getString("chat_reads_$userId", null)
+        val map = ConcurrentHashMap<String, Long>()
+        if (!rawJson.isNullOrBlank()) {
+            runCatching {
+                val obj = JSONObject(rawJson)
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val count = obj.optLong(key, 0L)
+                    if (key.isNotBlank() && count >= 0L) {
+                        map[key] = count
+                    }
+                }
+            }
+        }
+        memoryChatReadCounts[userId] = map
+        return map.toMap()
+    }
+
+    fun saveChatLastReadCount(userId: String, roomKey: String, totalReadCount: Long): Map<String, Long> {
+        if (userId.isBlank() || roomKey.isBlank() || totalReadCount < 0L) {
+            return getMemoryChatReadCounts(userId)
+        }
+        val userMap = memoryChatReadCounts.getOrPut(userId) { ConcurrentHashMap() }
+        val current = userMap[roomKey] ?: 0L
+        if (totalReadCount <= current) {
+            return userMap.toMap()
+        }
+        userMap[roomKey] = totalReadCount
+        val snapshotMap = userMap.toMap()
+        val ctx = appContext
+        if (ctx != null) {
+            ioScope.launch {
+                runCatching {
+                    val obj = JSONObject()
+                    snapshotMap.forEach { (k, v) -> obj.put(k, v) }
+                    ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString("chat_reads_$userId", obj.toString())
+                        .apply()
+                }
+            }
+        }
+        return snapshotMap
+    }
+
+    private val memoryWeeklyAttendance = ConcurrentHashMap<String, List<com.example.data.model.AttendanceRecord>>()
+
+    fun getMemoryWeeklyAttendance(groupId: String, weekKey: String): List<com.example.data.model.AttendanceRecord> {
+        if (groupId.isBlank() || weekKey.isBlank()) return emptyList()
+        return memoryWeeklyAttendance["${groupId}_$weekKey"].orEmpty()
+    }
+
+    suspend fun loadWeeklyAttendanceAsync(
+        groupId: String,
+        weekKey: String
+    ): List<com.example.data.model.AttendanceRecord> {
+        if (groupId.isBlank() || weekKey.isBlank()) return emptyList()
+        val cacheKey = "${groupId}_$weekKey"
+        memoryWeeklyAttendance[cacheKey]?.let { return it }
+        return withContext(Dispatchers.IO) {
+            val ctx = appContext ?: return@withContext emptyList()
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val raw = prefs.getString("attendance_$cacheKey", null)
+            if (raw.isNullOrBlank()) return@withContext emptyList()
+            runCatching {
+                val arr = JSONArray(raw)
+                val list = ArrayList<com.example.data.model.AttendanceRecord>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val createdSec = obj.optLong("createdAtSec", 0L)
+                    val updatedSec = obj.optLong("updatedAtSec", createdSec)
+                    list.add(
+                        com.example.data.model.AttendanceRecord(
+                            id = obj.optString("id", ""),
+                            groupId = obj.optString("groupId", groupId),
+                            studentId = obj.optString("studentId", ""),
+                            studentName = obj.optString("studentName", ""),
+                            status = obj.optString("status", "PRESENT"),
+                            weekKey = obj.optString("weekKey", weekKey),
+                            servantId = obj.optString("servantId", ""),
+                            servantName = obj.optString("servantName", ""),
+                            note = obj.optString("note", ""),
+                            memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids")),
+                            createdAt = if (createdSec > 0L) Timestamp(createdSec, 0) else null,
+                            updatedAt = if (updatedSec > 0L) Timestamp(updatedSec, 0) else null
+                        )
+                    )
+                }
+                memoryWeeklyAttendance[cacheKey] = list
+                list
+            }.getOrDefault(emptyList())
+        }
+    }
+
+    fun saveWeeklyAttendance(
+        groupId: String,
+        weekKey: String,
+        records: List<com.example.data.model.AttendanceRecord>
+    ) {
+        if (groupId.isBlank() || weekKey.isBlank()) return
+        val cacheKey = "${groupId}_$weekKey"
+        memoryWeeklyAttendance[cacheKey] = records
+        val ctx = appContext ?: return
+        ioScope.launch {
+            runCatching {
+                val arr = JSONArray()
+                for (rec in records) {
+                    val obj = JSONObject()
+                    obj.put("id", rec.effectiveId)
+                    obj.put("groupId", rec.groupId.ifBlank { groupId })
+                    obj.put("studentId", rec.studentId)
+                    obj.put("studentName", rec.studentName)
+                    obj.put("status", rec.status)
+                    obj.put("weekKey", rec.weekKey.ifBlank { weekKey })
+                    obj.put("servantId", rec.servantId)
+                    obj.put("servantName", rec.servantName)
+                    obj.put("note", rec.note)
+                    obj.put("memberUids", JSONArray(rec.memberUids))
+                    obj.put("createdAtSec", rec.createdAt?.seconds ?: 0L)
+                    obj.put("updatedAtSec", rec.updatedAt?.seconds ?: 0L)
+                    arr.put(obj)
+                }
+                ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("attendance_$cacheKey", arr.toString())
+                    .apply()
+            }
+        }
+    }
+
     private fun jsonArrayToStringList(arr: JSONArray?): List<String> {
         if (arr == null) return emptyList()
         val list = ArrayList<String>(arr.length())
@@ -671,4 +917,3 @@ object LocalClassroomCache {
         return list
     }
 }
-

@@ -92,9 +92,15 @@ tasks.withType<Test> {
   }
 }
 
+val hasReleaseKeystore = file(System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks").exists()
 tasks.register<Copy>("syncReleaseApk") {
-  dependsOn("assembleRelease")
-  from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
+  dependsOn(if (hasReleaseKeystore) "assembleRelease" else "assembleDebug")
+  from(
+    layout.buildDirectory.file(
+      if (hasReleaseKeystore) "outputs/apk/release/app-release.apk"
+      else "outputs/apk/debug/app-debug.apk"
+    )
+  )
   into(rootProject.layout.projectDirectory.dir("releases"))
   rename { "kAM-Lite.apk" }
 
@@ -227,6 +233,7 @@ dependencies {
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
+  implementation(libs.play.services.auth)
   // implementation(libs.firebase.appcheck.recaptcha)
   // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)

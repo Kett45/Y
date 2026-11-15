@@ -3,6 +3,7 @@
     <string name="app_subtitle">حضور وكروت الفصل بضغطة واحدة</string>
     <string name="sign_in_google">تسجيل الدخول بحساب Google</string>
     <string name="tab_home">الرئيسية</string>
+    <string name="tab_messages">الرسائل</string>
     <string name="tab_group">المجموعة والدعوات</string>
     <string name="tab_settings">الإعدادات</string>
     <string name="status_online">متصل • تمت المزامنة</string>

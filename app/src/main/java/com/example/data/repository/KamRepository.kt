@@ -3,6 +3,7 @@ package com.example.data.repository
 import android.content.Context
 import com.example.R
 import com.example.data.model.ArabicInitialsHelper
+import com.example.data.model.AttendanceRecord
 import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
@@ -10,11 +11,13 @@ import com.example.data.model.Group
 import com.example.data.model.Invitation
 import com.example.data.model.MonthlyBalance
 import com.example.data.model.ServantBlock
+import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
 import com.example.data.model.UserProfile
 import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
 import com.example.data.cache.LocalClassroomCache
+import com.example.ui.components.StudentAvatarImageHelper
 import com.google.firebase.Firebase
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.auth
@@ -1103,6 +1106,189 @@ class KamRepository(private val db: FirebaseFirestore) {
         }
     }
 
+    // --- 5B. Group Member Public Profiles (groups/{groupId}/members/{memberUid}) ---
+
+    fun observeGroupMembers(groupId: String): Flow<List<ServantMemberProfile>> {
+        val path = "groups/$groupId/members"
+        return flow {
+            val membersByUid = LinkedHashMap<String, ServantMemberProfile>()
+            db.collection("groups").document(groupId).collection("members")
+                .whereEqualTo("groupId", groupId)
+                .snapshots()
+                .collect { snapshot ->
+                    for (change in snapshot.documentChanges) {
+                        val docId = change.document.id
+                        when (change.type) {
+                            DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                val parsed = change.document.toObject(
+                                    ServantMemberProfile::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                ).let { raw ->
+                                    val effectiveUid = raw.uid.ifBlank { docId }
+                                    raw.copy(id = docId, uid = effectiveUid)
+                                }
+                                if (parsed.effectiveAvatarBase64.isNotBlank()) {
+                                    StudentAvatarImageHelper.writeLocalAlbumRaw(
+                                        null,
+                                        parsed.localAvatarKey,
+                                        parsed.effectiveAvatarBase64
+                                    )
+                                }
+                                membersByUid[docId] = parsed
+                            }
+                            DocumentChange.Type.REMOVED -> {
+                                membersByUid.remove(docId)
+                            }
+                        }
+                    }
+                    emit(membersByUid.values.sortedBy { it.effectiveUid })
+                }
+        }.catch { error ->
+            if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
+            throw error
+        }
+    }
+
+    suspend fun fetchServantAvatar(groupId: String, servantUid: String): String? {
+        if (groupId.isBlank() || servantUid.isBlank()) return null
+        return try {
+            val doc = db.collection("groups").document(groupId)
+                .collection("members").document(servantUid)
+                .get()
+                .await()
+            val raw = doc.getString("avatarBase64")?.trim().orEmpty()
+                .ifBlank { doc.getString("avatar")?.trim().orEmpty() }
+            if (raw.isNotBlank()) {
+                StudentAvatarImageHelper.writeLocalAlbumRaw(null, "servant_$servantUid", raw)
+                raw
+            } else {
+                null
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun upsertOwnMemberProfile(
+        groupId: String,
+        displayName: String,
+        primaryPhone: String? = null,
+        secondaryPhone: String? = null,
+        phoneHidden: Boolean? = null,
+        avatarBase64: String? = null,
+        memberUids: List<String> = emptyList(),
+        existingProfile: ServantMemberProfile? = null,
+        touchLastSeen: Boolean = false,
+        waitForServerAck: Boolean = true
+    ): Result<ServantMemberProfile> = runCatching {
+        val uid = requireUserId()
+        require(groupId.isNotBlank()) { "المجموعة غير محددة" }
+        val docRef = db.collection("groups").document(groupId).collection("members").document(uid)
+        try {
+            val snap = if (existingProfile == null) {
+                try { docRef.get().await() } catch (_: Exception) { null }
+            } else {
+                null
+            }
+            val current = existingProfile ?: snap?.toObject(
+                ServantMemberProfile::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            )
+            val safeName = displayName.trim().ifBlank {
+                current?.displayName?.ifBlank { "خادم" } ?: "خادم"
+            }.take(100)
+            val finalPrimary = (primaryPhone ?: current?.effectivePrimaryPhone.orEmpty()).trim().take(24)
+            val finalSecondary = (secondaryPhone ?: current?.secondaryPhone.orEmpty()).trim().take(24)
+            val finalHidden = phoneHidden ?: (current?.let { !it.effectiveShowPhone } ?: false)
+            val finalShowPhone = !finalHidden
+
+            val finalAvatarBase64: String
+            val finalHasAvatar: Boolean
+            val finalAvatarHash: String
+            when {
+                avatarBase64 == null -> {
+                    val existingRaw = current?.effectiveAvatarBase64?.trim().orEmpty()
+                        .ifBlank { StudentAvatarImageHelper.readLocalAlbumRaw(null, "servant_$uid") }
+                        .take(50000)
+                    finalAvatarBase64 = existingRaw
+                    finalHasAvatar = (current?.effectiveHasAvatar == true) || existingRaw.isNotBlank()
+                    finalAvatarHash = current?.avatarHash?.ifBlank {
+                        if (existingRaw.isNotBlank()) Student.computeAvatarHash(existingRaw) else ""
+                    } ?: if (existingRaw.isNotBlank()) Student.computeAvatarHash(existingRaw) else ""
+                }
+                avatarBase64.isBlank() -> {
+                    finalAvatarBase64 = ""
+                    finalHasAvatar = false
+                    finalAvatarHash = ""
+                    StudentAvatarImageHelper.writeLocalAlbumRaw(null, "servant_$uid", "")
+                }
+                else -> {
+                    val cleanAvatar = avatarBase64.trim().take(50000)
+                    finalAvatarBase64 = cleanAvatar
+                    finalHasAvatar = true
+                    finalAvatarHash = Student.computeAvatarHash(cleanAvatar)
+                    StudentAvatarImageHelper.writeLocalAlbumRaw(null, "servant_$uid", cleanAvatar)
+                }
+            }
+
+            val safeMembers = memberUids.ifEmpty {
+                current?.memberUids.orEmpty().ifEmpty { listOf(uid) }
+            }.distinct().take(10)
+
+            val payload = HashMap<String, Any>().apply {
+                put("uid", uid)
+                put("groupId", groupId)
+                put("displayName", safeName)
+                put("phone", finalPrimary)
+                put("primaryPhone", finalPrimary)
+                put("secondaryPhone", finalSecondary)
+                put("phoneVerified", false)
+                put("showPhone", finalShowPhone)
+                put("phoneHidden", finalHidden)
+                put("hasAvatar", finalHasAvatar)
+                put("avatarHash", finalAvatarHash)
+                put("avatarBase64", finalAvatarBase64)
+                put("memberUids", safeMembers)
+                put("lastSeenAt", if (touchLastSeen) FieldValue.serverTimestamp() else (current?.lastSeenAt ?: FieldValue.serverTimestamp()))
+                put("createdAt", current?.createdAt ?: FieldValue.serverTimestamp())
+                put("updatedAt", FieldValue.serverTimestamp())
+            }
+
+            val task = docRef.set(payload)
+            if (waitForServerAck) {
+                task.await()
+            }
+
+            val nowTs = Timestamp.now()
+            ServantMemberProfile(
+                id = uid,
+                uid = uid,
+                groupId = groupId,
+                displayName = safeName,
+                phone = finalPrimary,
+                primaryPhone = finalPrimary,
+                secondaryPhone = finalSecondary,
+                phoneVerified = false,
+                showPhone = finalShowPhone,
+                phoneHidden = finalHidden,
+                hasAvatar = finalHasAvatar,
+                avatarHash = finalAvatarHash,
+                avatarBase64 = finalAvatarBase64,
+                memberUids = safeMembers,
+                lastSeenAt = if (touchLastSeen) nowTs else (current?.lastSeenAt ?: nowTs),
+                createdAt = current?.createdAt,
+                updatedAt = nowTs
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            throw e
+        }
+    }
+
     // --- 6. Students (Filtered ONLY by groupId, Ordered by Fractional `position`) ---
 
     fun observeStudents(groupId: String, @Suppress("UNUSED_PARAMETER") currentUserId: String = ""): Flow<List<Student>> {
@@ -1778,6 +1964,142 @@ class KamRepository(private val db: FirebaseFirestore) {
         }
     }
 
+    // --- Smart Swipe Attendance (groups/{groupId}/attendance/{weekKey}_{studentId}) ---
+
+    fun observeWeeklyAttendance(
+        groupId: String,
+        weekKey: String
+    ): Flow<List<AttendanceRecord>> {
+        if (groupId.isBlank() || weekKey.isBlank()) {
+            return kotlinx.coroutines.flow.flowOf(emptyList())
+        }
+        val path = "groups/$groupId/attendance"
+        return flow {
+            val recordsById = LinkedHashMap<String, AttendanceRecord>()
+            db.collection("groups")
+                .document(groupId)
+                .collection("attendance")
+                .whereEqualTo("weekKey", weekKey)
+                .snapshots()
+                .collect { snapshot ->
+                    for (change in snapshot.documentChanges) {
+                        val docId = change.document.id
+                        when (change.type) {
+                            DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                val parsed = change.document.toObject(
+                                    AttendanceRecord::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                )
+                                recordsById[docId] = parsed.copy(id = docId)
+                            }
+                            DocumentChange.Type.REMOVED -> {
+                                recordsById.remove(docId)
+                            }
+                        }
+                    }
+                    emit(recordsById.values.toList())
+                }
+        }.catch { error ->
+            if (error is Exception && auth.currentUser != null) {
+                handleFirestoreError(error, OperationType.LIST, path)
+            }
+            emit(emptyList())
+        }
+    }
+
+    suspend fun upsertAttendanceRecord(
+        groupId: String,
+        student: Student,
+        weekKey: String,
+        status: com.example.data.model.AttendanceStatus,
+        servantName: String,
+        note: String = "",
+        memberUids: List<String>,
+        existingRecord: AttendanceRecord? = null,
+        waitForServerAck: Boolean = false
+    ): Result<AttendanceRecord> = runCatching {
+        val uid = requireUserId()
+        val safeGroupId = groupId.trim()
+        val safeWeekKey = weekKey.trim()
+        require(safeGroupId.isNotBlank() && safeWeekKey.isNotBlank() && student.id.isNotBlank()) {
+            "بيانات التحضير غير مكتملة"
+        }
+        val docId = AttendanceRecord.buildDocId(safeWeekKey, student.id)
+        val docRef = db.collection("groups")
+            .document(safeGroupId)
+            .collection("attendance")
+            .document(docId)
+
+        val safeServantName = servantName.trim().ifBlank { "خادم" }.take(80)
+        val safeNote = note.trim().take(AttendanceRecord.MAX_NOTE_LENGTH)
+        val safeMembers = (memberUids + uid).filter { it.isNotBlank() }.distinct().take(10)
+        val createdAtVal: Any = existingRecord?.createdAt ?: FieldValue.serverTimestamp()
+
+        val payload = mapOf(
+            "groupId" to safeGroupId,
+            "studentId" to student.id,
+            "studentName" to student.name.trim().take(100),
+            "status" to status.id,
+            "weekKey" to safeWeekKey,
+            "servantId" to uid,
+            "servantName" to safeServantName,
+            "note" to safeNote,
+            "memberUids" to safeMembers,
+            "createdAt" to createdAtVal,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        try {
+            val writeTask = docRef.set(payload)
+            if (waitForServerAck) {
+                writeTask.await()
+            }
+            val nowTs = Timestamp.now()
+            AttendanceRecord(
+                id = docId,
+                groupId = safeGroupId,
+                studentId = student.id,
+                studentName = student.name.trim().take(100),
+                status = status.id,
+                weekKey = safeWeekKey,
+                servantId = uid,
+                servantName = safeServantName,
+                note = safeNote,
+                memberUids = safeMembers,
+                createdAt = existingRecord?.createdAt ?: nowTs,
+                updatedAt = nowTs
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun deleteAttendanceRecord(
+        groupId: String,
+        docId: String,
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        val docRef = db.collection("groups")
+            .document(groupId.trim())
+            .collection("attendance")
+            .document(docId.trim())
+        try {
+            val deleteTask = docRef.delete()
+            if (waitForServerAck) {
+                deleteTask.await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docRef.path)
+            throw e
+        }
+    }
+
     private fun generateInviteCode(): String {
         val chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
         val randomSuffix = (1..5).map { chars.random() }.joinToString("")
@@ -1793,3 +2115,4 @@ class KamRepository(private val db: FirebaseFirestore) {
         return candidate
     }
 }
+

@@ -87,10 +87,12 @@ import com.example.data.model.CardType
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
 import com.example.data.model.ServantBlock
-import com.example.data.model.ServiceCalendarHelper
+import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.sync.GitHubSmartSyncEngine
 import com.example.ui.components.AppearanceFullScreen
 import com.example.ui.components.AppearanceSettingsEntryCard
+import com.example.ui.components.ServantPhotoPickerDialog
+import com.example.ui.components.ServantProfileSettingsCard
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.viewmodel.KamScreenState
@@ -289,7 +291,7 @@ fun GroupInvitationsScreen(
                             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
                         ) {
                             Text(
-                                text = "⏱ ${ServiceCalendarHelper.toArabicDigits(remainingHours)}س",
+                                text = "⏱ ${SaturdayCalendarHelper.toArabicDigits(remainingHours)}س",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.Bold,
@@ -880,11 +882,17 @@ fun SettingsScreen(
     onSwitchGroup: (String) -> Unit = {},
     onJoinGroupByCode: (inviteCode: String, servantName: String) -> Unit = { _, _ -> },
     onCreateNewGroup: (groupName: String, adminName: String) -> Unit = { _, _ -> },
-    onToggleBlockHidden: (String) -> Unit = {}
+    onToggleBlockHidden: (String) -> Unit = {},
+    currentUserId: String = "",
+    onOpenPhoneWizard: () -> Unit = {},
+    onUpdateOwnServantAvatar: (String) -> Unit = {},
+    onToggleHideOwnPhone: (Boolean) -> Unit = {},
+    onDeleteOwnPhones: () -> Unit = {}
 ) {
     val enabledIds = state.userProfile?.enabledCards ?: CardType.defaultEnabledIds
     val group = state.group
     var showAppearanceFullScreen by rememberSaveable { mutableStateOf(false) }
+    var showOwnServantPhotoDialog by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_SETTINGS, scrolling = false)
@@ -927,6 +935,17 @@ fun SettingsScreen(
         )
     }
 
+    val ownBlock = state.blocks.firstOrNull { it.servantId == currentUserId }
+    val ownAccentColor = if (ownBlock != null) {
+        KamSemanticColors.blockColor(ownBlock.colorHex)
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    val ownMemberProfile = state.memberProfileForServant(currentUserId)
+    val ownServantName = ownBlock?.servantName?.ifBlank { null }
+        ?: state.userProfile?.displayName?.ifBlank { null }
+        ?: "خادم"
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -934,6 +953,24 @@ fun SettingsScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // 0a. Servant WhatsApp Profile & Phone Numbers Card
+        item(key = "servant_profile_and_phone_settings", contentType = "settings_card") {
+            ServantProfileSettingsCard(
+                servantUid = currentUserId,
+                servantName = ownServantName,
+                groupId = group?.id.orEmpty(),
+                memberProfile = ownMemberProfile,
+                primaryPhone = state.ownPrimaryPhone,
+                secondaryPhone = state.ownSecondaryPhone,
+                phoneHidden = state.ownPhoneHidden,
+                accentColor = ownAccentColor,
+                onOpenPhoneWizard = onOpenPhoneWizard,
+                onOpenAvatarPicker = { showOwnServantPhotoDialog = true },
+                onTogglePhoneHidden = onToggleHideOwnPhone,
+                onDeletePhones = onDeleteOwnPhones
+            )
+        }
+
         // 0. Appearance & Themes Dedicated Screen Entry Button ("المظهر والسمات")
         item(key = "appearance_and_icon_settings", contentType = "settings_card") {
             AppearanceSettingsEntryCard(
@@ -1276,6 +1313,21 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showOwnServantPhotoDialog) {
+        ServantPhotoPickerDialog(
+            servantUid = currentUserId,
+            servantName = ownServantName,
+            groupId = group?.id.orEmpty(),
+            memberProfile = ownMemberProfile,
+            accentColor = ownAccentColor,
+            onDismiss = { showOwnServantPhotoDialog = false },
+            onSaveBase64 = { newBase64 ->
+                onUpdateOwnServantAvatar(newBase64)
+                showOwnServantPhotoDialog = false
+            }
+        )
     }
 }
 
