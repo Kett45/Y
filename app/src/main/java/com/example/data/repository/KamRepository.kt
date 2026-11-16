@@ -1012,12 +1012,17 @@ class KamRepository(private val db: FirebaseFirestore) {
         val path = "groups/$groupId/blocks"
         return flow {
             val blocksById = LinkedHashMap<String, ServantBlock>()
+            var hasEmittedInitial = false
             db.collection("groups").document(groupId).collection("blocks")
                 .whereEqualTo("groupId", groupId)
                 .snapshots()
                 .collect { snapshot ->
                     val cur = pendingWritesBySource.value
                     pendingWritesBySource.value = cur.copy(first = snapshot.metadata.hasPendingWrites())
+                    if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {
+                        return@collect
+                    }
+                    hasEmittedInitial = true
                     for (change in snapshot.documentChanges) {
                         val docId = change.document.id
                         when (change.type) {
@@ -1132,10 +1137,15 @@ class KamRepository(private val db: FirebaseFirestore) {
         val path = "groups/$groupId/members"
         return flow {
             val membersByUid = LinkedHashMap<String, ServantMemberProfile>()
+            var hasEmittedInitial = false
             db.collection("groups").document(groupId).collection("members")
                 .whereEqualTo("groupId", groupId)
                 .snapshots()
                 .collect { snapshot ->
+                    if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {
+                        return@collect
+                    }
+                    hasEmittedInitial = true
                     for (change in snapshot.documentChanges) {
                         val docId = change.document.id
                         when (change.type) {
@@ -1315,12 +1325,17 @@ class KamRepository(private val db: FirebaseFirestore) {
         val path = "groups/$groupId/students"
         return flow {
             val studentsById = LinkedHashMap<String, Student>()
+            var hasEmittedInitial = false
             db.collection("groups").document(groupId).collection("students")
                 .whereEqualTo("groupId", groupId)
                 .snapshots()
                 .collect { snapshot ->
                     val cur = pendingWritesBySource.value
                     pendingWritesBySource.value = cur.copy(second = snapshot.metadata.hasPendingWrites())
+                    if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {
+                        return@collect
+                    }
+                    hasEmittedInitial = true
                     for (change in snapshot.documentChanges) {
                         val docId = change.document.id
                         when (change.type) {
@@ -1760,12 +1775,17 @@ class KamRepository(private val db: FirebaseFirestore) {
         val path = "groups/$groupId/cardEvents"
         return flow {
             val eventsById = LinkedHashMap<String, CardEvent>()
+            var hasEmittedInitial = false
             db.collection("groups").document(groupId).collection("cardEvents")
                 .whereEqualTo("groupId", groupId)
                 .snapshots()
                 .collect { snapshot ->
                     val cur = pendingWritesBySource.value
                     pendingWritesBySource.value = cur.copy(third = snapshot.metadata.hasPendingWrites())
+                    if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {
+                        return@collect
+                    }
+                    hasEmittedInitial = true
                     for (change in snapshot.documentChanges) {
                         val docId = change.document.id
                         when (change.type) {
@@ -1847,10 +1867,15 @@ class KamRepository(private val db: FirebaseFirestore) {
         val path = "groups/$groupId/monthlyBalances"
         return flow {
             val balancesById = LinkedHashMap<String, MonthlyBalance>()
+            var hasEmittedInitial = false
             db.collection("groups").document(groupId).collection("monthlyBalances")
                 .whereEqualTo("groupId", groupId)
                 .snapshots()
                 .collect { snapshot ->
+                    if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {
+                        return@collect
+                    }
+                    hasEmittedInitial = true
                     for (change in snapshot.documentChanges) {
                         val docId = change.document.id
                         when (change.type) {
@@ -1996,12 +2021,17 @@ class KamRepository(private val db: FirebaseFirestore) {
         val path = "groups/$groupId/attendance"
         return flow {
             val recordsById = LinkedHashMap<String, AttendanceRecord>()
+            var hasEmittedInitial = false
             db.collection("groups")
                 .document(groupId)
                 .collection("attendance")
                 .whereEqualTo("weekKey", weekKey)
                 .snapshots()
                 .collect { snapshot ->
+                    if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {
+                        return@collect
+                    }
+                    hasEmittedInitial = true
                     for (change in snapshot.documentChanges) {
                         val docId = change.document.id
                         when (change.type) {

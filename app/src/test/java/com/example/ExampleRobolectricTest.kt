@@ -426,6 +426,90 @@ class ExampleRobolectricTest {
         assertEquals(android.graphics.Bitmap.Config.ARGB_8888, circular.config)
         assertTrue(circular.hasAlpha())
     }
+
+    @Test
+    fun `flattened settings scroll, bounded avatar helper cache, and scroll-aligned ViewConfiguration work correctly`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        LocalClassroomCache.init(context)
+        AppAppearanceController.loadFromContext(context)
+        UiScaleController.loadFromContext(context)
+
+        // 1. Verify root KamLiteTheme preserves standard system longPressTimeoutMillis (>= 300ms, NOT global 210ms)
+        var capturedLongPressMs = 0L
+        val checkActivity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
+        checkActivity.setContent {
+            KamLiteTheme {
+                capturedLongPressMs = androidx.compose.ui.platform.LocalViewConfiguration.current.longPressTimeoutMillis
+            }
+        }
+        composeTestRule.waitForIdle()
+        assertTrue(
+            "Expected root KamLiteTheme longPressTimeoutMillis >= 300ms, got $capturedLongPressMs",
+            capturedLongPressMs >= 300L
+        )
+
+        // 2. Verify localPackedAvatarByStudentId LruCache(24) bounds entries and scroll gate toggles cleanly
+        StudentAvatarImageHelper.setScrollActive(true)
+        assertTrue(StudentAvatarImageHelper.isScrollActive)
+        StudentAvatarImageHelper.setScrollActive(false)
+        assertEquals(false, StudentAvatarImageHelper.isScrollActive)
+        for (i in 1..30) {
+            StudentAvatarImageHelper.writeLocalAlbumRaw(null, "cap_test_$i", "dummy_$i")
+        }
+        assertEquals("", StudentAvatarImageHelper.peekCachedLocalAlbumRaw("cap_test_1"))
+        assertEquals("dummy_30", StudentAvatarImageHelper.peekCachedLocalAlbumRaw("cap_test_30"))
+
+        // 3. Verify flattened SettingsScreen scrolls down to bottom performance & sign-out items with all tags intact
+        val adminProfile = UserProfile(
+            id = "admin_flat",
+            userId = "admin_flat",
+            displayName = "الأمين",
+            groupId = "GRP_FLAT"
+        )
+        val group = Group(
+            id = "GRP_FLAT",
+            inviteCode = "GRP_FLAT",
+            name = "فصل السلاسة",
+            adminId = "admin_flat",
+            adminName = "الأمين",
+            memberUids = listOf("admin_flat")
+        )
+        val blocks = (1..3).map { i ->
+            ServantBlock(id = "blk_$i", groupId = "GRP_FLAT", servantId = "srv_$i", servantName = "خادم $i")
+        }
+        val state = KamScreenState(
+            isLoading = false,
+            userProfile = adminProfile,
+            group = group,
+            isAdmin = true,
+            blocks = blocks
+        )
+        val settingsActivity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
+        settingsActivity.setContent {
+            KamLiteTheme {
+                SettingsScreen(
+                    state = state,
+                    onToggleCardVisibility = { _, _ -> },
+                    onSaveGroupPolicies = { _, _, _, _, _, _ -> },
+                    onLeaveGroup = {},
+                    onSignOut = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("github_smart_sync_settings_card"))
+        composeTestRule.onNodeWithTag("github_smart_sync_settings_card").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("performance_metrics_settings_card"))
+        composeTestRule.onNodeWithTag("performance_metrics_settings_card").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("settings_lazy_column")
+            .performScrollToNode(hasTestTag("settings_sign_out_button"))
+        composeTestRule.onNodeWithTag("settings_sign_out_button").assertIsDisplayed()
+    }
 }
+
 
 

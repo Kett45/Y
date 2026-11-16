@@ -982,13 +982,14 @@ fun ServantBlockContactRows(
     }
 
     val phones = servantProfile?.nonEmptyPhones.orEmpty()
+    val footerShape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)
     HorizontalDivider(color = blockAccent.copy(alpha = 0.22f))
 
     if (phones.isEmpty()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(blockAccent.copy(alpha = 0.08f))
+                .background(blockAccent.copy(alpha = 0.08f), footerShape)
                 .padding(horizontal = 14.dp, vertical = 7.dp)
                 .testTag("servant_no_phone_row_$blockId"),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1033,7 +1034,7 @@ fun ServantBlockContactRows(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(blockAccent.copy(alpha = 0.08f))
+                .background(blockAccent.copy(alpha = 0.08f), footerShape)
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -1147,17 +1148,14 @@ fun ServantProfileSettingsCard(
 ) {
     val hasAnyPhone = primaryPhone.isNotBlank() || secondaryPhone.isNotBlank()
 
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+            .padding(16.dp)
             .testTag("servant_profile_settings_card"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
             // Header Row: Servant Avatar + Name + Change Photo Button
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1314,30 +1312,29 @@ fun ServantProfileSettingsCard(
                     )
                 }
 
-                if (hasAnyPhone) {
-                    OutlinedButton(
-                        onClick = onDeletePhones,
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("settings_delete_phone_button"),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        ),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "حذف الرقم",
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("حذف الرقم", fontWeight = FontWeight.Bold)
-                    }
-                }
+        if (hasAnyPhone) {
+            OutlinedButton(
+                onClick = onDeletePhones,
+                modifier = Modifier
+                    .height(48.dp)
+                    .testTag("settings_delete_phone_button"),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "حذف الرقم",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("حذف الرقم", fontWeight = FontWeight.Bold)
             }
         }
     }
+}
 }
 
 /**

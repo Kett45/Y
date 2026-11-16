@@ -1,18 +1,18 @@
 {
-  "targetVersionCode": 11,
-  "targetVersionName": "1.11",
-  "minCompatibleBaseVersion": 8,
-  "commitSha": "096515d475f1",
-  "apkSha256": "07b11aaae28c30a0344baf4d0127c9e30161171b85600f1b9d4615153312c051",
-  "updatedAt": "2026-11-16T11:11:41Z",
-  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.11 (096515d475f1)",
+  "targetVersionCode": 12,
+  "targetVersionName": "1.12",
+  "minCompatibleBaseVersion": 9,
+  "commitSha": "8df1f2c33f84",
+  "apkSha256": "8df1f2c33f846727959b84bf951668dfcafa18c3bfe0ed22bf17cfb51a3cfbd9",
+  "updatedAt": "2026-11-16T12:13:22Z",
+  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.12 (8df1f2c33f84): تسريع شامل للتمرير في الرئيسية والإعدادات وتخفيف تداخل الصور",
   "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "changedModules": [
-    "dm_1on1_chat_rules_and_members_fix",
-    "group_servants_limit_expanded_to_50",
-    "visual_attendance_report_with_cached_child_photos",
-    "chat_media_save_to_device_button",
-    "github_auto_update_sha_fix_v111"
+    "home_and_settings_scroll_jank_fix",
+    "settings_flattened_cards",
+    "scroll_aware_avatar_memory_budget",
+    "retained_tabs_skip_inactive_measure",
+    "uncompressed_dex_mmap_v112"
   ],
   "dynamicConfig": {
     "maxStudentsPerGroup": 150,

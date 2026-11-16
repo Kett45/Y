@@ -688,19 +688,14 @@ private fun HomeTopControlCard(
         SaturdayCalendarHelper.formatCompactHeaderMonthWeek(state.selectedMonthKey, state.selectedWeekKey)
     }
 
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp)
             .testTag("compact_home_header_bar"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
             // Single 56dp Compact Row: Group Name + Month/Week Chip + Search Icon + Leaderboard Icon + Bell
             Row(
                 modifier = Modifier
@@ -995,7 +990,6 @@ private fun HomeTopControlCard(
                 }
             }
         }
-    }
 }
 
 
@@ -1006,60 +1000,57 @@ private fun EmptyClassroomPromptCard(
     onOpenAddStudent: () -> Unit,
     onOpenAddBlock: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(18.dp))
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+        Text(
+            text = "قائمة الأطفال فارغة حالياً",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = "يمكنك استيراد قائمة أسماء الفصل (حتى ١٥٠ اسم للمجموعة الواحدة) أو إضافة طفل جديد، ثم توزيعهم على بلوكات الخدام.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(
-                text = "قائمة الأطفال فارغة حالياً",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "يمكنك استيراد قائمة أسماء الفصل (حتى ١٥٠ اسم للمجموعة الواحدة) أو إضافة طفل جديد، ثم توزيعهم على بلوكات الخدام.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            Button(
+                onClick = onOpenBulkImport,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("empty_state_bulk_import_button"),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Button(
-                    onClick = onOpenBulkImport,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("empty_state_bulk_import_button"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("استيراد قائمة أسماء")
-                }
-                OutlinedButton(
-                    onClick = onOpenAddStudent,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("empty_state_add_single_button"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("إضافة طفل")
-                }
-            }
-            TextButton(onClick = onOpenAddBlock) {
-                Icon(Icons.Default.ViewModule, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("إضافة بلوك خادم جديد")
+                Text("استيراد قائمة أسماء")
             }
+            OutlinedButton(
+                onClick = onOpenAddStudent,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("empty_state_add_single_button"),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("إضافة طفل")
+            }
+        }
+        TextButton(onClick = onOpenAddBlock) {
+            Icon(Icons.Default.ViewModule, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("إضافة بلوك خادم جديد")
         }
     }
 }
@@ -1082,119 +1073,117 @@ private fun ServantBlockHeaderCard(
     val currentOnToggle by rememberUpdatedState(onToggleCollapseById)
     val onRowClick = remember { { currentOnToggle(currentBlockId) } }
 
-    Card(
+    val hasContactFooter = servantProfile == null || servantProfile.effectiveShowPhone
+    val cardShape = RoundedCornerShape(18.dp)
+    val headerAccentShape = if (hasContactFooter) {
+        RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+    } else {
+        cardShape
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, cardShape)
             .border(
                 width = 1.5.dp,
                 color = blockAccent.copy(alpha = 0.65f),
-                shape = RoundedCornerShape(18.dp)
+                shape = cardShape
             )
-            .testTag("servant_block_header_card_${block.id}"),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            .testTag("servant_block_header_card_${block.id}")
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(blockAccent.copy(alpha = 0.22f), headerAccentShape)
+                .clickable(onClick = onRowClick)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(blockAccent.copy(alpha = 0.22f))
-                    .clickable(onClick = onRowClick)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    ServantAvatarCircle(
-                        servantUid = block.servantId.ifBlank { block.id },
-                        servantName = block.servantName,
-                        groupId = groupId,
-                        memberProfile = servantProfile,
-                        accentColor = blockAccent,
-                        size = 42.dp,
-                        isEditable = isOwnBlock,
-                        onClick = onAvatarClick
+                ServantAvatarCircle(
+                    servantUid = block.servantId.ifBlank { block.id },
+                    servantName = block.servantName,
+                    groupId = groupId,
+                    memberProfile = servantProfile,
+                    accentColor = blockAccent,
+                    size = 42.dp,
+                    isEditable = isOwnBlock,
+                    onClick = onAvatarClick
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = "بلوك ${block.servantName}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = "بلوك ${block.servantName}",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "$groupName • $studentsCount طفل",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = blockAccent.copy(alpha = 0.25f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "$studentsCount",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = blockAccent,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                            contentDescription = if (isCollapsed) "عرض الأطفال" else "طي البلوك",
-                            tint = blockAccent,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    Text(
+                        text = "$groupName • $studentsCount طفل",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
-            ServantBlockContactRows(
-                blockId = block.id,
-                servantProfile = servantProfile,
-                isOwnBlock = isOwnBlock,
-                blockAccent = blockAccent,
-                onAddOwnPhoneClick = onAddOwnPhoneClick
-            )
+            Box(
+                modifier = Modifier
+                    .background(blockAccent.copy(alpha = 0.25f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "$studentsCount",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = blockAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                        contentDescription = if (isCollapsed) "عرض الأطفال" else "طي البلوك",
+                        tint = blockAccent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
         }
+
+        ServantBlockContactRows(
+            blockId = block.id,
+            servantProfile = servantProfile,
+            isOwnBlock = isOwnBlock,
+            blockAccent = blockAccent,
+            onAddOwnPhoneClick = onAddOwnPhoneClick
+        )
     }
 }
 
 @Composable
 private fun ServantBlockEmptyCard(blockAccent: Color) {
-    Card(
+    val shape = RoundedCornerShape(14.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, shape)
             .border(
                 width = 1.dp,
                 color = blockAccent.copy(alpha = 0.45f),
-                shape = RoundedCornerShape(14.dp)
-            ),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "لا يوجد أطفال في هذا البلوك حالياً — انقل أي طفل من قسم 'بدون بلوك' بضغطة واحدة.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                shape = shape
             )
-        }
+            .padding(14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "لا يوجد أطفال في هذا البلوك حالياً — انقل أي طفل من قسم 'بدون بلوك' بضغطة واحدة.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -1205,68 +1194,58 @@ private fun UnassignedStudentsHeaderCard(
     onToggleCollapse: () -> Unit
 ) {
     val unassignedColor = KamSemanticColors.unassignedBlock
-    Card(
+    val shape = RoundedCornerShape(18.dp)
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, shape)
+            .background(unassignedColor.copy(alpha = 0.28f), shape)
             .border(
                 width = 1.5.dp,
                 color = unassignedColor,
-                shape = RoundedCornerShape(18.dp)
-            ),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                shape = shape
+            )
+            .clickable(onClick = onToggleCollapse)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(unassignedColor.copy(alpha = 0.28f))
-                .clickable(onClick = onToggleCollapse)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "بدون بلوك (الأسماء الجديدة)",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "$studentsCount طفل في انتظار التسكين في بلوك",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Icon(
-                imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                contentDescription = "طي أو فتح",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "بدون بلوك (الأسماء الجديدة)",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "$studentsCount طفل في انتظار التسكين في بلوك",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+
+        Icon(
+            imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+            contentDescription = "طي أو فتح",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
 @Composable
 private fun UnassignedStudentsEmptyCard() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+            .padding(14.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "كل الأطفال موزعين على البلوكات بنجاح!",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        Text(
+            text = "كل الأطفال موزعين على البلوكات بنجاح!",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

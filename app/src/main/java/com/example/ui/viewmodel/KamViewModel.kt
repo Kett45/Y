@@ -652,6 +652,12 @@ class KamViewModel(
     private var lastDupCheckDismissed: Set<String>? = null
     @Volatile
     private var cachedDuplicatesByName: List<DuplicateStudentNameGroup>? = null
+    @Volatile
+    private var lastSeqInputStudents: List<Student>? = null
+    @Volatile
+    private var lastSeqInputBlocks: List<ServantBlock>? = null
+    @Volatile
+    private var cachedSeqStudents: List<Student>? = null
 
     /**
      * Emits the first value immediately (0ms delay for cold start cache) and debounces
@@ -1135,8 +1141,22 @@ class KamViewModel(
             }
         }
 
-        // Compute global sequential student numbering (1, 2, 3, 4...) across the entire group in memory
-        val sequentiallyNumberedStudents = computeSequentiallyNumberedStudents(rawStudents, blocks)
+        // Compute global sequential student numbering (1, 2, 3, 4...) across the entire group in memory,
+        // reusing the prior list instance whenever rawStudents and blocks references are unchanged.
+        val cachedSeq = cachedSeqStudents
+        val sequentiallyNumberedStudents = if (
+            cachedSeq != null &&
+            lastSeqInputStudents === rawStudents &&
+            lastSeqInputBlocks === blocks
+        ) {
+            cachedSeq
+        } else {
+            computeSequentiallyNumberedStudents(rawStudents, blocks).also { computed ->
+                lastSeqInputStudents = rawStudents
+                lastSeqInputBlocks = blocks
+                cachedSeqStudents = computed
+            }
+        }
 
         // Save classroom snapshot locally on device (debounced 3000ms on background IO thread, without photos)
         if (profile != null) {

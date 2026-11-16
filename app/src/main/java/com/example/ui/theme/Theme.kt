@@ -58,10 +58,12 @@ fun KamLiteTheme(
     val appearanceController = rememberAppAppearanceController()
     val resolvedAppearance = rememberResolvedKamAppearance(appearanceController.selectedTheme)
     val baseViewConfig = LocalViewConfiguration.current
-    val fastHoldViewConfig = remember(baseViewConfig) {
+    val scaleFactor = uiScaleController.effectiveScaleFactor
+    val scrollAlignedViewConfig = remember(baseViewConfig, scaleFactor) {
+        val touchSlopMultiplier = scaleFactor.coerceIn(0.78f, 1.0f)
         object : ViewConfiguration by baseViewConfig {
-            override val longPressTimeoutMillis: Long
-                get() = 210L
+            override val touchSlop: Float
+                get() = baseViewConfig.touchSlop * touchSlopMultiplier
         }
     }
 
@@ -69,13 +71,13 @@ fun KamLiteTheme(
         KamSemanticColors.elevatedSurface = resolvedAppearance.elevatedSurfaceColor
     }
 
-    // Enforce RTL and provide adaptive/manual UI density, theme/icon controller, and fast press-and-hold ViewConfiguration once at the root
+    // Enforce RTL and provide adaptive/manual UI density, theme/icon controller, and scale-aligned touch physics at root
     CompositionLocalProvider(
         LocalLayoutDirection provides LayoutDirection.Rtl,
         LocalUiScaleController provides uiScaleController,
         LocalAppAppearanceController provides appearanceController,
         LocalDensity provides effectiveDensity,
-        LocalViewConfiguration provides fastHoldViewConfig
+        LocalViewConfiguration provides scrollAlignedViewConfig
     ) {
         MaterialTheme(
             colorScheme = resolvedAppearance.colorScheme,

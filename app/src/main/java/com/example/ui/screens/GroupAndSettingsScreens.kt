@@ -22,7 +22,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -73,7 +76,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -84,6 +87,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import com.example.data.model.CardType
+import com.example.data.model.Group
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_SERVANTS_PER_GROUP
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
@@ -94,6 +98,7 @@ import com.example.ui.components.AppearanceFullScreen
 import com.example.ui.components.AppearanceSettingsEntryCard
 import com.example.ui.components.ServantPhotoPickerDialog
 import com.example.ui.components.ServantProfileSettingsCard
+import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.viewmodel.KamScreenState
@@ -631,8 +636,7 @@ fun GroupInvitationsScreen(
                         Box(
                             modifier = Modifier
                                 .size(18.dp)
-                                .clip(CircleShape)
-                                .background(blkColor)
+                                .background(blkColor, CircleShape)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
@@ -948,12 +952,24 @@ fun SettingsScreen(
         ?: state.userProfile?.displayName?.ifBlank { null }
         ?: "خادم"
 
+    var showJoinAnotherDialog by rememberSaveable { mutableStateOf(false) }
+    var showCreateAnotherDialog by rememberSaveable { mutableStateOf(false) }
+    val activeGroupCode = group?.inviteCode.orEmpty()
+    val groupsList = remember(state.userGroups, group) {
+        if (state.userGroups.isNotEmpty()) state.userGroups else listOfNotNull(group)
+    }
+
+    val settingsListState = rememberLazyListState()
+    LaunchedEffect(settingsListState.isScrollInProgress) {
+        StudentAvatarImageHelper.setScrollActive(settingsListState.isScrollInProgress)
+    }
+
     LazyColumn(
+        state = settingsListState,
         modifier = Modifier
             .fillMaxSize()
             .testTag("settings_lazy_column"),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(16.dp)
     ) {
         // 0a. Servant WhatsApp Profile & Phone Numbers Card
         item(key = "servant_profile_and_phone_settings", contentType = "settings_card") {
@@ -972,6 +988,9 @@ fun SettingsScreen(
                 onDeletePhones = onDeleteOwnPhones
             )
         }
+        item(key = "spacer_after_servant_profile", contentType = "settings_spacer") {
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
         // 0. Appearance & Themes Dedicated Screen Entry Button ("المظهر والسمات")
         item(key = "appearance_and_icon_settings", contentType = "settings_card") {
@@ -979,18 +998,92 @@ fun SettingsScreen(
                 onOpenAppearanceScreen = { showAppearanceFullScreen = true }
             )
         }
-
-        // 0. Multi-Group Switcher Card ("التبديل بين المجموعات من شاشة المجموعة والإعدادات فقط")
-        item(key = "multi_group_switcher_in_settings", contentType = "settings_card") {
-            MultiGroupSwitcherCard(
-                state = state,
-                onSwitchGroup = onSwitchGroup,
-                onJoinGroupByCode = onJoinGroupByCode,
-                onCreateNewGroup = onCreateNewGroup
-            )
+        item(key = "spacer_after_appearance", contentType = "settings_spacer") {
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
-        // 1. Personal Card Visibility Settings — flattened header + discrete LazyColumn rows for fast opening
+        // 0b. Multi-Group Switcher (flattened into discrete header + group rows + footer items)
+        item(key = "multi_group_switcher_in_settings", contentType = "settings_section_header") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                    .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 10.dp)
+                    .testTag("multi_group_switcher_card"),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Groups,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "مجموعاتي والتبديل بينها (${groupsList.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                HorizontalDivider()
+            }
+        }
+        items(
+            items = groupsList,
+            key = { grp -> "settings_group_row_${grp.inviteCode}" },
+            contentType = { "settings_group_row" }
+        ) { grp ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RectangleShape)
+                    .padding(horizontal = 16.dp, vertical = 5.dp)
+            ) {
+                MultiGroupRowItem(
+                    group = grp,
+                    isActive = grp.inviteCode == activeGroupCode,
+                    onClick = { onSwitchGroup(grp.inviteCode) }
+                )
+            }
+        }
+        item(key = "multi_group_switcher_footer", contentType = "settings_section_footer") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+                    .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { showJoinAnotherDialog = true },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("join_another_group_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("انضمام برمز")
+                }
+
+                OutlinedButton(
+                    onClick = { showCreateAnotherDialog = true },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("create_another_group_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("مجموعة جديدة")
+                }
+            }
+        }
+        item(key = "spacer_after_multi_group", contentType = "settings_spacer") {
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        // 1. Personal Card Visibility Settings — flattened header + discrete LazyColumn rows
         item(key = "personal_cards_settings_header", contentType = "settings_section_header") {
             Column(
                 modifier = Modifier
@@ -1034,14 +1127,19 @@ fun SettingsScreen(
             val rowShape = if (isLast) {
                 RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
             } else {
-                RoundedCornerShape(0.dp)
+                RectangleShape
             }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface, rowShape)
                     .clickable { onToggleCardVisibility(card, !isEnabled) }
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 8.dp,
+                        bottom = if (isLast) 14.dp else 8.dp
+                    ),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1083,16 +1181,19 @@ fun SettingsScreen(
                 )
             }
         }
+        item(key = "spacer_after_personal_cards", contentType = "settings_spacer") {
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
-        // 1b. Personal Block Visibility Settings ("إخفاء بلوك عندي فقط - تفضيل شخصي")
+        // 1b. Personal Block Visibility Settings — flattened header + discrete LazyColumn rows
         if (state.blocks.isNotEmpty()) {
-            item(key = "personal_blocks_visibility_settings", contentType = "settings_card") {
+            item(key = "personal_blocks_visibility_settings", contentType = "settings_section_header") {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
                         text = "إظهار / إخفاء البلوكات في شاشتي (تفضيل شخصي)",
@@ -1104,59 +1205,83 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
                     HorizontalDivider()
-
-                    state.blocks.forEach { blk ->
-                        val isVisibleOnHome = blk.id !in state.hiddenBlockIds
-                        val blkColor = KamSemanticColors.blockColor(blk.colorHex)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onToggleBlockHidden(blk.id) }
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(14.dp)
-                                        .background(blkColor, CircleShape)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "بلوك ${blk.servantName}",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                            Switch(
-                                checked = isVisibleOnHome,
-                                onCheckedChange = { onToggleBlockHidden(blk.id) },
-                                modifier = Modifier.testTag("switch_block_visible_${blk.id}")
-                            )
-                        }
-                    }
                 }
+            }
+            itemsIndexed(
+                items = state.blocks,
+                key = { _, blk -> "personal_block_row_${blk.id}" },
+                contentType = { _, _ -> "settings_switch_row" }
+            ) { index, blk ->
+                val isVisibleOnHome = blk.id !in state.hiddenBlockIds
+                val blkColor = KamSemanticColors.blockColor(blk.colorHex)
+                val isLast = index == state.blocks.lastIndex
+                val rowShape = if (isLast) {
+                    RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
+                } else {
+                    RectangleShape
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface, rowShape)
+                        .clickable { onToggleBlockHidden(blk.id) }
+                        .padding(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = 4.dp,
+                            bottom = if (isLast) 14.dp else 4.dp
+                        ),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(14.dp)
+                                .background(blkColor, CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "بلوك ${blk.servantName}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Switch(
+                        checked = isVisibleOnHome,
+                        onCheckedChange = { onToggleBlockHidden(blk.id) },
+                        modifier = Modifier.testTag("switch_block_visible_${blk.id}")
+                    )
+                }
+            }
+            item(key = "spacer_after_personal_blocks", contentType = "settings_spacer") {
+                Spacer(modifier = Modifier.height(12.dp))
             }
         }
 
-        // 2. Group Policy Decisions (Auto-saved immediately on toggle + dedicated Save button for maxMonthlyPoints)
-        item(key = "group_policy_settings", contentType = "settings_policy_card") {
-            Column(
+        // 2. Group Policy Decisions — flattened header + 5 discrete switch items + footer
+        item(key = "group_policy_settings", contentType = "settings_section_header") {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                    .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp)
             ) {
                 Text(
                     text = "قواعد وقرارات الفصل (يضبطها الأمين — حفظ فوري)",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-
+            }
+        }
+        item(key = "policy_row_allow_servant_undo", contentType = "settings_policy_switch") {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RectangleShape)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
                 PolicySwitchRow(
                     title = "السماح للخادم بإلغاء كارت سجّله بالخطأ",
                     subtitle = "عند الإيقاف، الأمين فقط يمكنه إلغاء الكارت من سجل الطفل",
@@ -1167,7 +1292,15 @@ fun SettingsScreen(
                         persistGroupPolicies(nextAllowServantUndo = checked)
                     }
                 )
-
+            }
+        }
+        item(key = "policy_row_enforce_weekly_limit", contentType = "settings_policy_switch") {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RectangleShape)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
                 PolicySwitchRow(
                     title = "الكارت يُعطى مرة واحدة فقط في الأسبوع لكل طفل",
                     subtitle = "عند الإيقاف، يمكن إعطاء الكارت أكثر من مرة خلال الشهر (مع منع الضغط المزدوج)",
@@ -1178,7 +1311,15 @@ fun SettingsScreen(
                         persistGroupPolicies(nextEnforceWeeklyLimit = checked)
                     }
                 )
-
+            }
+        }
+        item(key = "policy_row_auto_student_number", contentType = "settings_policy_switch") {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RectangleShape)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
                 PolicySwitchRow(
                     title = "الترقيم التلقائي المتسلسل للأطفال",
                     subtitle = "عند الإيقاف، يُدخل الخادم رقم الطفل يدوياً عند الإضافة",
@@ -1189,7 +1330,15 @@ fun SettingsScreen(
                         persistGroupPolicies(nextAutoStudentNumber = checked)
                     }
                 )
-
+            }
+        }
+        item(key = "policy_row_show_leaderboard", contentType = "settings_policy_switch") {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RectangleShape)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
                 PolicySwitchRow(
                     title = "إظهار لوحة الشرف وترتيب النقاط الشهري",
                     subtitle = "عرض أعلى ٥ أطفال بالنقاط في الشاشة الرئيسية",
@@ -1200,7 +1349,15 @@ fun SettingsScreen(
                         persistGroupPolicies(nextShowLeaderboard = checked)
                     }
                 )
-
+            }
+        }
+        item(key = "policy_row_attendance_card_only", contentType = "settings_policy_switch") {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RectangleShape)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
                 PolicySwitchRow(
                     title = "الحضور هو كارت 'الحضور' (٣ نقاط)",
                     subtitle = "اعتماد كارت الحضور كآلية موحدة وسريعة لتسجيل حضور الطفل",
@@ -1211,7 +1368,16 @@ fun SettingsScreen(
                         persistGroupPolicies(nextAttendanceIsCardOnly = checked)
                     }
                 )
-
+            }
+        }
+        item(key = "group_policy_footer", contentType = "settings_section_footer") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+                    .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 OutlinedTextField(
                     value = maxMonthlyPtsText,
                     onValueChange = { maxMonthlyPtsText = it.filter { ch -> ch.isDigit() } },
@@ -1245,77 +1411,91 @@ fun SettingsScreen(
                 }
             }
         }
-
-        // 2b. GitHub Smart Delta Auto-Sync & Always-Updated Release Links Card
-        item(key = "github_smart_sync_card") {
-            GitHubAutoSyncSettingsCard()
+        item(key = "spacer_after_group_policy", contentType = "settings_spacer") {
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
-        // 2c. Live Performance & Timing Metrics Card (Before vs. After + KAM_PERF Logcat viewer for mobile)
-        item(key = "performance_metrics_card") {
-            PerformanceMetricsSettingsCard()
+        // 2b. GitHub Smart Delta Auto-Sync & Always-Updated Release Links Card
+        item(key = "github_smart_sync_card", contentType = "settings_card") {
+            GitHubAutoSyncSettingsCard()
+        }
+        item(key = "spacer_after_github_sync", contentType = "settings_spacer") {
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        // 2c. Live Performance & Timing Metrics Section (flattened into incremental LazyColumn items)
+        performanceMetricsSettingsItems()
+        item(key = "spacer_after_perf_metrics", contentType = "settings_spacer") {
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
         // 3. Account & Session Actions
-        item(key = "account_actions") {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        item(key = "account_actions", contentType = "settings_card") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                Text(
+                    text = "الحساب الحالي: ${state.userProfile?.displayName.orEmpty()}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = state.userProfile?.email.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = "الحساب الحالي: ${state.userProfile?.displayName.orEmpty()}",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = state.userProfile?.email.orEmpty(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    OutlinedButton(
+                        onClick = onLeaveGroup,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("switch_group_button"),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        OutlinedButton(
-                            onClick = onLeaveGroup,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("switch_group_button"),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("شاشة المجموعات")
-                        }
+                        Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("شاشة المجموعات")
+                    }
 
-                        Button(
-                            onClick = onSignOut,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error,
-                                contentColor = MaterialTheme.colorScheme.onError
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("settings_sign_out_button"),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("تسجيل الخروج")
-                        }
+                    Button(
+                        onClick = onSignOut,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("settings_sign_out_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("تسجيل الخروج")
                     }
                 }
             }
         }
     }
+
+    JoinOrCreateGroupDialogs(
+        defaultUserName = state.userProfile?.displayName.orEmpty(),
+        showJoinDialog = showJoinAnotherDialog,
+        showCreateDialog = showCreateAnotherDialog,
+        onDismissJoin = { showJoinAnotherDialog = false },
+        onDismissCreate = { showCreateAnotherDialog = false },
+        onJoinGroupByCode = onJoinGroupByCode,
+        onCreateNewGroup = onCreateNewGroup
+    )
 
     if (showOwnServantPhotoDialog) {
         ServantPhotoPickerDialog(
@@ -1339,17 +1519,14 @@ private fun GitHubAutoSyncSettingsCard() {
     val scope = rememberCoroutineScope()
     val syncState by GitHubSmartSyncEngine.syncState.collectAsStateWithLifecycle()
 
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+            .padding(16.dp)
             .testTag("github_smart_sync_settings_card"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1455,7 +1632,6 @@ private fun GitHubAutoSyncSettingsCard() {
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(8.dp)
-                            .clip(RoundedCornerShape(4.dp))
                     )
                 }
             }
@@ -1541,170 +1717,104 @@ private fun GitHubAutoSyncSettingsCard() {
                     fontWeight = FontWeight.Bold
                 )
             }
-        }
     }
 }
 
 /**
- * Multi-Group Switcher Card displayed in both the Group screen and Settings screen
- * (never on the Home screen to prevent accidental switching during active service).
- * Allows switching between all groups the user belongs to, or joining/creating another group.
+ * Shared clickable row representing a single Group inside both Group screen and Settings screen switcher.
  */
 @Composable
-private fun MultiGroupSwitcherCard(
-    state: KamScreenState,
-    onSwitchGroup: (String) -> Unit,
+private fun MultiGroupRowItem(
+    group: Group,
+    isActive: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = if (isActive) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        border = BorderStroke(
+            width = if (isActive) 1.5.dp else 1.dp,
+            color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !isActive, onClick = onClick)
+            .testTag("switch_to_group_${group.inviteCode}")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "${group.name} (رمز: ${group.inviteCode})",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "الأمين: ${group.adminName} • الأعضاء: ${group.memberUids.size}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (isActive) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "نشطة حالياً",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "النشطة",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.CompareArrows,
+                        contentDescription = "تبديل",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "تبديل",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun JoinOrCreateGroupDialogs(
+    defaultUserName: String,
+    showJoinDialog: Boolean,
+    showCreateDialog: Boolean,
+    onDismissJoin: () -> Unit,
+    onDismissCreate: () -> Unit,
     onJoinGroupByCode: (inviteCode: String, servantName: String) -> Unit,
     onCreateNewGroup: (groupName: String, adminName: String) -> Unit
 ) {
-    var showJoinAnotherDialog by rememberSaveable { mutableStateOf(false) }
-    var showCreateAnotherDialog by rememberSaveable { mutableStateOf(false) }
-
-    val activeCode = state.group?.inviteCode.orEmpty()
-    val groupsList = if (state.userGroups.isNotEmpty()) {
-        state.userGroups
-    } else {
-        listOfNotNull(state.group)
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("multi_group_switcher_card"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Groups,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "مجموعاتي والتبديل بينها (${groupsList.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            HorizontalDivider()
-
-            groupsList.forEach { grp ->
-                val isActive = grp.inviteCode == activeCode
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = if (isActive) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    },
-                    border = BorderStroke(
-                        width = if (isActive) 1.5.dp else 1.dp,
-                        color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = !isActive) { onSwitchGroup(grp.inviteCode) }
-                        .testTag("switch_to_group_${grp.inviteCode}")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "${grp.name} (رمز: ${grp.inviteCode})",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "الأمين: ${grp.adminName} • الأعضاء: ${grp.memberUids.size}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        if (isActive) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.CheckCircle,
-                                    contentDescription = "نشطة حالياً",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "النشطة",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.CompareArrows,
-                                    contentDescription = "تبديل",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "تبديل",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = { showJoinAnotherDialog = true },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("join_another_group_button"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("انضمام برمز")
-                }
-
-                OutlinedButton(
-                    onClick = { showCreateAnotherDialog = true },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("create_another_group_button"),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("مجموعة جديدة")
-                }
-            }
-        }
-    }
-
-    if (showJoinAnotherDialog) {
+    if (showJoinDialog) {
         var codeInput by rememberSaveable { mutableStateOf("") }
-        var servantNameInput by rememberSaveable {
-            mutableStateOf(state.userProfile?.displayName ?: "")
-        }
+        var servantNameInput by rememberSaveable { mutableStateOf(defaultUserName) }
         AlertDialog(
-            onDismissRequest = { showJoinAnotherDialog = false },
+            onDismissRequest = onDismissJoin,
             title = { Text("الانضمام لمجموعة إضافية") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1730,7 +1840,7 @@ private fun MultiGroupSwitcherCard(
                 Button(
                     onClick = {
                         onJoinGroupByCode(codeInput, servantNameInput)
-                        showJoinAnotherDialog = false
+                        onDismissJoin()
                     },
                     enabled = codeInput.trim().length >= 4
                 ) {
@@ -1738,20 +1848,18 @@ private fun MultiGroupSwitcherCard(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showJoinAnotherDialog = false }) {
+                TextButton(onClick = onDismissJoin) {
                     Text("إلغاء")
                 }
             }
         )
     }
 
-    if (showCreateAnotherDialog) {
+    if (showCreateDialog) {
         var groupNameInput by rememberSaveable { mutableStateOf("") }
-        var adminNameInput by rememberSaveable {
-            mutableStateOf(state.userProfile?.displayName ?: "")
-        }
+        var adminNameInput by rememberSaveable { mutableStateOf(defaultUserName) }
         AlertDialog(
-            onDismissRequest = { showCreateAnotherDialog = false },
+            onDismissRequest = onDismissCreate,
             title = { Text("إنشاء مجموعة منفصلة جديدة") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1777,7 +1885,7 @@ private fun MultiGroupSwitcherCard(
                 Button(
                     onClick = {
                         onCreateNewGroup(groupNameInput, adminNameInput)
-                        showCreateAnotherDialog = false
+                        onDismissCreate()
                     },
                     enabled = groupNameInput.trim().isNotBlank()
                 ) {
@@ -1785,12 +1893,106 @@ private fun MultiGroupSwitcherCard(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateAnotherDialog = false }) {
+                TextButton(onClick = onDismissCreate) {
                     Text("إلغاء")
                 }
             }
         )
     }
+}
+
+/**
+ * Multi-Group Switcher Card displayed in the Group screen.
+ * (Settings screen renders the flattened item sequence for incremental LazyColumn measurement.)
+ */
+@Composable
+private fun MultiGroupSwitcherCard(
+    state: KamScreenState,
+    onSwitchGroup: (String) -> Unit,
+    onJoinGroupByCode: (inviteCode: String, servantName: String) -> Unit,
+    onCreateNewGroup: (groupName: String, adminName: String) -> Unit
+) {
+    var showJoinAnotherDialog by rememberSaveable { mutableStateOf(false) }
+    var showCreateAnotherDialog by rememberSaveable { mutableStateOf(false) }
+
+    val activeCode = state.group?.inviteCode.orEmpty()
+    val groupsList = if (state.userGroups.isNotEmpty()) {
+        state.userGroups
+    } else {
+        listOfNotNull(state.group)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+            .padding(16.dp)
+            .testTag("multi_group_switcher_card"),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.Groups,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "مجموعاتي والتبديل بينها (${groupsList.size})",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        HorizontalDivider()
+
+        groupsList.forEach { grp ->
+            MultiGroupRowItem(
+                group = grp,
+                isActive = grp.inviteCode == activeCode,
+                onClick = { onSwitchGroup(grp.inviteCode) }
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = { showJoinAnotherDialog = true },
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("join_another_group_button"),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("انضمام برمز")
+            }
+
+            OutlinedButton(
+                onClick = { showCreateAnotherDialog = true },
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("create_another_group_button"),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("مجموعة جديدة")
+            }
+        }
+    }
+
+    JoinOrCreateGroupDialogs(
+        defaultUserName = state.userProfile?.displayName.orEmpty(),
+        showJoinDialog = showJoinAnotherDialog,
+        showCreateDialog = showCreateAnotherDialog,
+        onDismissJoin = { showJoinAnotherDialog = false },
+        onDismissCreate = { showCreateAnotherDialog = false },
+        onJoinGroupByCode = onJoinGroupByCode,
+        onCreateNewGroup = onCreateNewGroup
+    )
 }
 
 @Composable
@@ -1806,7 +2008,6 @@ private fun PolicySwitchRow(
         modifier = Modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = 52.dp)
-            .clip(RoundedCornerShape(12.dp))
             .clickable(enabled = enabled) { onCheckedChange(!checked) }
             .padding(horizontal = 6.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1867,21 +2068,15 @@ private fun PolicySwitchRow(
     }
 }
 
-@Composable
-private fun PerformanceMetricsSettingsCard() {
-    val metrics by KamPerformanceTracker.metrics.collectAsStateWithLifecycle()
-    val diagnosticsEnabled by KamPerformanceTracker.liveDiagnosticsEnabled.collectAsStateWithLifecycle()
-    var showRawLogs by rememberSaveable { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("performance_metrics_settings_card"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
+private fun LazyListScope.performanceMetricsSettingsItems() {
+    item(key = "performance_metrics_card", contentType = "settings_section_header") {
+        val diagnosticsEnabled by KamPerformanceTracker.liveDiagnosticsEnabled.collectAsStateWithLifecycle()
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)
+                .testTag("performance_metrics_settings_card"),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
@@ -1909,104 +2104,126 @@ private fun PerformanceMetricsSettingsCard() {
                         )
                     }
                 }
-                androidx.compose.material3.Switch(
+                Switch(
                     checked = diagnosticsEnabled,
                     onCheckedChange = { KamPerformanceTracker.setLiveDiagnosticsEnabled(it) },
                     modifier = Modifier.testTag("switch_live_perf_diagnostics")
                 )
             }
-
             HorizontalDivider()
+        }
+    }
 
-            val liveStartText = if (metrics.appColdStartMs > 0L) "${metrics.appColdStartMs} ms" else "٢٩٠ ms (مقاس)"
-            val liveListText = if (metrics.firstListRenderMs > 0L) "${metrics.firstListRenderMs} ms" else "٣٤٠ ms (مقاس)"
-            val liveTapText = if (metrics.cardTapCount > 0) {
-                String.format(Locale.US, "%.1f ms (متوسط %.1f ms)", metrics.lastCardTapMs, metrics.avgCardTapMs)
-            } else {
-                "١.٨ ms (فوري)"
-            }
-            val liveLeaderboardText = if (metrics.lastLeaderboardOpenMs > 0.0) {
-                String.format(Locale.US, "%.1f ms (كاش: %d)", metrics.lastLeaderboardOpenMs, metrics.leaderboardCacheHits)
-            } else {
-                "٠.٤ ms (مخزن مسبقاً)"
-            }
-            val liveSnapshotText = if (metrics.lastSnapshotSizeKb > 0.0) {
-                String.format(Locale.US, "%.1f KB (كتابة %.1f ms)", metrics.lastSnapshotSizeKb, metrics.lastSnapshotWriteMs)
-            } else {
-                "٤٢ KB (بدون صور)"
-            }
+    items(
+        count = 9,
+        key = { idx -> "perf_metric_row_$idx" },
+        contentType = { "settings_perf_row" }
+    ) { rowIdx ->
+        val metrics by KamPerformanceTracker.metrics.collectAsStateWithLifecycle()
+        val (label, beforeValue, afterValue) = when (rowIdx) {
+            0 -> Triple(
+                "١. وقت فتح التطبيق (Cold Start)",
+                "${KamPerformanceTracker.BEFORE_APP_START_MS} ms",
+                if (metrics.appColdStartMs > 0L) "${metrics.appColdStartMs} ms" else "٢٩٠ ms (مقاس)"
+            )
+            1 -> Triple(
+                "٢. وقت أول عرض للقائمة",
+                "${KamPerformanceTracker.BEFORE_FIRST_LIST_MS} ms",
+                if (metrics.firstListRenderMs > 0L) "${metrics.firstListRenderMs} ms" else "٣٤٠ ms (مقاس)"
+            )
+            2 -> Triple(
+                "٣. وقت ضغطة الكارت (Card Tap)",
+                "${KamPerformanceTracker.BEFORE_CARD_TAP_MS.toInt()} ms",
+                if (metrics.cardTapCount > 0) {
+                    String.format(Locale.US, "%.1f ms (متوسط %.1f ms)", metrics.lastCardTapMs, metrics.avgCardTapMs)
+                } else {
+                    "١.٨ ms (فوري)"
+                }
+            )
+            3 -> Triple(
+                "٤. وقت فتح لوحة الشرف",
+                "${KamPerformanceTracker.BEFORE_LEADERBOARD_OPEN_MS.toInt()} ms",
+                if (metrics.lastLeaderboardOpenMs > 0.0) {
+                    String.format(Locale.US, "%.1f ms (كاش: %d)", metrics.lastLeaderboardOpenMs, metrics.leaderboardCacheHits)
+                } else {
+                    "٠.٤ ms (مخزن مسبقاً)"
+                }
+            )
+            4 -> Triple(
+                "٥. حجم ملف الـ Snapshot المحلي",
+                "${KamPerformanceTracker.BEFORE_SNAPSHOT_SIZE_KB.toInt()} KB",
+                if (metrics.lastSnapshotSizeKb > 0.0) {
+                    String.format(Locale.US, "%.1f KB (كتابة %.1f ms)", metrics.lastSnapshotSizeKb, metrics.lastSnapshotWriteMs)
+                } else {
+                    "٤٢ KB (بدون صور)"
+                }
+            )
+            5 -> Triple(
+                "٦. نسبة الإطارات البطيئة (Jank > 16ms)",
+                "٩٢.٩% (١٩٢٩ من ٢٠٧٦)",
+                if (metrics.totalFramesTracked > 0L) {
+                    String.format(
+                        Locale.US,
+                        "%.1f%% (%d من %d إطار)",
+                        metrics.jankPercentage,
+                        metrics.jankFramesCount,
+                        metrics.totalFramesTracked
+                    )
+                } else {
+                    "٠.٠% (سلس 60fps)"
+                }
+            )
+            6 -> Triple(
+                "٧. زمن معالجة الإطار (Frame Time)",
+                "متوسط ٣٦.٩ms • أسوأ ١٥٣٠ms",
+                if (metrics.totalFramesTracked > 0L) {
+                    String.format(
+                        Locale.US,
+                        "متوسط: %.1fms • أسوأ: %.1fms (%s)",
+                        metrics.avgFrameDurationMs,
+                        metrics.worstFrameDurationMs,
+                        metrics.worstFrameContext.ifBlank { "عام" }
+                    )
+                } else {
+                    "متوسط: ~٨.٥ms • أسوأ: ~١٤.٠ms"
+                }
+            )
+            7 -> Triple(
+                "٨. مخالفات StrictMode على Main Thread",
+                "١٩ مخالفة (قراءة قرص)",
+                if (metrics.strictModeViolationsCount == 0) "٠ مخالفة (كل القرص على IO)" else "${metrics.strictModeViolationsCount} مخالفة"
+            )
+            else -> Triple(
+                "٩. إعادة رسم صف الطفل عند ضغط كارت",
+                "٥٨ صف (كل القائمة)",
+                "١ صف فقط (إجمالي الجلسة: ${metrics.studentRowRecompositionCount})"
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface, RectangleShape)
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        ) {
+            PerformanceMetricComparisonRow(
+                label = label,
+                beforeValue = beforeValue,
+                afterValue = afterValue
+            )
+        }
+    }
 
-            PerformanceMetricComparisonRow(
-                label = "١. وقت فتح التطبيق (Cold Start)",
-                beforeValue = "${KamPerformanceTracker.BEFORE_APP_START_MS} ms",
-                afterValue = liveStartText
-            )
-            PerformanceMetricComparisonRow(
-                label = "٢. وقت أول عرض للقائمة",
-                beforeValue = "${KamPerformanceTracker.BEFORE_FIRST_LIST_MS} ms",
-                afterValue = liveListText
-            )
-            PerformanceMetricComparisonRow(
-                label = "٣. وقت ضغطة الكارت (Card Tap)",
-                beforeValue = "${KamPerformanceTracker.BEFORE_CARD_TAP_MS.toInt()} ms",
-                afterValue = liveTapText
-            )
-            PerformanceMetricComparisonRow(
-                label = "٤. وقت فتح لوحة الشرف",
-                beforeValue = "${KamPerformanceTracker.BEFORE_LEADERBOARD_OPEN_MS.toInt()} ms",
-                afterValue = liveLeaderboardText
-            )
-            PerformanceMetricComparisonRow(
-                label = "٥. حجم ملف الـ Snapshot المحلي",
-                beforeValue = "${KamPerformanceTracker.BEFORE_SNAPSHOT_SIZE_KB.toInt()} KB",
-                afterValue = liveSnapshotText
-            )
+    item(key = "perf_metrics_breakdowns_and_footer", contentType = "settings_section_footer") {
+        val metrics by KamPerformanceTracker.metrics.collectAsStateWithLifecycle()
+        var showRawLogs by rememberSaveable { mutableStateOf(false) }
 
-            // Real Frame Metrics & Jank Stats (Android Window FrameMetrics)
-            val liveJankText = if (metrics.totalFramesTracked > 0L) {
-                String.format(
-                    Locale.US,
-                    "%.1f%% (%d من %d إطار)",
-                    metrics.jankPercentage,
-                    metrics.jankFramesCount,
-                    metrics.totalFramesTracked
-                )
-            } else {
-                "٠.٠% (سلس 60fps)"
-            }
-            val liveFrameDurationText = if (metrics.totalFramesTracked > 0L) {
-                String.format(
-                    Locale.US,
-                    "متوسط: %.1fms • أسوأ: %.1fms (%s)",
-                    metrics.avgFrameDurationMs,
-                    metrics.worstFrameDurationMs,
-                    metrics.worstFrameContext.ifBlank { "عام" }
-                )
-            } else {
-                "متوسط: ~٨.٥ms • أسوأ: ~١٤.٠ms"
-            }
-            PerformanceMetricComparisonRow(
-                label = "٦. نسبة الإطارات البطيئة (Jank > 16ms)",
-                beforeValue = "٩٢.٩% (١٩٢٩ من ٢٠٧٦)",
-                afterValue = liveJankText
-            )
-            PerformanceMetricComparisonRow(
-                label = "٧. زمن معالجة الإطار (Frame Time)",
-                beforeValue = "متوسط ٣٦.٩ms • أسوأ ١٥٣٠ms",
-                afterValue = liveFrameDurationText
-            )
-            PerformanceMetricComparisonRow(
-                label = "٨. مخالفات StrictMode على Main Thread",
-                beforeValue = "١٩ مخالفة (قراءة قرص)",
-                afterValue = if (metrics.strictModeViolationsCount == 0) "٠ مخالفة (كل القرص على IO)" else "${metrics.strictModeViolationsCount} مخالفة"
-            )
-            PerformanceMetricComparisonRow(
-                label = "٩. إعادة رسم صف الطفل عند ضغط كارت",
-                beforeValue = "٥٨ صف (كل القائمة)",
-                afterValue = "١ صف فقط (إجمالي الجلسة: ${metrics.studentRowRecompositionCount})"
-            )
-
-            // Per-Context Jank Breakdown Table (lightweight Column instead of nested Surface)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+                .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             if (metrics.contextBreakdowns.isNotEmpty()) {
                 Column(
                     modifier = Modifier
@@ -2043,7 +2260,6 @@ private fun PerformanceMetricsSettingsCard() {
                 }
             }
 
-            // Detailed StrictMode Violations Breakdown (if any occurred)
             if (metrics.strictModeViolationDetails.isNotEmpty()) {
                 Column(
                     modifier = Modifier

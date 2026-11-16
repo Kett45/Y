@@ -91,7 +91,6 @@ import com.example.data.model.ChatFormatHelper
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.KamRepository
 import com.example.data.sync.GitHubSmartSyncEngine
-import com.example.data.sync.GitHubVersionManifest
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.signOut
 import com.example.ui.components.LocalStudentQuickPeekController
@@ -344,9 +343,6 @@ fun AuthenticatedKamApp(
     )
 
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val chatState by chatViewModel.chatState.collectAsStateWithLifecycle()
-    val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
-    val githubSyncState by GitHubSmartSyncEngine.syncState.collectAsStateWithLifecycle()
     var currentTab by rememberSaveable(sessionKey) { mutableStateOf(KamBottomTab.HOME) }
     var visitedTabNames by rememberSaveable(sessionKey) {
         mutableStateOf(listOf(KamBottomTab.HOME.name))
@@ -382,7 +378,17 @@ fun AuthenticatedKamApp(
         }
     }
 
-    LaunchedEffect(state.group?.inviteCode, state.students) {
+    val studentsPhotoSyncSignature = remember(state.students) {
+        state.students.fold(state.students.size) { acc, stu ->
+            if (stu.effectiveHasAvatar || stu.avatarBase64.isNotBlank()) {
+                (acc * 31) + stu.id.hashCode() + stu.effectiveAvatarKey.hashCode()
+            } else {
+                acc
+            }
+        }
+    }
+
+    LaunchedEffect(state.group?.inviteCode, studentsPhotoSyncSignature) {
         if (state.group != null && state.students.isNotEmpty()) {
             StudentAvatarImageHelper.syncAllStudentPhotosToLocalDisk(context, state.students)
         }
@@ -448,13 +454,9 @@ fun AuthenticatedKamApp(
         }
     }
 
-    LaunchedEffect(githubSyncState.silentDeltaBannerMessage) {
-        val msg = githubSyncState.silentDeltaBannerMessage
-        if (!msg.isNullOrBlank()) {
-            viewModel.showBanner(msg)
-            GitHubSmartSyncEngine.clearSilentDeltaBanner()
-        }
-    }
+    GitHubDeltaBannerBridge(
+        onShowBanner = viewModel::showBanner
+    )
 
     // Edge-triggered transient connectivity toast:
     // Appears ONLY when internet disconnects or reconnects (for 2.5 seconds), never permanently.
@@ -523,6 +525,7 @@ fun AuthenticatedKamApp(
     }
 
     if (state.userProfile?.groupId.isNullOrBlank() || state.group == null) {
+        val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
         GroupOnboardingScreen(
             defaultUserName = state.userProfile?.displayName ?: user.displayName.orEmpty(),
             isBusy = isBusy,
@@ -585,28 +588,7 @@ fun AuthenticatedKamApp(
                         selected = currentTab == KamBottomTab.MESSAGES,
                         onClick = { selectTab(KamBottomTab.MESSAGES) },
                         icon = {
-                            val badgeText = ChatFormatHelper.formatUnreadBadge(chatState.totalUnreadCount)
-                            BadgedBox(
-                                badge = {
-                                    if (badgeText.isNotBlank()) {
-                                        Badge(
-                                            containerColor = Color(0xFFEF4444),
-                                            contentColor = Color.White,
-                                            modifier = Modifier.testTag("nav_messages_unread_badge")
-                                        ) {
-                                            Text(
-                                                text = badgeText,
-                                                fontWeight = FontWeight.ExtraBold
-                                            )
-                                        }
-                                    }
-                                }
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Email,
-                                    contentDescription = stringResource(R.string.tab_messages)
-                                )
-                            }
+                            MessagesNavTabIcon(chatViewModel = chatViewModel)
                         },
                         label = {
                             Text(
@@ -709,7 +691,8 @@ fun AuthenticatedKamApp(
                     }
 
                     KamBottomTab.MESSAGES -> {
-                        val tabChatState = rememberFrozenWhileInactive(chatState, isTabActive)
+                        val liveChatState by chatViewModel.chatState.collectAsStateWithLifecycle()
+                        val tabChatState = rememberFrozenWhileInactive(liveChatState, isTabActive)
                         MessagesScreen(
                             chatState = tabChatState,
                             memberProfiles = tabState.memberProfiles,
@@ -775,13 +758,6 @@ fun AuthenticatedKamApp(
             hasPendingWrites = state.hasPendingWrites,
             actionBannerMessage = state.actionBannerMessage,
             errorMessage = state.errorMessage,
-            majorUpdatePrompt = githubSyncState.majorUpdatePrompt,
-            majorUpdateReasonArabic = githubSyncState.majorUpdateReasonArabic,
-            isDownloadingApk = githubSyncState.isDownloadingApk,
-            downloadProgressPercent = githubSyncState.downloadProgressPercent,
-            downloadedApkReady = githubSyncState.downloadedApkReady,
-            onInstallMajorUpdate = { GitHubSmartSyncEngine.openLatestFullApkDownload(context) },
-            onDismissMajorUpdate = { GitHubSmartSyncEngine.dismissMajorUpdatePrompt(context) },
             onDismissConnectivityToast = { showConnectivityToast = false },
             onRetryError = {
                 viewModel.clearError()
@@ -860,19 +836,53 @@ private fun RetainedBottomTabContainer(
             }
         }
     ) { measurables, constraints ->
-        val childConstraints = constraints.copy(minWidth = 0, minHeight = 0)
         val activeIndex = renderedTabs.indexOf(activeTab)
-        val placeables = ArrayList<Placeable>(measurables.size)
-        for (i in measurables.indices) {
-            placeables.add(
-                if (i == activeIndex) measurables[i].measure(constraints)
-                else measurables[i].measure(childConstraints)
-            )
+        val activePlaceable: Placeable? = if (activeIndex in measurables.indices) {
+            measurables[activeIndex].measure(constraints)
+        } else {
+            null
         }
         layout(constraints.maxWidth, constraints.maxHeight) {
-            if (activeIndex in placeables.indices) {
-                placeables[activeIndex].placeRelative(0, 0)
+            activePlaceable?.placeRelative(0, 0)
+        }
+    }
+}
+
+@Composable
+private fun MessagesNavTabIcon(chatViewModel: ChatViewModel) {
+    val chatState by chatViewModel.chatState.collectAsStateWithLifecycle()
+    val badgeText = ChatFormatHelper.formatUnreadBadge(chatState.totalUnreadCount)
+    BadgedBox(
+        badge = {
+            if (badgeText.isNotBlank()) {
+                Badge(
+                    containerColor = Color(0xFFEF4444),
+                    contentColor = Color.White,
+                    modifier = Modifier.testTag("nav_messages_unread_badge")
+                ) {
+                    Text(
+                        text = badgeText,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
             }
+        }
+    ) {
+        Icon(
+            imageVector = Icons.Default.Email,
+            contentDescription = stringResource(R.string.tab_messages)
+        )
+    }
+}
+
+@Composable
+private fun GitHubDeltaBannerBridge(onShowBanner: (String) -> Unit) {
+    val githubSyncState by GitHubSmartSyncEngine.syncState.collectAsStateWithLifecycle()
+    LaunchedEffect(githubSyncState.silentDeltaBannerMessage) {
+        val msg = githubSyncState.silentDeltaBannerMessage
+        if (!msg.isNullOrBlank()) {
+            onShowBanner(msg)
+            GitHubSmartSyncEngine.clearSilentDeltaBanner()
         }
     }
 }
@@ -884,18 +894,24 @@ private fun FloatingNotificationsOverlay(
     hasPendingWrites: Boolean,
     actionBannerMessage: String?,
     errorMessage: String?,
-    majorUpdatePrompt: GitHubVersionManifest? = null,
-    majorUpdateReasonArabic: String? = null,
-    isDownloadingApk: Boolean = false,
-    downloadProgressPercent: Int = 0,
-    downloadedApkReady: Boolean = false,
-    onInstallMajorUpdate: () -> Unit = {},
-    onDismissMajorUpdate: () -> Unit = {},
     onDismissConnectivityToast: () -> Unit,
     onRetryError: () -> Unit,
     onDismissError: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val githubSyncState by GitHubSmartSyncEngine.syncState.collectAsStateWithLifecycle()
+    val majorUpdatePrompt = githubSyncState.majorUpdatePrompt
+    val majorUpdateReasonArabic = githubSyncState.majorUpdateReasonArabic
+    val isDownloadingApk = githubSyncState.isDownloadingApk
+    val downloadProgressPercent = githubSyncState.downloadProgressPercent
+    val downloadedApkReady = githubSyncState.downloadedApkReady
+    val onInstallMajorUpdate: () -> Unit = remember(context) {
+        { GitHubSmartSyncEngine.openLatestFullApkDownload(context) }
+    }
+    val onDismissMajorUpdate: () -> Unit = remember(context) {
+        { GitHubSmartSyncEngine.dismissMajorUpdatePrompt(context) }
+    }
     Column(
         modifier = modifier
             .windowInsetsPadding(WindowInsets.safeDrawing)
