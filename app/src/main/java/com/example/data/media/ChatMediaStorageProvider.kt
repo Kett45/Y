@@ -1,5 +1,6 @@
 package com.example.data.media
 
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -7,6 +8,8 @@ import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
 import android.util.LruCache
@@ -17,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -56,6 +60,16 @@ interface ChatMediaStorageProvider {
         messageId: String,
         payload: PreparedChatMediaPayload
     )
+
+    suspend fun saveImageToDeviceGallery(
+        context: Context,
+        message: ChatMessage
+    ): Result<String>
+
+    suspend fun saveAudioToDeviceDownloads(
+        context: Context,
+        message: ChatMessage
+    ): Result<String>
 }
 
 /**
@@ -295,6 +309,123 @@ object InlineFirestoreChatMediaStorageProvider : ChatMediaStorageProvider {
                 null
             }
         }.getOrNull()
+    }
+
+    override suspend fun saveImageToDeviceGallery(
+        context: Context,
+        message: ChatMessage
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(!message.isDeleted && message.id.isNotBlank()) { "الصورة غير متوفرة للحفظ" }
+            val appCtx = context.applicationContext
+            val cachedFile = imageCacheFile(appCtx, message.id)
+            val bytes: ByteArray = when {
+                cachedFile.exists() && cachedFile.length() > 0L -> cachedFile.readBytes()
+                message.mediaBase64.isNotBlank() -> {
+                    Base64.decode(message.mediaBase64, Base64.DEFAULT).also { decoded ->
+                        runCatching { cachedFile.writeBytes(decoded) }
+                    }
+                }
+                else -> throw IllegalStateException("بيانات الصورة غير متوفرة")
+            }
+
+            val safeId = message.id.replace(SAFE_ID_REGEX, "_").take(24)
+            val fileName = "kAM_Chat_${safeId}_${System.currentTimeMillis()}.jpg"
+            val resolver = appCtx.contentResolver
+            val contentValues = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/kAM_Lite")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+            }
+            val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+            val insertedUri = runCatching { resolver.insert(collectionUri, contentValues) }.getOrNull()
+            if (insertedUri != null) {
+                resolver.openOutputStream(insertedUri)?.use { out ->
+                    out.write(bytes)
+                    out.flush()
+                } ?: throw IllegalStateException("تعذر الكتابة في معرض الصور")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    resolver.update(
+                        insertedUri,
+                        ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) },
+                        null,
+                        null
+                    )
+                }
+                "Pictures/kAM_Lite/$fileName"
+            } else {
+                val fallbackDir = File(
+                    appCtx.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
+                    "kAM_Lite"
+                ).apply { mkdirs() }
+                val fallbackFile = File(fallbackDir, fileName)
+                FileOutputStream(fallbackFile).use { out ->
+                    out.write(bytes)
+                    out.flush()
+                }
+                fallbackFile.absolutePath
+            }
+        }
+    }
+
+    override suspend fun saveAudioToDeviceDownloads(
+        context: Context,
+        message: ChatMessage
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(!message.isDeleted && message.id.isNotBlank()) { "التسجيل الصوتي غير متوفر للحفظ" }
+            val appCtx = context.applicationContext
+            val cachedFile = loadOrCacheAudioFile(appCtx, message)
+            val bytes = when {
+                cachedFile != null && cachedFile.exists() && cachedFile.length() > 0L -> cachedFile.readBytes()
+                message.mediaBase64.isNotBlank() -> Base64.decode(message.mediaBase64, Base64.DEFAULT)
+                else -> throw IllegalStateException("ملف التسجيل غير متوفر")
+            }
+
+            val safeId = message.id.replace(SAFE_ID_REGEX, "_").take(24)
+            val fileName = "kAM_Voice_${safeId}_${System.currentTimeMillis()}.m4a"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = appCtx.contentResolver
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.MIME_TYPE, "audio/mp4")
+                    put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/kAM_Lite")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val collectionUri = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val insertedUri = runCatching { resolver.insert(collectionUri, contentValues) }.getOrNull()
+                if (insertedUri != null) {
+                    resolver.openOutputStream(insertedUri)?.use { out ->
+                        out.write(bytes)
+                        out.flush()
+                    } ?: throw IllegalStateException("تعذر حفظ التسجيل في التنزيلات")
+                    resolver.update(
+                        insertedUri,
+                        ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) },
+                        null,
+                        null
+                    )
+                    return@runCatching "Downloads/kAM_Lite/$fileName"
+                }
+            }
+            val fallbackDir = File(
+                appCtx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
+                "kAM_Lite"
+            ).apply { mkdirs() }
+            val fallbackFile = File(fallbackDir, fileName)
+            FileOutputStream(fallbackFile).use { out ->
+                out.write(bytes)
+                out.flush()
+            }
+            fallbackFile.absolutePath
+        }
     }
 }
 

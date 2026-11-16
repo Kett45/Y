@@ -93,6 +93,7 @@ import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.signOut
 import com.example.ui.components.LocalStudentQuickPeekController
 import com.example.ui.components.ServantPhoneOnboardingWizardDialog
+import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.components.StudentHoldQuickPeekRootOverlay
 import com.example.ui.components.StudentQuickPeekController
 import com.example.ui.screens.GroupInvitationsScreen
@@ -341,6 +342,17 @@ fun AuthenticatedKamApp(
         )
         if (state.group != null) {
             chatViewModel.touchOwnLastSeenThrottled()
+        }
+    }
+
+    val studentsAvatarSyncKey = remember(state.group?.inviteCode, state.students) {
+        val gid = state.group?.inviteCode.orEmpty()
+        val sig = state.students.joinToString("|") { "${it.id}:${it.effectiveAvatarKey}:${it.effectiveHasAvatar}" }
+        "$gid#$sig"
+    }
+    LaunchedEffect(studentsAvatarSyncKey) {
+        if (state.group != null && state.students.isNotEmpty()) {
+            StudentAvatarImageHelper.syncAllStudentPhotosToLocalDisk(context, state.students)
         }
     }
 
@@ -658,6 +670,7 @@ fun AuthenticatedKamApp(
                         MessagesScreen(
                             chatState = chatState,
                             memberProfiles = state.memberProfiles,
+                            students = state.students,
                             currentUserId = user.uid,
                             mediaStorage = chatViewModel.mediaStorage,
                             onOpenGroupChat = chatViewModel::openGroupChat,

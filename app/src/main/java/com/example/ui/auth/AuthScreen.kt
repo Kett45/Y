@@ -479,8 +479,8 @@ fun AuthScreen(
                         )
                         FeatureRow(
                             icon = Icons.Default.Groups,
-                            title = "الأمين + ٦ خدام في مجموعة واحدة",
-                            subtitle = "بلوك ملوّن لكل خادم (~١٠ أطفال) + قسم بدون بلوك واستيراد ٦٠ اسم دفعة واحدة"
+                            title = "الأمين + حتى ٥٠ خادم في مجموعة واحدة",
+                            subtitle = "بلوك ملوّن لكل خادم + قسم بدون بلوك واستيراد الأسماء دفعة واحدة"
                         )
                         FeatureRow(
                             icon = Icons.Default.CloudOff,

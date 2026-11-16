@@ -339,6 +339,7 @@ class ChatViewModel(
     fun openGroupChat() {
         val ctx = _classroomContext.value
         if (ctx.groupId.isBlank()) return
+        _mediaErrorMessage.value = null
         val room = ActiveChatRoom.GroupRoom(
             groupId = ctx.groupId,
             groupName = ctx.groupName
@@ -353,6 +354,7 @@ class ChatViewModel(
     fun openDirectChat(peerUid: String, peerName: String) {
         val ctx = _classroomContext.value
         if (ctx.groupId.isBlank() || peerUid.isBlank() || peerUid == currentUserId) return
+        _mediaErrorMessage.value = null
         val chatId = DmChatMeta.buildDmChatId(currentUserId, peerUid)
         val room = ActiveChatRoom.DirectRoom(
             chatId = chatId,
@@ -594,7 +596,7 @@ class ChatViewModel(
             chatRepository.sendGroupMessage(
                 groupId = ctx.groupId,
                 senderName = ctx.ownDisplayName.ifBlank { "النظام" },
-                text = systemText.trim().take(ChatMessage.MAX_TEXT_LENGTH),
+                text = systemText.trim().take(ChatMessage.MAX_SYSTEM_TEXT_LENGTH),
                 memberUids = ctx.memberUids.ifEmpty { listOf(currentUserId) },
                 type = ChatMessageType.SYSTEM,
                 waitForServerAck = false

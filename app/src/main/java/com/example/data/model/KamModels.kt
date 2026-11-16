@@ -487,6 +487,7 @@ data class DuplicateCardAlert(
 }
 
 const val MAX_STUDENTS_PER_GROUP = 150
+const val MAX_SERVANTS_PER_GROUP = 50
 
 @Immutable
 data class CopticDate(

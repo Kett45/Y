@@ -9,6 +9,7 @@ import com.example.data.model.CardEvent
 import com.example.data.model.CardType
 import com.example.data.model.Group
 import com.example.data.model.Invitation
+import com.example.data.model.MAX_SERVANTS_PER_GROUP
 import com.example.data.model.MonthlyBalance
 import com.example.data.model.ServantBlock
 import com.example.data.model.ServantMemberProfile
@@ -360,6 +361,14 @@ class KamRepository(private val db: FirebaseFirestore) {
                 sortOrder = 0,
                 memberUids = memberUids
             )
+            runCatching {
+                upsertOwnMemberProfile(
+                    groupId = inviteCode,
+                    displayName = safeAdminName,
+                    memberUids = memberUids,
+                    waitForServerAck = false
+                )
+            }
 
             Group(
                 id = inviteCode,
@@ -438,7 +447,9 @@ class KamRepository(private val db: FirebaseFirestore) {
             val updatedMembers = if (uid in group.memberUids) {
                 group.memberUids
             } else {
-                require(group.memberUids.size < 7) { "المجموعة مكتملة (الأمين + 6 خدام كحد أقصى)" }
+                require(group.memberUids.size < MAX_SERVANTS_PER_GROUP) {
+                    "المجموعة مكتملة ($MAX_SERVANTS_PER_GROUP خادم كحد أقصى)"
+                }
                 val newMembers = group.memberUids + uid
                 groupRef.update(
                     mapOf(
@@ -479,6 +490,15 @@ class KamRepository(private val db: FirebaseFirestore) {
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 ).await()
+            }
+
+            runCatching {
+                upsertOwnMemberProfile(
+                    groupId = groupPrefix,
+                    displayName = safeServantName,
+                    memberUids = updatedMembers,
+                    waitForServerAck = false
+                )
             }
 
             group.copy(memberUids = updatedMembers)
@@ -664,7 +684,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         if (groupId.isBlank()) return@runCatching 0
         val groupRef = db.collection("groups").document(groupId)
         val userRef = db.collection("users").document(currentUserId)
-        val safeMembers = targetMemberUids.ifEmpty { listOf(currentUserId) }.distinct().take(10)
+        val safeMembers = targetMemberUids.ifEmpty { listOf(currentUserId) }.distinct().take(MAX_SERVANTS_PER_GROUP)
         var migratedCount = 0
 
         // Step A: Migrate any legacy blocks under users/{uid}/blocks -> groups/{groupId}/blocks
@@ -880,7 +900,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                         mapOf(
                             "studentId" to keepStudent.id,
                             "studentName" to keepStudent.name.take(100),
-                            "memberUids" to memberUids.distinct().take(10),
+                            "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     )
@@ -934,7 +954,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                 "inviteCode" to fullInviteCode.trim().take(32),
                 "status" to "PENDING",
                 "acceptedByUid" to "",
-                "memberUids" to memberUids.distinct().take(10),
+                "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
@@ -961,7 +981,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                 mapOf(
                     "status" to if (accept) "ACCEPTED" else "REJECTED",
                     "acceptedByUid" to uid,
-                    "memberUids" to memberUids.distinct().take(10),
+                    "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
@@ -1044,7 +1064,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                 "servantName" to servantName.trim().ifBlank { "بلوك خادم" }.take(100),
                 "colorHex" to colorHex.take(30),
                 "sortOrder" to sortOrder.toLong().coerceIn(0L, 10000L),
-                "memberUids" to memberUids.distinct().take(10),
+                "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
@@ -1078,7 +1098,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                     "servantName" to servantName.trim().ifBlank { "بلوك خادم" }.take(100),
                     "colorHex" to colorHex.take(30),
                     "sortOrder" to sortOrder.coerceIn(0L, 10000L),
-                    "memberUids" to memberUids.distinct().take(10),
+                    "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )
@@ -1235,7 +1255,7 @@ class KamRepository(private val db: FirebaseFirestore) {
 
             val safeMembers = memberUids.ifEmpty {
                 current?.memberUids.orEmpty().ifEmpty { listOf(uid) }
-            }.distinct().take(10)
+            }.distinct().take(MAX_SERVANTS_PER_GROUP)
 
             val payload = HashMap<String, Any>().apply {
                 put("uid", uid)
@@ -1356,7 +1376,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                 "position" to safePosition,
                 "avatarInitials" to ArabicInitialsHelper.extractInitials(cleanName),
                 "createdByUid" to uid,
-                "memberUids" to memberUids.distinct().take(10),
+                "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
@@ -1391,7 +1411,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         if (cleanNames.isEmpty()) return@runCatching 0
 
         val studentsCol = db.collection("groups").document(groupId).collection("students")
-        val safeMembers = memberUids.distinct().take(10)
+        val safeMembers = memberUids.distinct().take(MAX_SERVANTS_PER_GROUP)
 
         try {
             cleanNames.chunked(100).forEachIndexed { chunkIdx, chunk ->
@@ -1448,7 +1468,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                     "blockId" to targetBlockId.take(128),
                     "sortOrder" to newSortOrder.coerceIn(0L, 100000L),
                     "position" to safePosition,
-                    "memberUids" to memberUids.distinct().take(10),
+                    "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )
@@ -1559,7 +1579,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                     "sortOrder" to newSortOrder.coerceIn(0L, 100000L),
                     "position" to safePosition,
                     "avatarInitials" to ArabicInitialsHelper.extractInitials(cleanName),
-                    "memberUids" to memberUids.distinct().take(10),
+                    "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )
@@ -1591,7 +1611,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         val safeAvatar = avatarBase64.trim().take(50000)
         val hasAvatar = safeAvatar.isNotBlank()
         val avatarHash = Student.computeAvatarHash(safeAvatar)
-        val safeMembers = memberUids.ifEmpty { listOf(uid) }.distinct().take(10)
+        val safeMembers = memberUids.ifEmpty { listOf(uid) }.distinct().take(MAX_SERVANTS_PER_GROUP)
 
         val groupRef = db.collection("groups").document(groupId)
         val studentRef = groupRef.collection("students").document(studentId)
@@ -1673,7 +1693,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         if (groupId.isBlank() || studentsWithInlineAvatars.isEmpty()) return@runCatching 0
         val uid = auth.currentUser?.uid ?: return@runCatching 0
         val groupRef = db.collection("groups").document(groupId)
-        val safeMembers = memberUids.ifEmpty { listOf(uid) }.distinct().take(10)
+        val safeMembers = memberUids.ifEmpty { listOf(uid) }.distinct().take(MAX_SERVANTS_PER_GROUP)
         var migrated = 0
         studentsWithInlineAvatars.chunked(20).forEach { chunk ->
             val batch = db.batch()
@@ -1898,7 +1918,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         val groupRef = db.collection("groups").document(groupId)
         val eventRef = groupRef.collection("cardEvents").document(eventId)
         val balanceRef = groupRef.collection("monthlyBalances").document(balanceId)
-        val safeMembers = memberUids.distinct().take(10)
+        val safeMembers = memberUids.distinct().take(MAX_SERVANTS_PER_GROUP)
 
         try {
             val batch = db.batch()
@@ -2032,7 +2052,7 @@ class KamRepository(private val db: FirebaseFirestore) {
 
         val safeServantName = servantName.trim().ifBlank { "خادم" }.take(80)
         val safeNote = note.trim().take(AttendanceRecord.MAX_NOTE_LENGTH)
-        val safeMembers = (memberUids + uid).filter { it.isNotBlank() }.distinct().take(10)
+        val safeMembers = (memberUids + uid).filter { it.isNotBlank() }.distinct().take(MAX_SERVANTS_PER_GROUP)
         val createdAtVal: Any = existingRecord?.createdAt ?: FieldValue.serverTimestamp()
 
         val payload = mapOf(

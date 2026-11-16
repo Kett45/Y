@@ -120,7 +120,7 @@ service cloud.firestore {
         isNonEmptyString(data.name, 100) &&
         isNonEmptyString(data.adminId, 64) &&
         isNonEmptyString(data.adminName, 100) &&
-        isBoundedStringList(data.memberUids, 1, 10) &&
+        isBoundedStringList(data.memberUids, 1, 50) &&
         data.adminId in data.memberUids &&
         data.allowServantUndo is bool &&
         data.enforceWeeklyCardLimit is bool &&
@@ -152,7 +152,7 @@ service cloud.firestore {
         data.inviteCode == groupId &&
         data.status in ['PENDING', 'ACCEPTED', 'REJECTED'] &&
         isOptionalString(data.acceptedByUid, 64) &&
-        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -171,7 +171,7 @@ service cloud.firestore {
         isNonEmptyString(data.servantName, 80) &&
         isNonEmptyString(data.colorHex, 24) &&
         data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 500 &&
-        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -199,7 +199,7 @@ service cloud.firestore {
         (!('hasAvatar' in data) || data.hasAvatar is bool) &&
         (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
         isNonEmptyString(data.createdByUid, 64) &&
-        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -219,7 +219,7 @@ service cloud.firestore {
         isOptionalString(data.avatarBase64, 50000) &&
         isOptionalString(data.avatarHash, 64) &&
         isNonEmptyString(data.updatedByUid, 64) &&
-        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -253,7 +253,7 @@ service cloud.firestore {
         isNonEmptyString(data.servantName, 80) &&
         isNonEmptyString(data.monthKey, 12) &&
         isNonEmptyString(data.weekKey, 16) &&
-        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -276,7 +276,7 @@ service cloud.firestore {
         data.totalPoints is int && data.totalPoints >= 0 && data.totalPoints <= 100000 &&
         data.eventsCount is int && data.eventsCount >= 0 && data.eventsCount <= 10000 &&
         isNonEmptyString(data.lastUpdatedByUid, 64) &&
-        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -305,7 +305,7 @@ service cloud.firestore {
         (!('hasAvatar' in data) || data.hasAvatar is bool) &&
         (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
         (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 50000)) &&
-        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 10)) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
         (!('lastSeenAt' in data) || data.lastSeenAt is timestamp) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -313,8 +313,11 @@ service cloud.firestore {
 
     function isValidChatMessagePayloadByType(data) {
       return (
-        (data.type in ['TEXT', 'SYSTEM'] &&
+        (data.type == 'TEXT' &&
           data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
+          (!('mediaBase64' in data) || data.mediaBase64 == '')) ||
+        (data.type == 'SYSTEM' &&
+          data.text is string && data.text.size() > 0 && data.text.size() <= 4000 &&
           (!('mediaBase64' in data) || data.mediaBase64 == '')) ||
         (data.type == 'IMAGE' &&
           data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
@@ -345,7 +348,7 @@ service cloud.firestore {
           'totalMessagesCount', 'memberUids', 'updatedAt'
         ]) &&
         data.groupId == groupId &&
-        isBoundedStringList(data.memberUids, 1, 10) &&
+        isBoundedStringList(data.memberUids, 1, 50) &&
         uid() in data.memberUids &&
         (!('lastMessageId' in data) || isOptionalString(data.lastMessageId, 120)) &&
         (!('lastMessageText' in data) || isOptionalString(data.lastMessageText, 1000)) &&
@@ -373,9 +376,9 @@ service cloud.firestore {
         data.type in ['TEXT', 'IMAGE', 'AUDIO', 'SYSTEM'] &&
         isValidChatMessagePayloadByType(data) &&
         data.isDeleted == false &&
-        isBoundedStringList(data.memberUids, 1, 10) &&
+        isBoundedStringList(data.memberUids, 1, 50) &&
         uid() in data.memberUids &&
-        data.createdAt == request.time &&
+        data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
@@ -435,7 +438,7 @@ service cloud.firestore {
         data.isDeleted == false &&
         isBoundedStringList(data.participants, 2, 2) &&
         uid() in data.participants &&
-        data.createdAt == request.time &&
+        data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
@@ -457,7 +460,7 @@ service cloud.firestore {
         isNonEmptyString(data.servantId, 64) &&
         isNonEmptyString(data.servantName, 80) &&
         isOptionalString(data.note, 200) &&
-        isBoundedStringList(data.memberUids, 1, 10) &&
+        isBoundedStringList(data.memberUids, 1, 50) &&
         data.createdAt is timestamp &&
         (!('updatedAt' in data) || data.updatedAt is timestamp);
     }
@@ -683,27 +686,35 @@ service cloud.firestore {
     }
 
     // 3. Private Direct Message Rooms (dms/{chatId} where chatId = dm_{uidA}_{uidB} sorted)
-    // Strictly restricted to the 2 participants via `participants` array without `get()`.
+    // Authorized via deterministic path `uid() in chatId.split('_')` or `participants` array without `get()`.
     match /dms/{chatId} {
       allow get: if isSignedIn() && (
         resource == null ||
+        (uid() in chatId.split('_')) ||
         ('participants' in existing() && uid() in existing().participants)
       );
-      allow list: if isSignedIn() && 'participants' in existing() && uid() in existing().participants;
+      allow list: if isSignedIn() && uid() in existing().participants;
       allow create: if isSignedIn() && isValidDmChatMeta(incoming(), chatId);
       allow update: if isSignedIn() &&
-        'participants' in existing() &&
-        uid() in existing().participants &&
-        incoming().participants == existing().participants &&
+        (
+          (uid() in chatId.split('_')) ||
+          ('participants' in existing() && uid() in existing().participants)
+        ) &&
+        (!('participants' in existing()) || incoming().participants == existing().participants) &&
         isValidDmChatMeta(incoming(), chatId);
       allow delete: if false;
 
       match /messages/{messageId} {
-        allow get, list: if isSignedIn() && 'participants' in existing() && uid() in existing().participants;
+        allow get, list: if isSignedIn() && (
+          (uid() in chatId.split('_')) ||
+          ('participants' in existing() && uid() in existing().participants)
+        );
         allow create: if isSignedIn() && isValidDmChatMessageCreate(incoming(), chatId);
         allow update: if isSignedIn() &&
-          'participants' in existing() &&
-          uid() in existing().participants &&
+          (
+            (uid() in chatId.split('_')) ||
+            ('participants' in existing() && uid() in existing().participants)
+          ) &&
           isValidChatMessageSoftDelete(incoming(), existing());
         allow delete: if false;
       }

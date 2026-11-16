@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -12,6 +13,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Groups
@@ -70,12 +73,14 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -96,15 +101,22 @@ import com.example.data.media.ChatMediaStorageProvider
 import com.example.data.media.ChatVoiceRecorderHelper
 import com.example.data.media.InlineFirestoreChatMediaStorageProvider
 import com.example.data.model.ActiveChatRoom
+import com.example.data.model.AttendanceStatus
 import com.example.data.model.ChatFormatHelper
 import com.example.data.model.ChatMessage
 import com.example.data.model.ChatMessageType
 import com.example.data.model.DmChatMeta
 import com.example.data.model.ServantMemberProfile
+import com.example.data.model.Student
 import com.example.ui.components.ServantAvatarCircle
+import com.example.ui.components.StudentAvatarCircle
+import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.viewmodel.ChatUiState
 import com.example.ui.viewmodel.GroupFellowServantItem
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.abs
 
@@ -128,6 +140,7 @@ private fun senderDeterministicColor(senderUid: String): Color {
 fun MessagesScreen(
     chatState: ChatUiState,
     memberProfiles: List<ServantMemberProfile>,
+    students: List<Student> = emptyList(),
     currentUserId: String,
     mediaStorage: ChatMediaStorageProvider = InlineFirestoreChatMediaStorageProvider,
     onOpenGroupChat: () -> Unit,
@@ -149,6 +162,7 @@ fun MessagesScreen(
                 room = activeRoom,
                 chatState = chatState,
                 memberProfiles = memberProfiles,
+                students = students,
                 currentUserId = currentUserId,
                 mediaStorage = mediaStorage,
                 onBack = onCloseActiveChat,
@@ -253,9 +267,10 @@ private fun ConversationsListView(
 
             // 1. Pinned Group Chat Room ("جروب الفصل")
             item(key = "pinned_group_chat_room") {
+                val totalServants = maxOf(chatState.groupMemberUids.size, chatState.fellowServants.size + 1).coerceAtLeast(1)
                 PinnedGroupChatCard(
                     groupName = chatState.activeGroupName,
-                    servantsCount = chatState.groupMemberUids.size.coerceAtLeast(1),
+                    servantsCount = totalServants,
                     groupMeta = chatState.groupChatMeta,
                     unreadCount = chatState.groupUnreadCount,
                     currentUserId = currentUserId,
@@ -767,6 +782,7 @@ private fun ChatConversationView(
     room: ActiveChatRoom,
     chatState: ChatUiState,
     memberProfiles: List<ServantMemberProfile>,
+    students: List<Student>,
     currentUserId: String,
     mediaStorage: ChatMediaStorageProvider,
     onBack: () -> Unit,
@@ -778,13 +794,15 @@ private fun ChatConversationView(
     onLoadOlderMessages: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val audioPlayer = remember { ChatAudioPlayerController() }
     val voiceRecorder = remember(context) { ChatVoiceRecorderHelper(context.applicationContext) }
 
     var isRecordingAudio by remember { mutableStateOf(false) }
     var recordingSeconds by remember { mutableIntStateOf(0) }
     var localVoiceError by remember { mutableStateOf<String?>(null) }
-    var fullscreenBitmapPreview by remember { mutableStateOf<Bitmap?>(null) }
+    var fullscreenImagePreview by remember { mutableStateOf<Pair<ChatMessage, Bitmap>?>(null) }
+    var inspectedAttendanceStudent by remember { mutableStateOf<Pair<Student, String>?>(null) }
 
     DisposableEffect(room.roomKey) {
         onDispose {
@@ -967,8 +985,9 @@ private fun ChatConversationView(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            val totalServants = maxOf(chatState.groupMemberUids.size, chatState.fellowServants.size + 1).coerceAtLeast(1)
                             Text(
-                                text = "غرفة خدام الفصل (${chatState.groupMemberUids.size.coerceAtLeast(1)} خدام)",
+                                text = "غرفة خدام الفصل ($totalServants خدام)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1082,7 +1101,13 @@ private fun ChatConversationView(
                             is ChatTimelineRowItem.MessageRow -> {
                                 val msg = row.message
                                 if (msg.messageType == ChatMessageType.SYSTEM) {
-                                    SystemMessageCenteredPill(message = msg)
+                                    SystemMessageCenteredPill(
+                                        message = msg,
+                                        students = students,
+                                        onInspectStudentPhoto = { stu, note ->
+                                            inspectedAttendanceStudent = stu to note
+                                        }
+                                    )
                                 } else {
                                     WhatsAppStyleMessageBubble(
                                         message = msg,
@@ -1090,7 +1115,9 @@ private fun ChatConversationView(
                                         showSenderName = room is ActiveChatRoom.GroupRoom && msg.senderUid != currentUserId,
                                         mediaStorage = mediaStorage,
                                         audioPlayer = audioPlayer,
-                                        onOpenFullscreenImage = { bmp -> fullscreenBitmapPreview = bmp },
+                                        onOpenFullscreenImage = { bmp ->
+                                            fullscreenImagePreview = msg to bmp
+                                        },
                                         onRequestDelete = {
                                             if (msg.senderUid == currentUserId && !msg.isDeleted) {
                                                 messagePendingDelete = msg
@@ -1358,12 +1385,41 @@ private fun ChatConversationView(
         }
     }
 
-    // Fullscreen Image Preview Dialog
-    val previewBitmap = fullscreenBitmapPreview
-    if (previewBitmap != null) {
+    // Fullscreen Image Preview Dialog with Save-to-Device button
+    val previewPair = fullscreenImagePreview
+    if (previewPair != null) {
         FullscreenChatImageDialog(
-            bitmap = previewBitmap,
-            onDismiss = { fullscreenBitmapPreview = null }
+            bitmap = previewPair.second,
+            onSaveToDevice = {
+                scope.launch {
+                    mediaStorage.saveImageToDeviceGallery(context, previewPair.first)
+                        .onSuccess {
+                            Toast.makeText(
+                                context,
+                                "تم حفظ الصورة في المعرض (Pictures/kAM_Lite) ✓",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        .onFailure { err ->
+                            Toast.makeText(
+                                context,
+                                err.localizedMessage ?: "تعذّر حفظ الصورة",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                }
+            },
+            onDismiss = { fullscreenImagePreview = null }
+        )
+    }
+
+    // Inspected Student Photo from Visual Attendance Report Card
+    val inspectedPair = inspectedAttendanceStudent
+    if (inspectedPair != null) {
+        AttendanceReportedChildPhotoDialog(
+            student = inspectedPair.first,
+            note = inspectedPair.second,
+            onDismiss = { inspectedAttendanceStudent = null }
         )
     }
 
@@ -1402,7 +1458,7 @@ private fun ChatConversationView(
             },
             dismissButton = {
                 TextButton(onClick = { messagePendingDelete = null }) {
-                    Text("إلغاء")
+                    Text("إغلاق")
                 }
             }
         )
@@ -1412,6 +1468,7 @@ private fun ChatConversationView(
 @Composable
 private fun FullscreenChatImageDialog(
     bitmap: Bitmap,
+    onSaveToDevice: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(
@@ -1421,7 +1478,7 @@ private fun FullscreenChatImageDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.92f))
+                .background(Color.Black.copy(alpha = 0.94f))
                 .clickable(onClick = onDismiss),
             contentAlignment = Alignment.Center
         ) {
@@ -1431,18 +1488,43 @@ private fun FullscreenChatImageDialog(
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp)
+                    .padding(horizontal = 16.dp, vertical = 72.dp)
             )
             IconButton(
                 onClick = onDismiss,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(16.dp)
+                    .size(48.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "إغلاق",
                     tint = Color.White
+                )
+            }
+            Button(
+                onClick = onSaveToDevice,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF059669),
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(24.dp)
+                    .heightIn(min = 48.dp)
+                    .testTag("fullscreen_save_chat_image_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowDownward,
+                    contentDescription = "حفظ الصورة على الجهاز",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "حفظ الصورة على الجهاز",
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
@@ -1473,30 +1555,497 @@ private fun DaySeparatorChip(label: String) {
     }
 }
 
-@Composable
-private fun SystemMessageCenteredPill(message: ChatMessage) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp, horizontal = 20.dp)
-            .testTag("system_message_${message.id}"),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            color = Color(0xFFF59E0B).copy(alpha = 0.16f),
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f))
-        ) {
-            Text(
-                text = message.displayText,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+private data class ParsedAttendanceChildEntry(
+    val student: Student,
+    val studentNumber: Long,
+    val studentName: String,
+    val status: AttendanceStatus,
+    val note: String = ""
+)
+
+private data class ParsedAttendanceChatReport(
+    val servantName: String,
+    val absentEntries: List<ParsedAttendanceChildEntry>,
+    val issueEntries: List<ParsedAttendanceChildEntry>
+)
+
+private val LEGACY_ATTENDANCE_SPLIT_REGEX = Regex("""\s*[،,]\s*(?=[^()]*\(#\d+)""")
+private val LEGACY_ATTENDANCE_ITEM_REGEX = Regex("""^(.+?)\s*\(\s*#(\d+)(?:\s*-\s*(.+?))?\s*\)$""")
+
+private fun matchStudentForAttendanceReport(
+    studentId: String,
+    studentNumber: Long,
+    studentName: String,
+    students: List<Student>
+): Student {
+    val cleanId = studentId.trim()
+    val cleanName = studentName.trim()
+    val matched = students.firstOrNull { cleanId.isNotBlank() && it.id == cleanId }
+        ?: students.firstOrNull { studentNumber > 0L && it.studentNumber == studentNumber }
+        ?: students.firstOrNull { cleanName.isNotBlank() && it.name.trim() == cleanName }
+    return matched ?: Student(
+        id = cleanId.ifBlank { "tmp_${studentNumber}_${cleanName.hashCode()}" },
+        name = cleanName.ifBlank { "طفل" },
+        studentNumber = studentNumber,
+        hasAvatar = false
+    )
+}
+
+private fun parseAttendanceSystemMessage(
+    rawText: String,
+    students: List<Student>
+): ParsedAttendanceChatReport? {
+    val trimmed = rawText.trim()
+    if (trimmed.isBlank()) return null
+
+    if (trimmed.startsWith(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX)) {
+        var servant = "خادم"
+        val absent = mutableListOf<ParsedAttendanceChildEntry>()
+        val issue = mutableListOf<ParsedAttendanceChildEntry>()
+        for (line in trimmed.lineSequence()) {
+            when {
+                line.startsWith("S|") -> {
+                    servant = line.removePrefix("S|").trim().ifBlank { "خادم" }
+                }
+                line.startsWith("A|") -> {
+                    val parts = line.split("|")
+                    if (parts.size >= 4) {
+                        val sId = parts[1].trim()
+                        val sNum = parts[2].trim().toLongOrNull() ?: 0L
+                        val sName = parts[3].trim()
+                        val matched = matchStudentForAttendanceReport(sId, sNum, sName, students)
+                        absent.add(
+                            ParsedAttendanceChildEntry(
+                                student = matched,
+                                studentNumber = if (sNum > 0L) sNum else matched.studentNumber,
+                                studentName = sName.ifBlank { matched.name },
+                                status = AttendanceStatus.ABSENT
+                            )
+                        )
+                    }
+                }
+                line.startsWith("I|") -> {
+                    val parts = line.split("|")
+                    if (parts.size >= 4) {
+                        val sId = parts[1].trim()
+                        val sNum = parts[2].trim().toLongOrNull() ?: 0L
+                        val sName = parts[3].trim()
+                        val note = parts.getOrNull(4).orEmpty().trim()
+                        val matched = matchStudentForAttendanceReport(sId, sNum, sName, students)
+                        issue.add(
+                            ParsedAttendanceChildEntry(
+                                student = matched,
+                                studentNumber = if (sNum > 0L) sNum else matched.studentNumber,
+                                studentName = sName.ifBlank { matched.name },
+                                status = AttendanceStatus.ISSUE,
+                                note = note
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        if (absent.isNotEmpty() || issue.isNotEmpty()) {
+            return ParsedAttendanceChatReport(
+                servantName = servant,
+                absentEntries = absent.sortedBy { it.studentNumber },
+                issueEntries = issue.sortedBy { it.studentNumber }
             )
         }
     }
+
+    // Legacy compatibility: "📋 تحضير الفصل (بواسطة X) — غائب (N): name (#5)، ... | عمل مشكلة (M): name (#47)"
+    if (trimmed.contains("تحضير الفصل") && (trimmed.contains("غائب (") || trimmed.contains("عمل مشكلة ("))) {
+        val servantMatch = Regex("""بواسطة\s+([^)]+)\)""").find(trimmed)
+        val servant = servantMatch?.groupValues?.getOrNull(1)?.trim().orEmpty().ifBlank { "خادم" }
+        val bodyAfterDash = trimmed.substringAfter("—", trimmed)
+        val segments = bodyAfterDash.split("|")
+        val absent = mutableListOf<ParsedAttendanceChildEntry>()
+        val issue = mutableListOf<ParsedAttendanceChildEntry>()
+
+        for (seg in segments) {
+            val cleanSeg = seg.trim()
+            val isAbsentSeg = cleanSeg.startsWith("غائب")
+            val isIssueSeg = cleanSeg.startsWith("عمل مشكلة")
+            if (!isAbsentSeg && !isIssueSeg) continue
+            val listText = cleanSeg.substringAfter(":", "").trim()
+            if (listText.isBlank()) continue
+            val items = listText.split(LEGACY_ATTENDANCE_SPLIT_REGEX)
+            for (rawItem in items) {
+                val item = rawItem.trim()
+                val m = LEGACY_ATTENDANCE_ITEM_REGEX.find(item) ?: continue
+                val name = m.groupValues[1].trim()
+                val num = m.groupValues[2].trim().toLongOrNull() ?: 0L
+                val note = m.groupValues[3].trim()
+                val matched = matchStudentForAttendanceReport("", num, name, students)
+                val entry = ParsedAttendanceChildEntry(
+                    student = matched,
+                    studentNumber = if (num > 0L) num else matched.studentNumber,
+                    studentName = name.ifBlank { matched.name },
+                    status = if (isAbsentSeg) AttendanceStatus.ABSENT else AttendanceStatus.ISSUE,
+                    note = note
+                )
+                if (isAbsentSeg) absent.add(entry) else issue.add(entry)
+            }
+        }
+        if (absent.isNotEmpty() || issue.isNotEmpty()) {
+            return ParsedAttendanceChatReport(
+                servantName = servant,
+                absentEntries = absent.sortedBy { it.studentNumber },
+                issueEntries = issue.sortedBy { it.studentNumber }
+            )
+        }
+    }
+    return null
+}
+
+@Composable
+private fun SystemMessageCenteredPill(
+    message: ChatMessage,
+    students: List<Student>,
+    onInspectStudentPhoto: (Student, String) -> Unit
+) {
+    val parsedReport = remember(message.displayText, students) {
+        if (message.isDeleted) null else parseAttendanceSystemMessage(message.displayText, students)
+    }
+
+    if (parsedReport == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp, horizontal = 20.dp)
+                .testTag("system_message_${message.id}"),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                color = Color(0xFFF59E0B).copy(alpha = 0.16f),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f))
+            ) {
+                Text(
+                    text = message.displayText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                )
+            }
+        }
+        return
+    }
+
+    val combinedEntries = remember(parsedReport) {
+        parsedReport.absentEntries + parsedReport.issueEntries
+    }
+
+    Surface(
+        color = Color(0xFFF59E0B).copy(alpha = 0.12f),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.2.dp, Color(0xFFF59E0B).copy(alpha = 0.55f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp, horizontal = 6.dp)
+            .testTag("attendance_visual_report_card_${message.id}")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Card Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "📋 تقرير تحضير الفصل",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "بواسطة ${parsedReport.servantName}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            // 3-Column Visual Photo Grid (Photo + Number & Name underneath every child)
+            val rows = remember(combinedEntries) { combinedEntries.chunked(3) }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (rowItems in rows) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        for (entry in rowItems) {
+                            val isAbsent = entry.status == AttendanceStatus.ABSENT
+                            val badgeColor = if (isAbsent) Color(0xFFEF4444) else Color(0xFFF59E0B)
+                            val badgeLabel = if (isAbsent) "غائب" else "مشكلة"
+
+                            Surface(
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.45f)),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onInspectStudentPhoto(entry.student, entry.note) }
+                                    .testTag("report_child_card_${entry.student.id}")
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 6.dp, vertical = 8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Surface(
+                                        color = badgeColor.copy(alpha = 0.16f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = badgeLabel,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = badgeColor,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                        )
+                                    }
+
+                                    // Locally-cached student photo (no repeated network fetches!)
+                                    StudentAvatarCircle(
+                                        student = entry.student,
+                                        blockAccent = badgeColor,
+                                        size = 62.dp,
+                                        onClick = { onInspectStudentPhoto(entry.student, entry.note) },
+                                        testTag = "report_child_avatar_${entry.student.id}"
+                                    )
+
+                                    if (entry.studentNumber > 0L) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "#${entry.studentNumber}",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Text(
+                                        text = entry.studentName,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    if (entry.note.isNotBlank()) {
+                                        Text(
+                                            text = entry.note,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            color = Color(0xFFD97706),
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        repeat(3 - rowItems.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = Color(0xFFF59E0B).copy(alpha = 0.35f))
+
+            // Footer Summary: Exact Counts & Numbers of Absent & Issue Students Today
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                val absentNumbers = parsedReport.absentEntries
+                    .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
+                    .joinToString("، ")
+                Text(
+                    text = if (parsedReport.absentEntries.isEmpty()) {
+                        "• غائب النهاردة: 0 أطفال"
+                    } else if (absentNumbers.isNotBlank()) {
+                        "• غائب النهاردة: ${parsedReport.absentEntries.size} — أرقامهم: $absentNumbers"
+                    } else {
+                        "• غائب النهاردة: ${parsedReport.absentEntries.size}"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFFDC2626)
+                )
+
+                val issueNumbers = parsedReport.issueEntries
+                    .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
+                    .joinToString("، ")
+                Text(
+                    text = if (parsedReport.issueEntries.isEmpty()) {
+                        "• عندهم مشكلة النهاردة: 0 أطفال"
+                    } else if (issueNumbers.isNotBlank()) {
+                        "• عندهم مشكلة النهاردة: ${parsedReport.issueEntries.size} — أرقامهم: $issueNumbers"
+                    } else {
+                        "• عندهم مشكلة النهاردة: ${parsedReport.issueEntries.size}"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFFD97706)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttendanceReportedChildPhotoDialog(
+    student: Student,
+    note: String,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var fullBitmap by remember(student.id, student.effectiveAvatarKey) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
+    var packedAvatar by remember(student.id, student.effectiveAvatarKey) {
+        mutableStateOf("")
+    }
+
+    LaunchedEffect(student.id, student.effectiveAvatarKey) {
+        val packed = StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
+        packedAvatar = packed
+        if (packed.isNotBlank()) {
+            val main = StudentAvatarImageHelper.extractMainPhotoBase64(packed)
+            fullBitmap = withContext(Dispatchers.Default) {
+                StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, main)
+                    ?: StudentAvatarImageHelper.decodeBase64ToImageBitmap(main, context)
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (student.studentNumber > 0L) "#${student.studentNumber} — ${student.name}" else student.name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 200.dp, max = 300.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFF0F172A)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val bmp = fullBitmap
+                    if (bmp != null) {
+                        Image(
+                            bitmap = bmp,
+                            contentDescription = "صورة ${student.name}",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text(
+                            text = student.avatarInitials,
+                            style = MaterialTheme.typography.displayMedium,
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+                if (note.isNotBlank()) {
+                    Text(
+                        text = "ملاحظة: $note",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFD97706)
+                    )
+                }
+                if (packedAvatar.isNotBlank()) {
+                    val mainEntry = remember(packedAvatar) {
+                        StudentAvatarImageHelper.extractMainPhotoBase64(packedAvatar)
+                    }
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val res = withContext(Dispatchers.IO) {
+                                    StudentAvatarImageHelper.saveFullPhotoToDeviceGallery(
+                                        context = context,
+                                        studentName = student.name,
+                                        photoEntry = mainEntry
+                                    )
+                                }
+                                res.onSuccess {
+                                    Toast.makeText(
+                                        context,
+                                        "تم حفظ صورة ${student.name} في المعرض ✓",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }.onFailure {
+                                    Toast.makeText(context, "تعذر حفظ الصورة", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF059669),
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                    ) {
+                        Icon(Icons.Default.ArrowDownward, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("حفظ صورة الطفل على الجهاز", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إغلاق")
+            }
+        }
+    )
 }
 
 @Composable
@@ -1642,8 +2191,10 @@ private fun ChatImageBubbleContent(
     onOpenFullscreenImage: (Bitmap) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var bitmap by remember(message.id, message.mediaBase64) { mutableStateOf<Bitmap?>(null) }
     var isLoading by remember(message.id, message.mediaBase64) { mutableStateOf(true) }
+    var isSavingImage by remember(message.id) { mutableStateOf(false) }
 
     LaunchedEffect(message.id, message.mediaBase64) {
         isLoading = true
@@ -1702,6 +2253,69 @@ private fun ChatImageBubbleContent(
                 color = textColor
             )
         }
+
+        if (bitmap != null || message.mediaBase64.isNotBlank()) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = textColor.copy(alpha = 0.12f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = !isSavingImage) {
+                        isSavingImage = true
+                        scope.launch {
+                            mediaStorage.saveImageToDeviceGallery(context, message)
+                                .onSuccess {
+                                    Toast.makeText(
+                                        context,
+                                        "تم حفظ الصورة في المعرض (Pictures/kAM_Lite) ✓",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                                .onFailure { err ->
+                                    Toast.makeText(
+                                        context,
+                                        err.localizedMessage ?: "تعذّر حفظ الصورة",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            isSavingImage = false
+                        }
+                    }
+                    .testTag("save_chat_image_${message.id}")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isSavingImage) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = textColor
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.ArrowDownward,
+                            contentDescription = "حفظ الصورة على الجهاز",
+                            tint = textColor,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isSavingImage) "جاري الحفظ..." else "حفظ الصورة على الجهاز",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = textColor
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1715,9 +2329,11 @@ private fun ChatAudioBubbleContent(
     subtleColor: Color
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var cachedFile by remember(message.id, message.mediaBase64) { mutableStateOf<File?>(null) }
     var isPlaying by remember(message.id) { mutableStateOf(false) }
     var progress by remember(message.id) { mutableFloatStateOf(0f) }
+    var isSavingAudio by remember(message.id) { mutableStateOf(false) }
 
     LaunchedEffect(message.id, message.mediaBase64) {
         cachedFile = mediaStorage.loadOrCacheAudioFile(context, message)
@@ -1747,13 +2363,13 @@ private fun ChatAudioBubbleContent(
             .padding(vertical = 2.dp)
             .testTag("chat_audio_bubble_${message.id}"),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Surface(
             shape = CircleShape,
             color = if (isOwnMessage) Color.White.copy(alpha = 0.22f) else MaterialTheme.colorScheme.primary,
             modifier = Modifier
-                .size(40.dp)
+                .size(48.dp)
                 .clip(CircleShape)
                 .clickable(enabled = cachedFile != null) {
                     val file = cachedFile ?: return@clickable
@@ -1831,6 +2447,51 @@ private fun ChatAudioBubbleContent(
                     style = MaterialTheme.typography.labelSmall,
                     color = subtleColor
                 )
+            }
+        }
+
+        if (cachedFile != null || message.mediaBase64.isNotBlank()) {
+            IconButton(
+                onClick = {
+                    if (isSavingAudio) return@IconButton
+                    isSavingAudio = true
+                    scope.launch {
+                        mediaStorage.saveAudioToDeviceDownloads(context, message)
+                            .onSuccess {
+                                Toast.makeText(
+                                    context,
+                                    "تم حفظ التسجيل الصوتي في التنزيلات (Downloads/kAM_Lite) ✓",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            .onFailure { err ->
+                                Toast.makeText(
+                                    context,
+                                    err.localizedMessage ?: "تعذّر حفظ التسجيل الصوتي",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        isSavingAudio = false
+                    }
+                },
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("save_chat_audio_${message.id}")
+            ) {
+                if (isSavingAudio) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = textColor
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.ArrowDownward,
+                        contentDescription = "حفظ التسجيل الصوتي على الجهاز",
+                        tint = textColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
     }

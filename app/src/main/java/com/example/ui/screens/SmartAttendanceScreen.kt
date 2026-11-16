@@ -136,28 +136,37 @@ private fun formatMergedAttendanceSystemMessage(
     entries: Collection<PendingSystemChatEntry>
 ): String {
     if (entries.isEmpty()) return ""
-    val absentList = entries.filter { it.status == AttendanceStatus.ABSENT }
-    val issueList = entries.filter { it.status == AttendanceStatus.ISSUE }
+    val absentList = entries
+        .filter { it.status == AttendanceStatus.ABSENT }
+        .sortedBy { it.studentNumber }
+    val issueList = entries
+        .filter { it.status == AttendanceStatus.ISSUE }
+        .sortedBy { it.studentNumber }
     if (absentList.isEmpty() && issueList.isEmpty()) return ""
 
-    val safeServant = servantName.trim().ifBlank { "خادم" }
-    val parts = mutableListOf<String>()
-    if (absentList.isNotEmpty()) {
-        val names = absentList.joinToString("، ") { "${it.studentName} (#${it.studentNumber})" }
-        parts.add("غائب (${absentList.size}): $names")
-    }
-    if (issueList.isNotEmpty()) {
-        val namesWithNotes = issueList.joinToString("، ") { item ->
-            if (item.note.isNotBlank()) {
-                "${item.studentName} (#${item.studentNumber} - ${item.note})"
-            } else {
-                "${item.studentName} (#${item.studentNumber})"
-            }
+    fun sanitizeField(raw: String): String =
+        raw.replace("|", " ").replace("\n", " ").replace("\r", " ").trim()
+
+    val safeServant = sanitizeField(servantName).ifBlank { "خادم" }
+    val sb = StringBuilder()
+    sb.append(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX).append('\n')
+    sb.append("📋 تحضير الفصل (بواسطة $safeServant) — غائب: ${absentList.size} | مشكلة: ${issueList.size}")
+    sb.append('\n')
+    sb.append("S|").append(safeServant)
+
+    for (item in absentList) {
+        val line = "\nA|${sanitizeField(item.studentId)}|${item.studentNumber}|${sanitizeField(item.studentName)}"
+        if (sb.length + line.length <= ChatMessage.MAX_SYSTEM_TEXT_LENGTH) {
+            sb.append(line)
         }
-        parts.add("عمل مشكلة (${issueList.size}): $namesWithNotes")
     }
-    return "📋 تحضير الفصل (بواسطة $safeServant) — ${parts.joinToString(" | ")}"
-        .take(ChatMessage.MAX_TEXT_LENGTH)
+    for (item in issueList) {
+        val line = "\nI|${sanitizeField(item.studentId)}|${item.studentNumber}|${sanitizeField(item.studentName)}|${sanitizeField(item.note)}"
+        if (sb.length + line.length <= ChatMessage.MAX_SYSTEM_TEXT_LENGTH) {
+            sb.append(line)
+        }
+    }
+    return sb.toString().take(ChatMessage.MAX_SYSTEM_TEXT_LENGTH)
 }
 
 @Composable

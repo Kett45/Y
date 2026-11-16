@@ -1,18 +1,18 @@
 {
-  "targetVersionCode": 10,
-  "targetVersionName": "1.10",
-  "minCompatibleBaseVersion": 7,
-  "commitSha": "0629c9e7490d",
-  "apkSha256": "2bcdcaaab4ff33ce43bcc279bf1f0b8f5b945d74844981593d440e759a24c939",
-  "updatedAt": "2026-11-15T22:46:59Z",
-  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.10 (0629c9e7490d)",
+  "targetVersionCode": 11,
+  "targetVersionName": "1.11",
+  "minCompatibleBaseVersion": 8,
+  "commitSha": "c724933adb90",
+  "apkSha256": "c724933adb90ceb4b2cb643b7d7a599046bbc7b6db36eba4aaec61b3255a1476",
+  "updatedAt": "2026-11-16T07:16:57Z",
+  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.11 (c724933adb90): الرسائل الفردية + 50 خادم + تقارير الغياب بالصور + حفظ الوسائط + التحديث التلقائي",
   "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "changedModules": [
-    "instant_0ms_local_classroom_cache",
-    "sunlight_high_contrast_light_theme",
-    "dedicated_appearance_screen_star_icon",
-    "cloud_and_local_user_preferences_sync",
-    "single_auto_updating_github_apk_link"
+    "dm_1on1_chat_rules_and_members_fix",
+    "group_servants_limit_expanded_to_50",
+    "visual_attendance_report_with_cached_child_photos",
+    "chat_media_save_to_device_button",
+    "github_auto_update_sha_fix_v111"
   ],
   "dynamicConfig": {
     "maxStudentsPerGroup": 150,

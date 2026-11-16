@@ -140,7 +140,7 @@ fun GroupOnboardingScreen(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "نجم الكارت v1.6",
+                    text = "نجم الكارت v1.11",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold
@@ -278,7 +278,7 @@ fun GroupOnboardingScreen(
                             )
 
                             Text(
-                                text = "• كأمين للفصل، لك كافة الصلاحيات شاملة إنشاء المجموعة، استيراد الأسماء، دعوة الـ ٦ خدام، والحذف.",
+                                text = "• كأمين للفصل، لك كافة الصلاحيات شاملة إنشاء المجموعة، استيراد الأسماء، دعوة حتى ٥٠ خادم، والحذف.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

@@ -101,7 +101,7 @@
         },
         "memberUids": {
           "type": "array",
-          "description": "Bounded list (max 10) of member UIDs (Admin + up to 6 Servants)."
+          "description": "Bounded list (max 50) of member UIDs (Admin + up to 49 Servants)."
         },
         "allowServantUndo": {
           "type": "boolean",
@@ -606,7 +606,7 @@
         },
         "memberUids": {
           "type": "array",
-          "description": "Bounded list (1 to 10) of group member UIDs."
+          "description": "Bounded list (1 to 50) of group member UIDs."
         },
         "lastSeenAt": {
           "type": "string",
@@ -718,7 +718,7 @@
         "servantId": { "type": "string", "description": "UID of the servant who recorded the status." },
         "servantName": { "type": "string", "description": "Name of the servant who recorded the status." },
         "note": { "type": "string", "description": "Optional short note (up to 200 chars), typically for ISSUE status." },
-        "memberUids": { "type": "array", "description": "Bounded list (1..10) of group member UIDs." },
+        "memberUids": { "type": "array", "description": "Bounded list (1..50) of group member UIDs." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

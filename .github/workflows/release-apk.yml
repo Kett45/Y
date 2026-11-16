@@ -38,8 +38,8 @@ jobs:
             cp -f .build-outputs/app-debug.apk releases/kAM-Lite.apk
           fi
 
-          VERSION_NAME=$(grep -oP 'propVersionName\s*=.*"\K[^"]+' app/build.gradle.kts || echo "1.6")
-          VERSION_CODE=$(grep -oP 'propVersionCode\s*=.*:\s*\K[0-9]+' app/build.gradle.kts || echo "6")
+          VERSION_NAME=$(grep -oP 'propVersionName\s*=.*"\K[^"]+' app/build.gradle.kts || echo "1.11")
+          VERSION_CODE=$(grep -oP 'propVersionCode\s*=.*:\s*\K[0-9]+' app/build.gradle.kts || echo "11")
           MIN_DELTA_BASE=$((VERSION_CODE - 3))
           if [ "$MIN_DELTA_BASE" -lt 1 ]; then
             MIN_DELTA_BASE=1
@@ -86,11 +86,11 @@ jobs:
             "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v${VERSION_NAME} (${SHORT_SHA})",
             "latestApkDirectUrl": "${SINGLE_AUTO_URL}",
             "changedModules": [
-              "instant_0ms_local_classroom_cache",
-              "sunlight_high_contrast_light_theme",
-              "dedicated_appearance_screen_star_icon",
-              "cloud_and_local_user_preferences_sync",
-              "single_auto_updating_github_apk_link"
+              "dm_1on1_chat_rules_and_members_fix",
+              "group_servants_limit_expanded_to_50",
+              "visual_attendance_report_with_cached_child_photos",
+              "chat_media_save_to_device_button",
+              "github_auto_update_sha_fix_v111"
             ],
             "dynamicConfig": {
               "maxStudentsPerGroup": 150,

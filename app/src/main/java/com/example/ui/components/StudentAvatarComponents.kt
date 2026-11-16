@@ -221,10 +221,19 @@ object StudentAvatarImageHelper {
     }
 
     /**
-     * Fast 0ms memory-only lookup for the large attendance card photo if already preloaded.
+     * Fast 0ms memory-only lookup for the large attendance card photo if already preloaded
+     * and verified against `student.avatarHash` so updated child photos are never stale.
      */
     fun getCachedLargeAttendancePhoto(student: Student): ImageBitmap? {
-        val raw = student.avatarBase64.ifBlank { localPackedAvatarByStudentId[student.id].orEmpty() }
+        val localCandidate = localPackedAvatarByStudentId[student.id].orEmpty()
+        val verifiedLocal = if (localCandidate.isNotBlank() &&
+            (student.avatarHash.isBlank() || Student.computeAvatarHash(localCandidate) == student.avatarHash)
+        ) {
+            localCandidate
+        } else {
+            ""
+        }
+        val raw = student.avatarBase64.ifBlank { verifiedLocal }
         if (raw.isNotBlank()) {
             getCachedFullPhotoBitmap(raw)?.let { return it }
             getCachedBitmap(raw)?.let { return it }
@@ -309,6 +318,11 @@ object StudentAvatarImageHelper {
     private val avatarIoScope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
     )
+    @Volatile
+    private var lastDiskSyncSignature: String = ""
+    @Volatile
+    private var diskSyncJob: kotlinx.coroutines.Job? = null
+    private val diskSyncLock = Any()
 
     private fun isOnMainThread(): Boolean {
         return runCatching {
@@ -447,6 +461,72 @@ object StudentAvatarImageHelper {
                 }
             }
             localRaw
+        }
+    }
+
+    /**
+     * Downloads and persists every child's photo ONCE onto local device disk (`filesDir/student_avatars/{studentId}`
+     * + pre-rendered 160x160 thumbnail) on [Dispatchers.IO].
+     * Re-fetches ONLY if a child's photo isn't saved on disk yet OR if `student.avatarHash` changed.
+     */
+    fun syncAllStudentPhotosToLocalDisk(context: Context?, students: List<Student>) {
+        if (context == null || students.isEmpty()) return
+        val targets = students.filter { it.effectiveHasAvatar || it.avatarBase64.isNotBlank() }
+        if (targets.isEmpty()) return
+        val signature = targets.joinToString("|") { "${it.id}:${it.effectiveAvatarKey}" }
+        if (signature == lastDiskSyncSignature) return
+
+        val appCtx = context.applicationContext ?: context
+        synchronized(diskSyncLock) {
+            if (signature == lastDiskSyncSignature) return
+            diskSyncJob?.cancel()
+            diskSyncJob = avatarIoScope.launch {
+                for (stu in targets) {
+                    val keyAlias = "student_${stu.id}_${stu.effectiveAvatarKey}".hashCode()
+                    val packed = if (stu.avatarBase64.isNotBlank()) {
+                        val existing = readLocalAlbumRawFromDiskInternal(appCtx, stu.id)
+                        if (existing != stu.avatarBase64) {
+                            writeLocalAlbumRawToDiskInternal(appCtx, stu.id, stu.avatarBase64)
+                            localPackedAvatarByStudentId[stu.id] = stu.avatarBase64
+                        }
+                        stu.avatarBase64
+                    } else {
+                        val diskRaw = readLocalAlbumRawFromDiskInternal(appCtx, stu.id)
+                        val isHashValid = diskRaw.isNotBlank() &&
+                            (stu.avatarHash.isBlank() || Student.computeAvatarHash(diskRaw) == stu.avatarHash)
+                        if (isHashValid) {
+                            diskRaw
+                        } else if (stu.groupId.isNotBlank() && stu.id.isNotBlank()) {
+                            val fetched = try {
+                                cloudAvatarFetcher?.invoke(stu.groupId, stu.id).orEmpty().trim()
+                            } catch (_: Exception) {
+                                ""
+                            }
+                            if (fetched.isNotBlank()) {
+                                localPackedAvatarByStudentId[stu.id] = fetched
+                                writeLocalAlbumRawToDiskInternal(appCtx, stu.id, fetched)
+                                fetched
+                            } else {
+                                diskRaw
+                            }
+                        } else {
+                            diskRaw
+                        }
+                    }
+
+                    if (packed.isNotBlank()) {
+                        val mainEntry = extractMainPhotoBase64(packed)
+                        if (mainEntry.isNotBlank()) {
+                            decodeBase64ToImageBitmap(
+                                base64 = mainEntry,
+                                context = appCtx,
+                                studentKeyAlias = keyAlias
+                            )
+                        }
+                    }
+                }
+                lastDiskSyncSignature = signature
+            }
         }
     }
 
@@ -891,7 +971,9 @@ object StudentAvatarImageHelper {
             getCachedBitmap(student.avatarBase64)?.let { return it }
         }
         val localRaw = localPackedAvatarByStudentId[student.id]
-        if (!localRaw.isNullOrBlank()) {
+        if (!localRaw.isNullOrBlank() &&
+            (student.avatarHash.isBlank() || Student.computeAvatarHash(localRaw) == student.avatarHash)
+        ) {
             getCachedBitmap(localRaw)?.let { return it }
         }
         val key = student.effectiveAvatarKey

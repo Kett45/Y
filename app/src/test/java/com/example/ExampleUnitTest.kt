@@ -410,33 +410,52 @@ class ExampleUnitTest {
     fun githubSmartSyncEngine_appliesDeltaOnlyWhenGapIsSmall_andSwitchesToFullInstallWhenVersionGapIsLarge() {
         val engine = com.example.data.sync.GitHubSmartSyncEngine
 
-        // 1. Small/incremental update (installed = 2, remote = 4, gap = 2 <= maxDeltaGap 3) -> DeltaOnlySync (no full APK download!)
-        val smallGapManifest = com.example.data.sync.GitHubVersionManifest(
-            versionCode = 4,
-            versionName = "1.2.4",
-            minDeltaBaseVersionCode = 1,
+        // 1. Same binary versionCode (10 == 10), newer commit SHA -> DeltaOnlySync (no full APK download!)
+        val sameBinaryManifest = com.example.data.sync.GitHubVersionManifest(
+            versionCode = 10,
+            versionName = "1.10",
+            minDeltaBaseVersionCode = 7,
             maxDeltaGap = 3,
             requiresFullInstall = false,
             commitSha = "abc1234"
         )
         val deltaDecision = engine.evaluateSyncStrategy(
-            installedBinaryVersionCode = 2,
-            lastSyncedDeltaVersionCode = 2,
+            installedBinaryVersionCode = 10,
+            lastSyncedDeltaVersionCode = 10,
             lastSyncedCommitSha = "old_sha",
-            remoteManifest = smallGapManifest
+            remoteManifest = sameBinaryManifest
         )
         assertTrue(deltaDecision is com.example.data.sync.GitHubSyncDecision.DeltaOnlySync)
 
-        // 2. Already synced with remote version and commit -> UpToDate
+        // 2. Same binary versionCode and same commit -> UpToDate
         val upToDateDecision = engine.evaluateSyncStrategy(
-            installedBinaryVersionCode = 2,
-            lastSyncedDeltaVersionCode = 4,
+            installedBinaryVersionCode = 10,
+            lastSyncedDeltaVersionCode = 10,
             lastSyncedCommitSha = "abc1234",
-            remoteManifest = smallGapManifest
+            remoteManifest = sameBinaryManifest
         )
         assertTrue(upToDateDecision is com.example.data.sync.GitHubSyncDecision.UpToDate)
 
-        // 3. Large Version Gap Scenario (installed = 2, remote = 9, gap = 7 > maxDeltaGap 3) -> FullPackageUpgradeRequired
+        // 3. Newer remote binary (installed = 10, remote = 11) even if delta was cached ahead -> FullPackageUpgradeRequired!
+        val upgradeManifest = com.example.data.sync.GitHubVersionManifest(
+            versionCode = 11,
+            versionName = "1.11",
+            minDeltaBaseVersionCode = 8,
+            maxDeltaGap = 3,
+            requiresFullInstall = true,
+            commitSha = "def5678",
+            apkSha256 = "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff"
+        )
+        val upgradeDecision = engine.evaluateSyncStrategy(
+            installedBinaryVersionCode = 10,
+            lastSyncedDeltaVersionCode = 11,
+            lastSyncedCommitSha = "old_sha",
+            remoteManifest = upgradeManifest
+        )
+        assertTrue(upgradeDecision is com.example.data.sync.GitHubSyncDecision.FullPackageUpgradeRequired)
+        assertEquals(1, (upgradeDecision as com.example.data.sync.GitHubSyncDecision.FullPackageUpgradeRequired).versionGap)
+
+        // 4. Large Version Gap Scenario (installed = 2, remote = 9, gap = 7 > maxDeltaGap 3) -> FullPackageUpgradeRequired
         val largeGapManifest = com.example.data.sync.GitHubVersionManifest(
             versionCode = 9,
             versionName = "1.2.9",

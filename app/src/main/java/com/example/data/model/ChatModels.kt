@@ -147,6 +147,8 @@ data class ChatMessage(
 
     companion object {
         const val MAX_TEXT_LENGTH = 1000
+        const val MAX_SYSTEM_TEXT_LENGTH = 4000
+        const val ATTENDANCE_REPORT_V2_PREFIX = "[ATTENDANCE_V2]"
         const val PAGE_SIZE = 30
         const val DELETED_MESSAGE_PLACEHOLDER = "تم حذف الرسالة"
         const val MAX_IMAGE_DIMENSION_PX = 1024

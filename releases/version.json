@@ -1,13 +1,13 @@
 {
-  "versionCode": 10,
-  "versionName": "1.10",
-  "minDeltaBaseVersionCode": 7,
+  "versionCode": 11,
+  "versionName": "1.11",
+  "minDeltaBaseVersionCode": 8,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
-  "commitSha": "0629c9e7490d",
-  "apkSha256": "2bcdcaaab4ff33ce43bcc279bf1f0b8f5b945d74844981593d440e759a24c939",
-  "updatedAt": "2026-11-15T22:46:59Z",
+  "commitSha": "c724933adb90",
+  "apkSha256": "c724933adb90ceb4b2cb643b7d7a599046bbc7b6db36eba4aaec61b3255a1476",
+  "updatedAt": "2026-11-16T07:16:57Z",
   "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.10 (نجم الكارت v1.10): تحديث تلقائي مباشر بأحدث بصمة للـ APK (0629c9e7490d)."
+  "releaseNotesArabic": "الإصدار 1.11 (نجم الكارت v1.11): إصلاح الرسائل الفردية + توسيع المجموعة إلى 50 خادم + عرض صور وأرقام الغياب والمشاكل في الشات مع الكاش المحلي + زر حفظ الصور والصوتيات + إصلاح التحديث التلقائي (c724933adb90)."
 }

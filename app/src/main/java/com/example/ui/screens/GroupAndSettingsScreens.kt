@@ -85,6 +85,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import com.example.data.model.CardType
 import com.example.data.model.Invitation
+import com.example.data.model.MAX_SERVANTS_PER_GROUP
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
 import com.example.data.model.ServantBlock
 import com.example.data.model.SaturdayCalendarHelper
@@ -234,7 +235,7 @@ fun GroupInvitationsScreen(
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
-                                text = "الأطفال: ${state.students.size} / $MAX_STUDENTS_PER_GROUP • البلوكات: ${state.blocks.size} • الأعضاء: ${state.group?.memberUids?.size ?: 1} / 7",
+                                text = "الأطفال: ${state.students.size} / $MAX_STUDENTS_PER_GROUP • البلوكات: ${state.blocks.size} • الأعضاء: ${state.group?.memberUids?.size ?: 1} / $MAX_SERVANTS_PER_GROUP",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 fontWeight = FontWeight.Bold

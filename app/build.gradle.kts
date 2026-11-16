@@ -20,8 +20,8 @@ android {
     applicationId = "com.aistudio.kamlite.rtyxqp"
     minSdk = 24
     targetSdk = 36
-    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 10
-    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.10"
+    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 11
+    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.11"
     val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
     val propEnableStrictMode = (project.findProperty("ENABLE_STRICT_MODE") as? String)?.toBoolean() ?: false
     versionCode = propVersionCode
@@ -106,8 +106,8 @@ tasks.register<Copy>("syncReleaseApk") {
   into(rootProject.layout.projectDirectory.dir("releases"))
   rename { "kAM-Lite.apk" }
 
-  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 10
-  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.10"
+  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 11
+  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.11"
   val repoSlug = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
   val releasesDir = rootProject.layout.projectDirectory.dir("releases").asFile
   val readmeFile = rootProject.layout.projectDirectory.file("README.md").asFile
@@ -148,7 +148,7 @@ tasks.register<Copy>("syncReleaseApk") {
         "updatedAt": "$nowIsoUtc",
         "apkDirectUrl": "$singleAutoUrl",
         "deltaSyncUrl": "$deltaUrl",
-        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): التحضير الذكي بسحب صور الأطفال + الشات داخل التطبيق (نصوص وصور وتسجيلات صوتية) + بروفايل الخادم ورقم الواتساب ($shortCommit)."
+        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): إصلاح الرسائل الفردية + توسيع المجموعة إلى 50 خادم + عرض صور وأرقام الغياب والمشاكل في الشات مع الكاش المحلي + زر حفظ الصور والصوتيات + إصلاح التحديث التلقائي ($shortCommit)."
       }
       """.trimIndent() + "\n"
     )
@@ -162,14 +162,14 @@ tasks.register<Copy>("syncReleaseApk") {
         "commitSha": "$shortCommit",
         "apkSha256": "$apkSha256",
         "updatedAt": "$nowIsoUtc",
-        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): التحضير الذكي بسحب صور الأطفال + الشات داخل التطبيق + بروفايل الخادم",
+        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): الرسائل الفردية + 50 خادم + تقارير الغياب بالصور + حفظ الوسائط + التحديث التلقائي",
         "latestApkDirectUrl": "$singleAutoUrl",
         "changedModules": [
-          "smart_swipe_attendance_cards",
-          "in_app_group_and_dm_chat_media",
-          "servant_profile_whatsapp_hint_wizard",
-          "instant_0ms_local_classroom_cache",
-          "single_auto_updating_github_apk_link"
+          "dm_1on1_chat_rules_and_members_fix",
+          "group_servants_limit_expanded_to_50",
+          "visual_attendance_report_with_cached_child_photos",
+          "chat_media_save_to_device_button",
+          "github_auto_update_sha_fix_v111"
         ],
         "dynamicConfig": {
           "maxStudentsPerGroup": 150,

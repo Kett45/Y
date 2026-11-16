@@ -6,6 +6,7 @@ import com.example.data.model.ChatMessage
 import com.example.data.model.ChatMessageType
 import com.example.data.model.DmChatMeta
 import com.example.data.model.GroupChatMeta
+import com.example.data.model.MAX_SERVANTS_PER_GROUP
 import com.example.data.model.PreparedChatMediaPayload
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
@@ -189,13 +190,32 @@ class ChatRepository(
         val uid = requireUserId()
         require(groupId.isNotBlank()) { "المجموعة غير محددة" }
         val finalType = mediaPayload?.type ?: type
-        val cleanText = text.trim().take(ChatMessage.MAX_TEXT_LENGTH).ifBlank {
+        val maxLen = if (finalType == ChatMessageType.SYSTEM) {
+            ChatMessage.MAX_SYSTEM_TEXT_LENGTH
+        } else {
+            ChatMessage.MAX_TEXT_LENGTH
+        }
+        val cleanText = text.trim().take(maxLen).ifBlank {
             mediaPayload?.textLabel.orEmpty()
         }
         require(cleanText.isNotBlank()) { "نص الرسالة فارغ" }
 
+        val previewText = if (cleanText.startsWith(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX)) {
+            cleanText
+                .removePrefix(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX)
+                .trim()
+                .lineSequence()
+                .firstOrNull()
+                ?.trim()
+                ?.take(200)
+                ?.ifBlank { "📋 تقرير تحضير الفصل" }
+                ?: "📋 تقرير تحضير الفصل"
+        } else {
+            cleanText.take(200)
+        }
+
         val safeSenderName = senderName.trim().ifBlank { "خادم" }.take(100)
-        val safeMembers = (memberUids + uid).filter { it.isNotBlank() }.distinct().take(10)
+        val safeMembers = (memberUids + uid).filter { it.isNotBlank() }.distinct().take(MAX_SERVANTS_PER_GROUP)
         val msgId = "msg_${System.currentTimeMillis()}_${UUID.randomUUID().toString().replace("-", "").take(8)}"
 
         val groupRef = db.collection("groups").document(groupId)
@@ -229,7 +249,7 @@ class ChatRepository(
             val metaPayload = mapOf(
                 "groupId" to groupId,
                 "lastMessageId" to msgId,
-                "lastMessageText" to cleanText.take(200),
+                "lastMessageText" to previewText,
                 "lastMessageType" to finalType.id,
                 "lastMessageSenderUid" to uid,
                 "lastMessageSenderName" to safeSenderName,
