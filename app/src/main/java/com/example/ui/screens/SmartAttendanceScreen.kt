@@ -173,6 +173,7 @@ private fun formatMergedAttendanceSystemMessage(
 fun SmartAttendanceScreen(
     state: KamScreenState,
     currentUserId: String,
+    onOpenSwipeCards: (() -> Unit)? = null,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -191,14 +192,9 @@ fun SmartAttendanceScreen(
     }
 
     val firestoreDb = remember(context) {
-        val databaseId = runCatching {
-            context.applicationContext.getString(R.string.firestore_database_id)
-        }.getOrDefault("")
-        if (databaseId.isNotBlank()) {
-            FirebaseFirestore.getInstance(databaseId)
-        } else {
-            FirebaseFirestore.getInstance()
-        }
+        val databaseId = context.applicationContext.getString(R.string.firestore_database_id)
+        require(databaseId.isNotBlank()) { "Missing firestore_database_id string resource" }
+        FirebaseFirestore.getInstance(databaseId)
     }
     val kamRepository = remember(firestoreDb) { KamRepository(firestoreDb) }
     val chatRepository = remember(firestoreDb) { ChatRepository(firestoreDb) }
@@ -559,6 +555,12 @@ fun SmartAttendanceScreen(
                         }
                         showSummaryView = !showSummaryView
                     },
+                    onOpenSwipeCards = if (onOpenSwipeCards != null) {
+                        {
+                            flushPendingSystemChatNow()
+                            onOpenSwipeCards()
+                        }
+                    } else null,
                     onClose = {
                         flushPendingSystemChatNow()
                         onClose()
@@ -723,6 +725,7 @@ private fun SmartAttendanceTopHeader(
     canUndo: Boolean,
     onUndo: () -> Unit,
     onToggleSummary: () -> Unit,
+    onOpenSwipeCards: (() -> Unit)? = null,
     onClose: () -> Unit
 ) {
     val progressFraction = if (totalCount > 0) {
@@ -749,7 +752,8 @@ private fun SmartAttendanceTopHeader(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     IconButton(
                         onClick = onClose,
@@ -788,6 +792,21 @@ private fun SmartAttendanceTopHeader(
                                 imageVector = Icons.AutoMirrored.Filled.Undo,
                                 contentDescription = "تراجع عن آخر إيماءة",
                                 tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    if (onOpenSwipeCards != null) {
+                        OutlinedButton(
+                            onClick = onOpenSwipeCards,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.testTag("switch_to_swipe_cards_button")
+                        ) {
+                            Text(
+                                text = "⭐ كروت",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }

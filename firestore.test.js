@@ -193,13 +193,30 @@ test("4. Newly joined servant immediately sees all existing group students and b
   }
 });
 
-test("5. Servant can create/update students, blocks, and fractional position, but ONLY Admin can delete", async () => {
+test("5. Admin creates blocks, Servant cannot create/delete blocks, Servant can manage students, and ONLY Admin can delete", async () => {
   await seedGroupWithMembers();
   const now = new Date();
   const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
   const adminDb = testEnv.authenticatedContext(ADMIN_UID).firestore();
 
-  const blockRef = servantDb
+  const servantAttemptBlockRef = servantDb
+    .collection("groups")
+    .doc(GROUP_ID)
+    .collection("blocks")
+    .doc("block_servant_denied");
+  await assertFails(
+    servantAttemptBlockRef.set({
+      groupId: GROUP_ID,
+      servantId: SERVANT_UID,
+      servantName: "مايكل",
+      colorHex: "#3B82F6",
+      sortOrder: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  const blockRef = adminDb
     .collection("groups")
     .doc(GROUP_ID)
     .collection("blocks")
@@ -260,7 +277,14 @@ test("5. Servant can create/update students, blocks, and fractional position, bu
 
   // Servant CANNOT delete student or block (rejected by server rules!)
   await assertFails(studentRef.delete());
-  await assertFails(blockRef.delete());
+  await assertFails(
+    servantDb
+      .collection("groups")
+      .doc(GROUP_ID)
+      .collection("blocks")
+      .doc("block_1")
+      .delete()
+  );
 
   // Admin CAN delete student and block
   await assertSucceeds(
@@ -638,6 +662,85 @@ test("10. ServantMemberProfile (groups/{groupId}/members/{memberUid}) allows gro
       .get()
   );
 });
+
+test("11. EmailDirectory allows exact get by signed-in user, owner write only, and blocks list scraping", async () => {
+  const now = new Date();
+  const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID).firestore();
+  const entryRef = servantDb.collection("emailDirectory").doc("em_test_hash_123");
+
+  await assertSucceeds(
+    entryRef.set({
+      email: "servant@gmail.com",
+      uid: SERVANT_UID,
+      displayName: "مايكل",
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(adminDb.collection("emailDirectory").doc("em_test_hash_123").get());
+  await assertFails(adminDb.collection("emailDirectory").get());
+  await assertFails(
+    adminDb.collection("emailDirectory").doc("em_test_hash_123").set({
+      email: "servant@gmail.com",
+      uid: SERVANT_UID,
+      displayName: "انتحال",
+      updatedAt: new Date(),
+    })
+  );
+});
+
+test("12. ChildNotes supports group member reads/creates, author deletes, and rejects outsider reads", async () => {
+  await seedGroupWithMembers();
+  const now = new Date();
+  const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID).firestore();
+  const outsiderDb = testEnv.authenticatedContext(OUTSIDER_UID).firestore();
+
+  const noteRef = servantDb
+    .collection("groups")
+    .doc(GROUP_ID)
+    .collection("childNotes")
+    .doc("note_1");
+
+  await assertSucceeds(
+    noteRef.set({
+      groupId: GROUP_ID,
+      studentId: "stu_1",
+      studentName: "مينا جرجس",
+      type: "MEMORIZATION",
+      text: "حفظ مزمور ٢٣ كامل",
+      status: "VISITED",
+      authorUid: SERVANT_UID,
+      authorName: "مايكل",
+      clientCreatedAtMillis: 1730000000000,
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(
+    adminDb
+      .collection("groups")
+      .doc(GROUP_ID)
+      .collection("childNotes")
+      .where("groupId", "==", GROUP_ID)
+      .get()
+  );
+
+  await assertFails(
+    outsiderDb
+      .collection("groups")
+      .doc(GROUP_ID)
+      .collection("childNotes")
+      .doc("note_1")
+      .get()
+  );
+
+  await assertSucceeds(noteRef.delete());
+});
+
 
 
 

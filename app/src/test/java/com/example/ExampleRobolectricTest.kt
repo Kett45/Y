@@ -183,7 +183,7 @@ class ExampleRobolectricTest {
                     onAddSingleStudent = { _, _, _ -> },
                     onAnalyzeBulkImport = { emptyList() },
                     onConfirmBulkImport = {},
-                    onCreateBlock = { _, _ -> },
+                    onCreateBlock = { _, _, _ -> },
                     onMoveStudentToBlock = { _, _ -> },
                     onReorderStudent = { _, _ -> },
                     onUpdateStudent = { _, _, _, _ -> },

@@ -963,7 +963,7 @@ fun ServantPhotoPickerDialog(
 
 /**
  * WhatsApp-style contact rows rendered inside `ServantBlockHeaderCard`:
- * - If `memberProfile?.effectiveShowPhone == false`: renders NOTHING (only servant name & photo appear above).
+ * - Phone numbers are always visible to fellow servants in the group.
  * - If no phone numbers are saved: shows calm `"لم يضف رقمه"` (and a quick `"إضافة رقمي"` button for the block owner).
  * - If 1 or 2 phone numbers are saved: renders each number with dedicated `"واتساب"` and `"اتصال"` buttons.
  */
@@ -976,11 +976,6 @@ fun ServantBlockContactRows(
     onAddOwnPhoneClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    if (servantProfile != null && !servantProfile.effectiveShowPhone) {
-        // When servant hides their number (showPhone == false / phoneHidden == true), hide both the number and contact buttons completely.
-        return
-    }
-
     val phones = servantProfile?.nonEmptyPhones.orEmpty()
     val footerShape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)
     HorizontalDivider(color = blockAccent.copy(alpha = 0.22f))
@@ -1125,28 +1120,30 @@ fun ServantBlockContactRows(
 }
 
 /**
- * Settings screen card for managing the Servant's own WhatsApp profile:
+ * Settings screen top card for managing the Servant's own profile:
  * - Avatar (<50KB compressed & cached locally)
+ * - Editable Display Name (updates across app & own blocks)
+ * - Gmail account display
  * - Primary & Secondary Phone numbers (opens the step-by-step wizard)
- * - "إخفاء رقمي عن باقي الخدام" privacy switch
  * - "حذف الرقم" button
  */
 @Composable
 fun ServantProfileSettingsCard(
     servantUid: String,
     servantName: String,
+    email: String = "",
     groupId: String,
     memberProfile: ServantMemberProfile?,
     primaryPhone: String,
     secondaryPhone: String,
-    phoneHidden: Boolean,
     accentColor: Color,
     onOpenPhoneWizard: () -> Unit,
     onOpenAvatarPicker: () -> Unit,
-    onTogglePhoneHidden: (Boolean) -> Unit,
+    onEditDisplayName: (String) -> Unit = {},
     onDeletePhones: () -> Unit
 ) {
     val hasAnyPhone = primaryPhone.isNotBlank() || secondaryPhone.isNotBlank()
+    var showEditNameDialog by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -1156,185 +1153,222 @@ fun ServantProfileSettingsCard(
             .testTag("servant_profile_settings_card"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-            // Header Row: Servant Avatar + Name + Change Photo Button
+        // Header Row: Servant Avatar + Editable Name + Gmail + Change Photo Button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                modifier = Modifier.weight(1f)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    ServantAvatarCircle(
-                        servantUid = servantUid,
-                        servantName = servantName,
-                        groupId = groupId,
-                        memberProfile = memberProfile,
-                        accentColor = accentColor,
-                        size = 52.dp,
-                        isEditable = true,
-                        onClick = onOpenAvatarPicker
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = "بروفايل الخادم ورقم الواتساب",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = servantName.ifBlank { "خادم الفصل" },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = onOpenAvatarPicker,
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                    modifier = Modifier.testTag("settings_change_servant_photo_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.CameraAlt,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("صورتي")
-                }
-            }
-
-            HorizontalDivider()
-
-            // Saved Phone Numbers Summary
-            if (!hasAnyPhone) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                ServantAvatarCircle(
+                    servantUid = servantUid,
+                    servantName = servantName,
+                    groupId = groupId,
+                    memberProfile = memberProfile,
+                    accentColor = accentColor,
+                    size = 56.dp,
+                    isEditable = true,
+                    onClick = onOpenAvatarPicker
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showEditNameDialog = true }
+                            .padding(vertical = 2.dp, horizontal = 4.dp)
+                            .testTag("settings_edit_own_name_button")
                     ) {
                         Text(
-                            text = "لم تضف رقم الموبايل / الواتساب بعد",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = servantName.ifBlank { "خادم الفصل" },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "تعديل الاسم",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
                         )
                     }
-                }
-            } else {
-                if (primaryPhone.isNotBlank()) {
-                    SavedPhoneBadgeCard(
-                        label = "الرقم الأساسي",
-                        phone = primaryPhone
-                    )
-                }
-                if (secondaryPhone.isNotBlank() && secondaryPhone != primaryPhone) {
-                    SavedPhoneBadgeCard(
-                        label = "الرقم التاني",
-                        phone = secondaryPhone
-                    )
-                }
-            }
-
-            // Hide Phone Switch ("إخفاء رقمي عن باقي الخدام")
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onTogglePhoneHidden(!phoneHidden) }
-                    .padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.VisibilityOff,
-                        contentDescription = null,
-                        tint = if (phoneHidden) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
+                    if (email.isNotBlank()) {
                         Text(
-                            text = "إخفاء رقمي عن باقي الخدام",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "يُخفي الرقم وأزرار واتساب والاتصال فوق البلوك ويُبقي الاسم والصورة فقط",
+                            text = email,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
+                    Text(
+                        text = "اضغط على الاسم لتعديله أو على الصورة لتغييرها",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
-                Switch(
-                    checked = phoneHidden,
-                    onCheckedChange = onTogglePhoneHidden,
-                    modifier = Modifier.testTag("settings_hide_phone_switch")
-                )
             }
 
-            // Action Buttons: Add/Edit Phone + Delete Phone
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Button(
-                    onClick = onOpenPhoneWizard,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("settings_edit_phone_button"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF25D366),
-                        contentColor = Color.White
-                    )
-                ) {
-                    Icon(
-                        imageVector = if (hasAnyPhone) Icons.Default.Edit else Icons.Default.Phone,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (hasAnyPhone) "تعديل الرقم" else "إضافة رقم الواتساب",
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-        if (hasAnyPhone) {
             OutlinedButton(
-                onClick = onDeletePhones,
-                modifier = Modifier
-                    .height(48.dp)
-                    .testTag("settings_delete_phone_button"),
+                onClick = onOpenAvatarPicker,
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                ),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                modifier = Modifier.testTag("settings_change_servant_photo_button")
             ) {
                 Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "حذف الرقم",
+                    imageVector = Icons.Filled.CameraAlt,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("صورتي")
+            }
+        }
+
+        HorizontalDivider()
+
+        // Saved Phone Numbers Summary
+        if (!hasAnyPhone) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "لم تضف رقم الموبايل / الواتساب بعد",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            if (primaryPhone.isNotBlank()) {
+                SavedPhoneBadgeCard(
+                    label = "الرقم الأساسي",
+                    phone = primaryPhone
+                )
+            }
+            if (secondaryPhone.isNotBlank() && secondaryPhone != primaryPhone) {
+                SavedPhoneBadgeCard(
+                    label = "الرقم التاني",
+                    phone = secondaryPhone
+                )
+            }
+        }
+
+        // Action Buttons: Add/Edit Phone + Delete Phone
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Button(
+                onClick = onOpenPhoneWizard,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("settings_edit_phone_button"),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF25D366),
+                    contentColor = Color.White
+                )
+            ) {
+                Icon(
+                    imageVector = if (hasAnyPhone) Icons.Default.Edit else Icons.Default.Phone,
+                    contentDescription = null,
                     modifier = Modifier.size(18.dp)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("حذف الرقم", fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (hasAnyPhone) "تعديل الرقم" else "إضافة رقم الواتساب",
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            if (hasAnyPhone) {
+                OutlinedButton(
+                    onClick = onDeletePhones,
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("settings_delete_phone_button"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "حذف الرقم",
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("حذف الرقم", fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
-}
+
+    if (showEditNameDialog) {
+        var nameDraft by rememberSaveable(servantName) { mutableStateOf(servantName) }
+        AlertDialog(
+            onDismissRequest = { showEditNameDialog = false },
+            title = {
+                Text(
+                    text = "تعديل اسمك في التطبيق",
+                    fontWeight = FontWeight.ExtraBold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "سيتم تحديث اسمك في حسابك الشخصي وفي البلوكات والمحادثات الخاصة بك.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = nameDraft,
+                        onValueChange = { nameDraft = it.take(80) },
+                        label = { Text("الاسم") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("dialog_edit_own_name_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = nameDraft.trim()
+                        if (trimmed.isNotEmpty()) {
+                            onEditDisplayName(trimmed)
+                            showEditNameDialog = false
+                        }
+                    },
+                    enabled = nameDraft.trim().isNotBlank(),
+                    modifier = Modifier.testTag("dialog_save_own_name_button")
+                ) {
+                    Text("حفظ الاسم")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditNameDialog = false }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
 }
 
 /**

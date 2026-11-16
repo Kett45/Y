@@ -376,3 +376,16 @@ val Icons.Filled.VisibilityOff: ImageVector
             close()
         }
     }.build().also { _visibilityOffIcon = it }
+
+val Icons.Filled.Comment: ImageVector
+    get() = Icons.Default.Email
+
+val Icons.Filled.EditNote: ImageVector
+    get() = Icons.Default.Edit
+
+val Icons.Filled.FactCheck: ImageVector
+    get() = Icons.Default.CheckCircle
+
+val Icons.Filled.AutoStories: ImageVector
+    get() = Icons.Default.Edit
+

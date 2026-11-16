@@ -7,6 +7,9 @@ import com.example.data.model.AttendanceRecord
 import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
+import com.example.data.model.ChildNote
+import com.example.data.model.ChildNoteType
+import com.example.data.model.EmailDirectoryEntry
 import com.example.data.model.Group
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_SERVANTS_PER_GROUP
@@ -15,6 +18,7 @@ import com.example.data.model.ServantBlock
 import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
 import com.example.data.model.UserProfile
+import com.example.data.model.VisitationStatus
 import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
 import com.example.data.cache.LocalClassroomCache
@@ -94,9 +98,14 @@ class KamRepository(private val db: FirebaseFirestore) {
                         UserProfile::class.java,
                         DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
                     )
-                    if (existing != null) return@withLock existing
+                    if (existing != null) {
+                        val effectiveEmail = existing.email.ifBlank { email }
+                        val effectiveName = existing.displayName.ifBlank { displayName }
+                        runCatching { upsertEmailDirectoryEntry(uid, effectiveEmail, effectiveName) }
+                        return@withLock existing
+                    }
                 }
-                val safeName = displayName.trim().ifBlank { "خادم الفصل" }.take(100)
+                val safeName = displayName.trim().ifBlank { "خادم الفصل" }.take(80)
                 val safeEmail = email.trim().ifBlank { "$uid@kamlite.app" }.take(150)
                 val payload = mapOf(
                     "userId" to uid,
@@ -112,10 +121,12 @@ class KamRepository(private val db: FirebaseFirestore) {
                     "uiScaleMode" to "AUTO",
                     "uiScaleFactor" to 0.85,
                     "showFloatingAddButton" to true,
+                    "servantAliases" to emptyMap<String, String>(),
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
                 docRef.set(payload).await()
+                runCatching { upsertEmailDirectoryEntry(uid, safeEmail, safeName) }
                 UserProfile(
                     id = uid,
                     userId = uid,
@@ -130,7 +141,8 @@ class KamRepository(private val db: FirebaseFirestore) {
                     themeId = "DARK",
                     uiScaleMode = "AUTO",
                     uiScaleFactor = 0.85,
-                    showFloatingAddButton = true
+                    showFloatingAddButton = true,
+                    servantAliases = emptyMap()
                 )
             } catch (e: CancellationException) {
                 throw e
@@ -140,6 +152,157 @@ class KamRepository(private val db: FirebaseFirestore) {
                 }
                 throw e
             }
+        }
+    }
+
+    suspend fun upsertEmailDirectoryEntry(
+        uid: String,
+        rawEmail: String,
+        displayName: String
+    ) {
+        val normEmail = EmailDirectoryEntry.normalizeEmail(rawEmail).take(150)
+        val docId = EmailDirectoryEntry.buildDocId(normEmail)
+        if (uid.isBlank() || docId.isBlank() || normEmail.isBlank()) return
+        val safeName = displayName.trim().ifBlank { "خادم الفصل" }.take(80)
+        db.collection("emailDirectory").document(docId)
+            .set(
+                mapOf(
+                    "email" to normEmail,
+                    "uid" to uid,
+                    "displayName" to safeName,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+            )
+            .await()
+    }
+
+    suspend fun lookupUserByEmail(rawEmail: String): Result<EmailDirectoryEntry?> = runCatching {
+        requireUserId()
+        val normEmail = EmailDirectoryEntry.normalizeEmail(rawEmail)
+        val docId = EmailDirectoryEntry.buildDocId(normEmail)
+        if (docId.isBlank() || !normEmail.contains("@")) {
+            throw IllegalArgumentException("يرجى إدخال بريد إلكتروني صحيح")
+        }
+        val snap = db.collection("emailDirectory").document(docId).get().await()
+        if (!snap.exists()) {
+            null
+        } else {
+            snap.toObject(EmailDirectoryEntry::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                ?.copy(id = snap.id)
+        }
+    }
+
+    suspend fun updateOwnDisplayName(
+        newName: String,
+        email: String,
+        memberGroups: List<Group>,
+        ownBlocks: List<ServantBlock>,
+        waitForServerAck: Boolean = false
+    ): Result<String> = runCatching {
+        val uid = requireUserId()
+        val cleanName = newName.trim().take(80)
+        require(cleanName.isNotBlank()) { "الاسم لا يمكن أن يكون فارغًا" }
+
+        val userRef = db.collection("users").document(uid)
+        safeUpsertUserProfileFields(
+            uid = uid,
+            docRef = userRef,
+            fields = mapOf("displayName" to cleanName)
+        )
+        runCatching {
+            if (email.isNotBlank()) {
+                upsertEmailDirectoryEntry(uid, email, cleanName)
+            }
+        }
+
+        val batch = db.batch()
+        memberGroups.distinctBy { it.inviteCode }.forEach { grp ->
+            if (grp.inviteCode.isNotBlank()) {
+                val memberRef = db.collection("groups").document(grp.inviteCode)
+                    .collection("members").document(uid)
+                batch.set(
+                    memberRef,
+                    mapOf(
+                        "uid" to uid,
+                        "groupId" to grp.inviteCode,
+                        "displayName" to cleanName,
+                        "phoneVerified" to false,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ),
+                    SetOptions.merge()
+                )
+                if (grp.adminId == uid) {
+                    batch.update(
+                        db.collection("groups").document(grp.inviteCode),
+                        mapOf(
+                            "adminName" to cleanName,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+            }
+        }
+        ownBlocks.filter { it.servantId == uid && it.groupId.isNotBlank() && it.id.isNotBlank() }
+            .forEach { blk ->
+                batch.update(
+                    db.collection("groups").document(blk.groupId)
+                        .collection("blocks").document(blk.id),
+                    mapOf(
+                        "servantName" to cleanName,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+        val task = batch.commit()
+        if (waitForServerAck) {
+            task.await()
+        }
+        cleanName
+    }
+
+    suspend fun updatePersonalServantAliases(
+        aliases: Map<String, String>,
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val docRef = db.collection("users").document(uid)
+        val cleaned = LinkedHashMap<String, String>()
+        aliases.entries
+            .filter { it.key.isNotBlank() && it.value.trim().isNotBlank() }
+            .take(100)
+            .forEach { (k, v) ->
+                cleaned[k.trim().take(64)] = v.trim().take(80)
+            }
+        safeUpsertUserProfileFields(
+            uid = uid,
+            docRef = docRef,
+            fields = mapOf("servantAliases" to cleaned)
+        )
+        if (!waitForServerAck) Unit
+    }
+
+    suspend fun updateGroupAvatar(
+        groupId: String,
+        avatarBase64: String,
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        require(groupId.isNotBlank()) { "المجموعة غير محددة" }
+        val safeAvatar = avatarBase64.trim().take(50000)
+        val avatarHash = if (safeAvatar.isNotBlank()) Student.computeAvatarHash(safeAvatar) else ""
+        StudentAvatarImageHelper.writeLocalAlbumRaw(null, "group_$groupId", safeAvatar)
+        val docRef = db.collection("groups").document(groupId)
+        val task = docRef.update(
+            mapOf(
+                "avatarBase64" to safeAvatar,
+                "avatarHash" to avatarHash,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        )
+        if (waitForServerAck) {
+            task.await()
         }
     }
 
@@ -366,7 +529,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                     groupId = inviteCode,
                     displayName = safeAdminName,
                     memberUids = memberUids,
-                    waitForServerAck = false
+                    waitForServerAck = true
                 )
             }
 
@@ -462,42 +625,14 @@ class KamRepository(private val db: FirebaseFirestore) {
 
             updateUserGroup(groupPrefix, listOf(groupPrefix)).getOrThrow()
 
-            // Create a block for this servant in the shared group if they don't have one yet,
-            // or re-attach their account if they were previously unbanned and their block still exists
-            val colorPreset = BlockColorPreset.entries[updatedMembers.size % BlockColorPreset.entries.size]
-            val blockId = "blk_$uid"
-            val blockRef = groupRef.collection("blocks").document(blockId)
-            val blockSnap = try { blockRef.get().await() } catch (_: Exception) { null }
-            val safeServantName = servantName.trim().ifBlank { "خادم" }.take(100)
-            if (blockSnap == null || !blockSnap.exists()) {
-                blockRef.set(
-                    mapOf(
-                        "groupId" to groupPrefix,
-                        "servantId" to uid,
-                        "servantName" to safeServantName,
-                        "colorHex" to colorPreset.hex,
-                        "sortOrder" to updatedMembers.size.toLong(),
-                        "memberUids" to updatedMembers,
-                        "createdAt" to FieldValue.serverTimestamp(),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-            } else if (blockSnap.getString("servantId").isNullOrBlank()) {
-                blockRef.update(
-                    mapOf(
-                        "servantId" to uid,
-                        "memberUids" to updatedMembers,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-            }
-
+            val safeServantName = servantName.trim().ifBlank { "خادم" }.take(80)
+            // Note: Creating/assigning blocks is strictly restricted to Group Admin per Firestore Rules.
             runCatching {
                 upsertOwnMemberProfile(
                     groupId = groupPrefix,
                     displayName = safeServantName,
                     memberUids = updatedMembers,
-                    waitForServerAck = false
+                    waitForServerAck = true
                 )
             }
 
@@ -1065,10 +1200,10 @@ class KamRepository(private val db: FirebaseFirestore) {
         try {
             val payload = mapOf(
                 "groupId" to groupId,
-                "servantId" to servantId.take(128),
-                "servantName" to servantName.trim().ifBlank { "بلوك خادم" }.take(100),
-                "colorHex" to colorHex.take(30),
-                "sortOrder" to sortOrder.toLong().coerceIn(0L, 10000L),
+                "servantId" to servantId.take(64),
+                "servantName" to servantName.trim().ifBlank { "بلوك خادم" }.take(80),
+                "colorHex" to colorHex.take(24),
+                "sortOrder" to sortOrder.toLong().coerceIn(0L, 500L),
                 "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
@@ -1093,20 +1228,23 @@ class KamRepository(private val db: FirebaseFirestore) {
         colorHex: String,
         sortOrder: Long,
         memberUids: List<String>,
+        servantId: String? = null,
         waitForServerAck: Boolean = true
     ): Result<Unit> = runCatching {
         requireUserId()
         val docRef = db.collection("groups").document(groupId).collection("blocks").document(blockId)
         try {
-            val task = docRef.update(
-                mapOf(
-                    "servantName" to servantName.trim().ifBlank { "بلوك خادم" }.take(100),
-                    "colorHex" to colorHex.take(30),
-                    "sortOrder" to sortOrder.coerceIn(0L, 10000L),
-                    "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+            val payload = mutableMapOf<String, Any>(
+                "servantName" to servantName.trim().ifBlank { "بلوك خادم" }.take(80),
+                "colorHex" to colorHex.take(24),
+                "sortOrder" to sortOrder.coerceIn(0L, 500L),
+                "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
+                "updatedAt" to FieldValue.serverTimestamp()
             )
+            if (servantId != null) {
+                payload["servantId"] = servantId.take(64)
+            }
+            val task = docRef.update(payload)
             if (waitForServerAck) {
                 task.await()
             }
@@ -1127,6 +1265,94 @@ class KamRepository(private val db: FirebaseFirestore) {
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun deleteBlockKeepingChildren(
+        groupId: String,
+        blockId: String,
+        studentIdsInBlock: List<String>,
+        memberUids: List<String>,
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        val groupRef = db.collection("groups").document(groupId)
+        val studentsCol = groupRef.collection("students")
+        val safeMembers = memberUids.distinct().take(MAX_SERVANTS_PER_GROUP)
+
+        try {
+            if (studentIdsInBlock.isEmpty()) {
+                groupRef.collection("blocks").document(blockId).delete().let { t ->
+                    if (waitForServerAck) t.await()
+                }
+                return@runCatching
+            }
+            val chunks = studentIdsInBlock.distinct().chunked(120)
+            chunks.forEachIndexed { idx, chunk ->
+                val batch = db.batch()
+                chunk.forEach { stuId ->
+                    batch.update(
+                        studentsCol.document(stuId),
+                        mapOf(
+                            "blockId" to "",
+                            "memberUids" to safeMembers,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                if (idx == chunks.lastIndex) {
+                    batch.delete(groupRef.collection("blocks").document(blockId))
+                }
+                val task = batch.commit()
+                if (waitForServerAck) {
+                    task.await()
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, "groups/$groupId/blocks/$blockId")
+            throw e
+        }
+    }
+
+    suspend fun deleteBlockWithChildren(
+        groupId: String,
+        blockId: String,
+        studentIdsInBlock: List<String>,
+        noteIdsToDelete: List<String>,
+        balanceIdsToDelete: List<String>,
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        val groupRef = db.collection("groups").document(groupId)
+        val docRefsToDelete = mutableListOf<DocumentReference>()
+        studentIdsInBlock.distinct().forEach { stuId ->
+            docRefsToDelete.add(groupRef.collection("students").document(stuId))
+            docRefsToDelete.add(groupRef.collection("avatars").document(stuId))
+        }
+        noteIdsToDelete.distinct().forEach { nid ->
+            docRefsToDelete.add(groupRef.collection("childNotes").document(nid))
+        }
+        balanceIdsToDelete.distinct().forEach { bid ->
+            docRefsToDelete.add(groupRef.collection("monthlyBalances").document(bid))
+        }
+        docRefsToDelete.add(groupRef.collection("blocks").document(blockId))
+
+        try {
+            docRefsToDelete.chunked(120).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { ref -> batch.delete(ref) }
+                val task = batch.commit()
+                if (waitForServerAck) {
+                    task.await()
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, "groups/$groupId/blocks/$blockId")
             throw e
         }
     }
@@ -1223,16 +1449,15 @@ class KamRepository(private val db: FirebaseFirestore) {
                 null
             }
             val current = existingProfile ?: snap?.toObject(
-                ServantMemberProfile::class.java,
-                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ServantMemberProfile::class.java
             )
             val safeName = displayName.trim().ifBlank {
                 current?.displayName?.ifBlank { "خادم" } ?: "خادم"
             }.take(100)
             val finalPrimary = (primaryPhone ?: current?.effectivePrimaryPhone.orEmpty()).trim().take(24)
             val finalSecondary = (secondaryPhone ?: current?.secondaryPhone.orEmpty()).trim().take(24)
-            val finalHidden = phoneHidden ?: (current?.let { !it.effectiveShowPhone } ?: false)
-            val finalShowPhone = !finalHidden
+            val finalHidden = false
+            val finalShowPhone = true
 
             val finalAvatarBase64: String
             val finalHasAvatar: Boolean
@@ -1266,11 +1491,14 @@ class KamRepository(private val db: FirebaseFirestore) {
             val safeMembers = memberUids.ifEmpty {
                 current?.memberUids.orEmpty().ifEmpty { listOf(uid) }
             }.distinct().take(MAX_SERVANTS_PER_GROUP)
+            val finalEmail = (current?.email?.ifBlank { auth.currentUser?.email.orEmpty() }
+                ?: auth.currentUser?.email.orEmpty()).trim().take(150)
 
             val payload = HashMap<String, Any>().apply {
                 put("uid", uid)
                 put("groupId", groupId)
                 put("displayName", safeName)
+                put("email", finalEmail)
                 put("phone", finalPrimary)
                 put("primaryPhone", finalPrimary)
                 put("secondaryPhone", finalSecondary)
@@ -1297,6 +1525,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                 uid = uid,
                 groupId = groupId,
                 displayName = safeName,
+                email = finalEmail,
                 phone = finalPrimary,
                 primaryPhone = finalPrimary,
                 secondaryPhone = finalSecondary,
@@ -2147,6 +2376,139 @@ class KamRepository(private val db: FirebaseFirestore) {
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, docRef.path)
             throw e
+        }
+    }
+
+    // --- 8. Shared Child Notes (Comments, Memorization Progress, Visitation Follow-ups) ---
+
+    fun observeChildNotes(groupId: String): Flow<List<ChildNote>> {
+        if (groupId.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
+        val path = "groups/$groupId/childNotes"
+        return flow {
+            val notesById = LinkedHashMap<String, ChildNote>()
+            var hasEmittedInitial = false
+            db.collection("groups")
+                .document(groupId)
+                .collection("childNotes")
+                .whereEqualTo("groupId", groupId)
+                .snapshots()
+                .collect { snapshot ->
+                    if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {
+                        return@collect
+                    }
+                    hasEmittedInitial = true
+                    for (change in snapshot.documentChanges) {
+                        val docId = change.document.id
+                        when (change.type) {
+                            DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                val parsed = change.document.toObject(
+                                    ChildNote::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                )
+                                notesById[docId] = parsed.copy(id = docId)
+                            }
+                            DocumentChange.Type.REMOVED -> {
+                                notesById.remove(docId)
+                            }
+                        }
+                    }
+                    emit(notesById.values.sortedByDescending { it.effectiveTimeMillis })
+                }
+        }.catch { error ->
+            if (error is Exception && auth.currentUser != null) {
+                handleFirestoreError(error, OperationType.LIST, path)
+            }
+            emit(emptyList())
+        }
+    }
+
+    suspend fun addChildNote(
+        groupId: String,
+        student: Student,
+        type: ChildNoteType,
+        text: String,
+        status: String = "",
+        authorName: String,
+        memberUids: List<String>,
+        waitForServerAck: Boolean = false
+    ): Result<ChildNote> = runCatching {
+        val uid = requireUserId()
+        val safeGroupId = groupId.trim()
+        val cleanText = text.trim().take(ChildNote.MAX_TEXT_LENGTH)
+        require(safeGroupId.isNotBlank() && student.id.isNotBlank() && cleanText.isNotBlank()) {
+            "بيانات الملاحظة غير مكتملة"
+        }
+        val safeAuthor = authorName.trim().ifBlank { "خادم" }.take(80)
+        val safeStatus = status.trim().take(30)
+        val safeMembers = (memberUids + uid).filter { it.isNotBlank() }.distinct().take(MAX_SERVANTS_PER_GROUP)
+        val nowMs = System.currentTimeMillis()
+        val noteId = "note_${nowMs}_${UUID.randomUUID().toString().replace("-", "").take(8)}"
+
+        val groupRef = db.collection("groups").document(safeGroupId)
+        val noteRef = groupRef.collection("childNotes").document(noteId)
+        val batch = db.batch()
+        batch.set(
+            noteRef,
+            mapOf(
+                "groupId" to safeGroupId,
+                "studentId" to student.id,
+                "studentName" to student.name.trim().take(100),
+                "type" to type.id,
+                "text" to cleanText,
+                "status" to safeStatus,
+                "authorUid" to uid,
+                "authorName" to safeAuthor,
+                "clientCreatedAtMillis" to nowMs,
+                "memberUids" to safeMembers,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        )
+        if (type == ChildNoteType.MEMORIZATION) {
+            batch.update(
+                groupRef.collection("students").document(student.id),
+                mapOf(
+                    "lastMemorizedText" to cleanText,
+                    "lastMemorizedBy" to safeAuthor,
+                    "lastMemorizedAtMillis" to nowMs,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+        }
+        val task = batch.commit()
+        if (waitForServerAck) {
+            task.await()
+        }
+        ChildNote(
+            id = noteId,
+            groupId = safeGroupId,
+            studentId = student.id,
+            studentName = student.name.trim().take(100),
+            type = type.id,
+            text = cleanText,
+            status = safeStatus,
+            authorUid = uid,
+            authorName = safeAuthor,
+            clientCreatedAtMillis = nowMs,
+            memberUids = safeMembers,
+            createdAt = Timestamp.now(),
+            updatedAt = Timestamp.now()
+        )
+    }
+
+    suspend fun deleteChildNote(
+        groupId: String,
+        noteId: String,
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        val docRef = db.collection("groups")
+            .document(groupId.trim())
+            .collection("childNotes")
+            .document(noteId.trim())
+        val task = docRef.delete()
+        if (waitForServerAck) {
+            task.await()
         }
     }
 

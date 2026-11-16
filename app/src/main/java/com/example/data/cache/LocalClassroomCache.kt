@@ -231,7 +231,7 @@ object LocalClassroomCache {
                 phoneOnboardingDone = obj.optBoolean("phoneOnboardingDone", false),
                 primaryPhone = obj.optString("primaryPhone", ""),
                 secondaryPhone = obj.optString("secondaryPhone", ""),
-                phoneHidden = obj.optBoolean("phoneHidden", false),
+                phoneHidden = false,
                 servantAvatarHash = obj.optString("servantAvatarHash", ""),
                 updatedAtMillis = obj.optLong("updatedAtMillis", 0L)
             )
@@ -439,6 +439,11 @@ object LocalClassroomCache {
         put("uiScaleMode", p.uiScaleMode)
         put("uiScaleFactor", p.uiScaleFactor)
         put("showFloatingAddButton", p.showFloatingAddButton)
+        put("servantAliases", JSONObject().apply {
+            p.servantAliases.forEach { (k, v) ->
+                if (k.isNotBlank() && v.isNotBlank()) put(k, v)
+            }
+        })
     }
 
     private fun deserializeUserProfile(obj: JSONObject): UserProfile = UserProfile(
@@ -456,46 +461,63 @@ object LocalClassroomCache {
         themeId = obj.optString("themeId", "DARK").ifBlank { "DARK" },
         uiScaleMode = obj.optString("uiScaleMode", "AUTO").ifBlank { "AUTO" },
         uiScaleFactor = obj.optDouble("uiScaleFactor", 0.85),
-        showFloatingAddButton = obj.optBoolean("showFloatingAddButton", true)
+        showFloatingAddButton = obj.optBoolean("showFloatingAddButton", true),
+        servantAliases = jsonObjectToStringMap(obj.optJSONObject("servantAliases"))
     )
 
-    private fun serializeGroup(g: Group): JSONObject = JSONObject().apply {
-        put("id", g.id.ifBlank { g.inviteCode })
-        put("inviteCode", g.inviteCode)
-        put("name", g.name)
-        put("adminId", g.adminId)
-        put("adminName", g.adminName)
-        put("memberUids", JSONArray(g.memberUids))
-        put("allowServantUndo", g.allowServantUndo)
-        put("enforceWeeklyCardLimit", g.enforceWeeklyCardLimit)
-        put("maxMonthlyPoints", g.maxMonthlyPoints)
-        put("attendanceIsCardOnly", g.attendanceIsCardOnly)
-        put("showLeaderboard", g.showLeaderboard)
-        put("autoStudentNumber", g.autoStudentNumber)
-        put("bannedUids", JSONArray(g.bannedUids))
-        put("bannedServantEntries", JSONArray(g.bannedServantEntries))
-        put("dailyInviteToken", g.dailyInviteToken)
-        put("inviteCodeUpdatedAtMillis", g.inviteCodeUpdatedAtMillis)
+    private fun serializeGroup(g: Group): JSONObject {
+        if (g.avatarBase64.isNotBlank() && g.inviteCode.isNotBlank()) {
+            StudentAvatarImageHelper.writeLocalAlbumRaw(appContext, "group_${g.inviteCode}", g.avatarBase64)
+        }
+        return JSONObject().apply {
+            put("id", g.id.ifBlank { g.inviteCode })
+            put("inviteCode", g.inviteCode)
+            put("name", g.name)
+            put("adminId", g.adminId)
+            put("adminName", g.adminName)
+            put("memberUids", JSONArray(g.memberUids))
+            put("allowServantUndo", g.allowServantUndo)
+            put("enforceWeeklyCardLimit", g.enforceWeeklyCardLimit)
+            put("maxMonthlyPoints", g.maxMonthlyPoints)
+            put("attendanceIsCardOnly", g.attendanceIsCardOnly)
+            put("showLeaderboard", g.showLeaderboard)
+            put("autoStudentNumber", g.autoStudentNumber)
+            put("bannedUids", JSONArray(g.bannedUids))
+            put("bannedServantEntries", JSONArray(g.bannedServantEntries))
+            put("dailyInviteToken", g.dailyInviteToken)
+            put("inviteCodeUpdatedAtMillis", g.inviteCodeUpdatedAtMillis)
+            put("avatarHash", g.avatarHash)
+        }
     }
 
-    private fun deserializeGroup(obj: JSONObject): Group = Group(
-        id = obj.optString("id", obj.optString("inviteCode", "")),
-        inviteCode = obj.optString("inviteCode", ""),
-        name = obj.optString("name", ""),
-        adminId = obj.optString("adminId", ""),
-        adminName = obj.optString("adminName", ""),
-        memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids")),
-        allowServantUndo = obj.optBoolean("allowServantUndo", true),
-        enforceWeeklyCardLimit = obj.optBoolean("enforceWeeklyCardLimit", false),
-        maxMonthlyPoints = obj.optLong("maxMonthlyPoints", 0L),
-        attendanceIsCardOnly = obj.optBoolean("attendanceIsCardOnly", true),
-        showLeaderboard = obj.optBoolean("showLeaderboard", true),
-        autoStudentNumber = obj.optBoolean("autoStudentNumber", true),
-        bannedUids = jsonArrayToStringList(obj.optJSONArray("bannedUids")),
-        bannedServantEntries = jsonArrayToStringList(obj.optJSONArray("bannedServantEntries")),
-        dailyInviteToken = obj.optString("dailyInviteToken", ""),
-        inviteCodeUpdatedAtMillis = obj.optLong("inviteCodeUpdatedAtMillis", 0L)
-    )
+    private fun deserializeGroup(obj: JSONObject): Group {
+        val code = obj.optString("inviteCode", "")
+        val localAvatar = if (code.isNotBlank()) {
+            StudentAvatarImageHelper.peekCachedLocalAlbumRaw("group_$code")
+        } else {
+            ""
+        }
+        return Group(
+            id = obj.optString("id", code),
+            inviteCode = code,
+            name = obj.optString("name", ""),
+            adminId = obj.optString("adminId", ""),
+            adminName = obj.optString("adminName", ""),
+            memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids")),
+            allowServantUndo = obj.optBoolean("allowServantUndo", true),
+            enforceWeeklyCardLimit = obj.optBoolean("enforceWeeklyCardLimit", false),
+            maxMonthlyPoints = obj.optLong("maxMonthlyPoints", 0L),
+            attendanceIsCardOnly = obj.optBoolean("attendanceIsCardOnly", true),
+            showLeaderboard = obj.optBoolean("showLeaderboard", true),
+            autoStudentNumber = obj.optBoolean("autoStudentNumber", true),
+            bannedUids = jsonArrayToStringList(obj.optJSONArray("bannedUids")),
+            bannedServantEntries = jsonArrayToStringList(obj.optJSONArray("bannedServantEntries")),
+            dailyInviteToken = obj.optString("dailyInviteToken", ""),
+            inviteCodeUpdatedAtMillis = obj.optLong("inviteCodeUpdatedAtMillis", 0L),
+            avatarBase64 = localAvatar,
+            avatarHash = obj.optString("avatarHash", "")
+        )
+    }
 
     private fun serializeBlock(b: ServantBlock): JSONObject = JSONObject().apply {
         put("id", b.id)
@@ -538,6 +560,9 @@ object LocalClassroomCache {
         put("avatarHash", s.effectiveAvatarKey)
         put("createdByUid", s.createdByUid)
         put("memberUids", JSONArray(s.memberUids))
+        put("lastMemorizedText", s.lastMemorizedText)
+        put("lastMemorizedBy", s.lastMemorizedBy)
+        put("lastMemorizedAtMillis", s.lastMemorizedAtMillis)
     }
 
     private fun deserializeStudent(obj: JSONObject): Student {
@@ -566,7 +591,10 @@ object LocalClassroomCache {
             hasAvatar = hasAvatarFlag,
             avatarHash = hashFlag,
             createdByUid = obj.optString("createdByUid", ""),
-            memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids"))
+            memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids")),
+            lastMemorizedText = obj.optString("lastMemorizedText", ""),
+            lastMemorizedBy = obj.optString("lastMemorizedBy", ""),
+            lastMemorizedAtMillis = obj.optLong("lastMemorizedAtMillis", 0L)
         )
     }
 
@@ -728,11 +756,6 @@ object LocalClassroomCache {
             if (legacyBase64.isNotBlank()) Student.computeAvatarHash(legacyBase64) else ""
         )
         val primary = obj.optString("primaryPhone", obj.optString("phone", ""))
-        val hidden = if (obj.has("phoneHidden")) {
-            obj.optBoolean("phoneHidden", false)
-        } else {
-            !obj.optBoolean("showPhone", true)
-        }
         val lastSeenMillis = obj.optLong("lastSeenAtMillis", 0L)
         val parsedLastSeen = if (lastSeenMillis > 0L) Timestamp(Date(lastSeenMillis)) else null
         return ServantMemberProfile(
@@ -744,8 +767,8 @@ object LocalClassroomCache {
             primaryPhone = primary,
             secondaryPhone = obj.optString("secondaryPhone", ""),
             phoneVerified = false,
-            showPhone = !hidden,
-            phoneHidden = hidden,
+            showPhone = true,
+            phoneHidden = false,
             hasAvatar = hasAvatar,
             avatarHash = avatarHash,
             avatarBase64 = "",
@@ -905,6 +928,104 @@ object LocalClassroomCache {
         }
     }
 
+    private val memoryChildNotes = ConcurrentHashMap<String, List<com.example.data.model.ChildNote>>()
+    private val reportedConflictKeys = ConcurrentHashMap.newKeySet<String>()
+
+    fun getMemoryChildNotes(groupId: String): List<com.example.data.model.ChildNote> {
+        if (groupId.isBlank()) return emptyList()
+        return memoryChildNotes[groupId].orEmpty()
+    }
+
+    suspend fun loadChildNotesAsync(groupId: String): List<com.example.data.model.ChildNote> {
+        if (groupId.isBlank()) return emptyList()
+        memoryChildNotes[groupId]?.let { return it }
+        return withContext(Dispatchers.IO) {
+            val ctx = appContext ?: return@withContext emptyList()
+            val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val raw = prefs.getString("child_notes_$groupId", null) ?: return@withContext emptyList()
+            runCatching {
+                val arr = JSONArray(raw)
+                val list = ArrayList<com.example.data.model.ChildNote>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val createdSec = obj.optLong("createdAtSec", 0L)
+                    list.add(
+                        com.example.data.model.ChildNote(
+                            id = obj.optString("id", ""),
+                            groupId = obj.optString("groupId", groupId),
+                            studentId = obj.optString("studentId", ""),
+                            studentName = obj.optString("studentName", ""),
+                            type = obj.optString("type", "COMMENT"),
+                            text = obj.optString("text", ""),
+                            status = obj.optString("status", ""),
+                            authorUid = obj.optString("authorUid", ""),
+                            authorName = obj.optString("authorName", ""),
+                            clientCreatedAtMillis = obj.optLong("clientCreatedAtMillis", 0L),
+                            memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids")),
+                            createdAt = if (createdSec > 0L) Timestamp(createdSec, 0) else null
+                        )
+                    )
+                }
+                memoryChildNotes[groupId] = list
+                list
+            }.getOrDefault(emptyList())
+        }
+    }
+
+    fun saveChildNotes(groupId: String, notes: List<com.example.data.model.ChildNote>) {
+        if (groupId.isBlank()) return
+        val capped = notes.take(300)
+        memoryChildNotes[groupId] = capped
+        val ctx = appContext ?: return
+        ioScope.launch {
+            runCatching {
+                val arr = JSONArray()
+                for (n in capped) {
+                    val obj = JSONObject()
+                    obj.put("id", n.id)
+                    obj.put("groupId", n.groupId.ifBlank { groupId })
+                    obj.put("studentId", n.studentId)
+                    obj.put("studentName", n.studentName)
+                    obj.put("type", n.type)
+                    obj.put("text", n.text)
+                    obj.put("status", n.status)
+                    obj.put("authorUid", n.authorUid)
+                    obj.put("authorName", n.authorName)
+                    obj.put("clientCreatedAtMillis", n.effectiveTimeMillis)
+                    obj.put("memberUids", JSONArray(n.memberUids))
+                    obj.put("createdAtSec", n.createdAt?.seconds ?: 0L)
+                    arr.put(obj)
+                }
+                ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("child_notes_$groupId", arr.toString())
+                    .apply()
+            }
+        }
+    }
+
+    fun isConflictNotificationReported(groupId: String, conflictKey: String): Boolean {
+        val fullKey = "${groupId}_$conflictKey"
+        if (reportedConflictKeys.contains(fullKey)) return true
+        val ctx = appContext ?: return false
+        val saved = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean("conflict_rep_$fullKey", false)
+        if (saved) reportedConflictKeys.add(fullKey)
+        return saved
+    }
+
+    fun markConflictNotificationReported(groupId: String, conflictKey: String) {
+        val fullKey = "${groupId}_$conflictKey"
+        reportedConflictKeys.add(fullKey)
+        val ctx = appContext ?: return
+        ioScope.launch {
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("conflict_rep_$fullKey", true)
+                .apply()
+        }
+    }
+
     private fun jsonArrayToStringList(arr: JSONArray?): List<String> {
         if (arr == null) return emptyList()
         val list = ArrayList<String>(arr.length())
@@ -915,5 +1036,19 @@ object LocalClassroomCache {
             }
         }
         return list
+    }
+
+    private fun jsonObjectToStringMap(obj: JSONObject?): Map<String, String> {
+        if (obj == null) return emptyMap()
+        val map = LinkedHashMap<String, String>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val v = obj.optString(k, "").trim()
+            if (k.isNotBlank() && v.isNotBlank()) {
+                map[k] = v
+            }
+        }
+        return map
     }
 }

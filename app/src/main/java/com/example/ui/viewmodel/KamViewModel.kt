@@ -15,18 +15,24 @@ import com.example.data.cache.LocalUserPreferences
 import com.example.data.model.ArabicInitialsHelper
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
+import com.example.data.model.ChatMessageType
+import com.example.data.model.ChildNote
+import com.example.data.model.ChildNoteType
 import com.example.data.model.DuplicateCardAlert
 import com.example.data.model.DuplicateStudentNameGroup
 import com.example.data.model.Group
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
 import com.example.data.model.MonthlyBalance
+import com.example.data.model.NotificationCategory
 import com.example.data.model.PhoneNumberFormatHelper
 import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.model.ServantBlock
 import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
 import com.example.data.model.UserProfile
+import com.example.data.model.VisitationStatus
+import com.example.data.repository.ChatRepository
 import com.example.data.repository.KamRepository
 import com.example.ui.components.StudentAvatarImageHelper
 import com.example.util.KamPerformanceTracker
@@ -312,6 +318,7 @@ data class KamScreenState(
     val allGroupCardEvents: List<CardEvent> = emptyList(),
     val allGroupMonthlyBalances: List<MonthlyBalance> = emptyList(),
     val invitations: List<Invitation> = emptyList(),
+    val childNotes: List<ChildNote> = emptyList(),
     val selectedMonthKey: String = "",
     val selectedWeekKey: String? = null,
     val currentWeekKey: String = "",
@@ -350,6 +357,36 @@ data class KamScreenState(
                 dismissedDuplicateNames = dismissedDuplicateNames,
                 memberProfiles = memberProfiles
             )
+        }
+    }
+
+    val servantAliases: Map<String, String>
+        get() = userProfile?.servantAliases ?: emptyMap()
+
+    fun resolvedServantName(servantUid: String, fallbackName: String = "خادم"): String {
+        if (servantUid.isNotBlank()) {
+            val alias = servantAliases[servantUid]?.trim()?.takeIf { it.isNotBlank() }
+            if (alias != null) return alias
+            val memberName = memberProfileForServant(servantUid)?.displayName?.trim()?.takeIf { it.isNotBlank() }
+            if (memberName != null) return memberName
+        }
+        return fallbackName.ifBlank { "خادم" }
+    }
+
+    fun blockNameForStudent(student: Student): String {
+        val blk = blocks.firstOrNull { it.id == student.blockId }
+        return if (blk != null && blk.servantName.isNotBlank()) {
+            val resolvedServant = resolvedServantName(blk.servantId, blk.servantName)
+            "بلوك $resolvedServant"
+        } else {
+            "بدون بلوك"
+        }
+    }
+
+    fun notesForStudent(studentId: String, type: ChildNoteType? = null): List<ChildNote> {
+        if (studentId.isBlank()) return emptyList()
+        return childNotes.filter { note ->
+            note.studentId == studentId && (type == null || note.noteType == type)
         }
     }
 
@@ -596,7 +633,8 @@ class KamViewModel(
     private val currentUserId: String,
     private val initialDisplayName: String,
     private val initialEmail: String,
-    val isOnlineFlow: Flow<Boolean> = flowOf(true)
+    val isOnlineFlow: Flow<Boolean> = flowOf(true),
+    private val chatRepository: ChatRepository? = null
 ) : ViewModel() {
 
     @Volatile
@@ -632,6 +670,8 @@ class KamViewModel(
     private val _optimisticStudentOverrides = MutableStateFlow<Map<String, Student>>(emptyMap())
     private val _optimisticMemberOverrides = MutableStateFlow<Map<String, ServantMemberProfile>>(emptyMap())
     private val _optimisticGroupPolicyOverride = MutableStateFlow<Group?>(null)
+    private val _optimisticChildNotes = MutableStateFlow<List<ChildNote>>(emptyList())
+    private val _optimisticDeletedNoteIds = MutableStateFlow<Set<String>>(emptySet())
     private var policyMutationSeq: Long = 0L
 
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
@@ -898,18 +938,38 @@ class KamViewModel(
         }
     }
 
-    /**
-     * Heavy classroom data processing flow: runs on [Dispatchers.Default] ONLY when actual
-     * classroom data, selected month/week, or optimistic overlays change.
-     * Pre-warms all [PrecomputedClassroomIndices] on background CPU threads so transient UI updates
-     * (search query, banners, pending-writes indicator, online status) never recompute student/card indices!
-     */
+    private val childNotesFlow: Flow<List<ChildNote>> = activeGroupIdFlow.flatMapLatest { groupId ->
+        if (groupId.isBlank()) {
+            flowOf(emptyList())
+        } else {
+            repository.observeChildNotes(groupId)
+                .map { notes ->
+                    LocalClassroomCache.saveChildNotes(groupId, notes)
+                    notes
+                }
+                .onStart {
+                    val cached = LocalClassroomCache.loadChildNotesAsync(groupId)
+                    emit(cached)
+                }
+                .debounceSubsequentCloudEmissions(200L)
+                .catch {
+                    emit(LocalClassroomCache.getMemoryChildNotes(groupId))
+                }
+        }
+    }
+
     private val coreClassroomStateFlow: Flow<KamScreenState> = combine(
         combine(userProfileFlow, groupFlow, userGroupsFlow, blocksFlow, _localPrefsOverride) { profile, group, userGroups, blocks, localPrefs ->
             arrayOf<Any?>(profile, group, userGroups, blocks, localPrefs)
         },
-        combine(studentsFlow, allCardEventsFlow, allMonthlyBalancesFlow, invitationsFlow, memberProfilesFlow) { students, allEvents, allBalances, invites, members ->
-            arrayOf<Any?>(students, allEvents, allBalances, invites, members)
+        combine(
+            studentsFlow,
+            allCardEventsFlow,
+            allMonthlyBalancesFlow,
+            combine(invitationsFlow, childNotesFlow) { inv, notes -> inv to notes },
+            memberProfilesFlow
+        ) { students, allEvents, allBalances, invitesAndNotes, members ->
+            arrayOf<Any?>(students, allEvents, allBalances, invitesAndNotes, members)
         },
         combine(_selectedMonthKey, _selectedWeekKey, _dismissedDuplicateNames) { month, week, dismissed ->
             arrayOf<Any?>(month, week, dismissed)
@@ -919,9 +979,11 @@ class KamViewModel(
             _optimisticRemovedEventIds,
             _optimisticStudentOverrides,
             _optimisticGroupPolicyOverride,
-            _optimisticMemberOverrides
-        ) { optAdd, optRem, optStu, optGroup, optMembers ->
-            arrayOf<Any?>(optAdd, optRem, optStu, optGroup, optMembers)
+            combine(_optimisticMemberOverrides, _optimisticChildNotes, _optimisticDeletedNoteIds) { mem, notes, delNotes ->
+                Triple(mem, notes, delNotes)
+            }
+        ) { optAdd, optRem, optStu, optGroup, optNotesTriple ->
+            arrayOf<Any?>(optAdd, optRem, optStu, optGroup, optNotesTriple)
         }
     ) { groupArr, dataArr, filterArr, optArr ->
         val rawProfile = groupArr[0] as UserProfile?
@@ -940,7 +1002,9 @@ class KamViewModel(
                     maxMonthlyPoints = optimisticGroupOverride.maxMonthlyPoints,
                     attendanceIsCardOnly = optimisticGroupOverride.attendanceIsCardOnly,
                     showLeaderboard = optimisticGroupOverride.showLeaderboard,
-                    autoStudentNumber = optimisticGroupOverride.autoStudentNumber
+                    autoStudentNumber = optimisticGroupOverride.autoStudentNumber,
+                    avatarBase64 = optimisticGroupOverride.avatarBase64.ifBlank { base.avatarBase64 },
+                    avatarHash = optimisticGroupOverride.avatarHash.ifBlank { base.avatarHash }
                 )
             } else {
                 base
@@ -970,7 +1034,9 @@ class KamViewModel(
         @Suppress("UNCHECKED_CAST")
         val allBalances = dataArr[2] as List<MonthlyBalance>
         @Suppress("UNCHECKED_CAST")
-        val invitations = dataArr[3] as List<Invitation>
+        val invitesAndNotes = dataArr[3] as Pair<List<Invitation>, List<ChildNote>>
+        val invitations = invitesAndNotes.first
+        val cloudNotes = invitesAndNotes.second
         @Suppress("UNCHECKED_CAST")
         val cloudMembers = dataArr[4] as List<ServantMemberProfile>
 
@@ -986,7 +1052,10 @@ class KamViewModel(
         @Suppress("UNCHECKED_CAST")
         val optimisticStudents = optArr[2] as Map<String, Student>
         @Suppress("UNCHECKED_CAST")
-        val optimisticMembers = optArr[4] as Map<String, ServantMemberProfile>
+        val optNotesTriple = optArr[4] as Triple<Map<String, ServantMemberProfile>, List<ChildNote>, Set<String>>
+        val optimisticMembers = optNotesTriple.first
+        val optimisticNotes = optNotesTriple.second
+        val optimisticDeletedNoteIds = optNotesTriple.third
 
         val mergedMembers = if (optimisticMembers.isEmpty()) {
             cloudMembers
@@ -995,6 +1064,15 @@ class KamViewModel(
             cloudMembers.forEach { m -> map[m.effectiveUid] = m }
             optimisticMembers.forEach { (uid, m) -> map[uid] = m }
             map.values.sortedBy { it.effectiveUid }
+        }
+
+        val mergedNotes = if (optimisticNotes.isEmpty() && optimisticDeletedNoteIds.isEmpty()) {
+            cloudNotes
+        } else {
+            val byId = LinkedHashMap<String, ChildNote>()
+            optimisticNotes.forEach { n -> if (n.id !in optimisticDeletedNoteIds) byId[n.id] = n }
+            cloudNotes.forEach { n -> if (n.id !in optimisticDeletedNoteIds) byId.putIfAbsent(n.id, n) }
+            byId.values.sortedByDescending { it.effectiveTimeMillis }
         }
 
         val rawStudents = if (optimisticStudents.isEmpty()) {
@@ -1220,12 +1298,53 @@ class KamViewModel(
             ?: ownCloudMember?.effectivePrimaryPhone.orEmpty()
         val effectiveOwnSecondary = effectiveLocalPrefs?.secondaryPhone?.takeIf { it.isNotBlank() }
             ?: ownCloudMember?.secondaryPhone.orEmpty()
-        val effectiveOwnHidden = effectiveLocalPrefs?.phoneHidden ?: (ownCloudMember?.let { !it.effectiveShowPhone } ?: false)
+        val effectiveOwnHidden = false
         val effectiveOwnAvatarHash = effectiveLocalPrefs?.servantAvatarHash?.takeIf { it.isNotBlank() }
             ?: ownCloudMember?.effectiveAvatarKey.orEmpty()
         val onboardingDone = (effectiveLocalPrefs?.phoneOnboardingDone == true) ||
             effectiveOwnPrimary.isNotBlank() ||
             effectiveOwnSecondary.isNotBlank()
+
+        val effectiveNotes = if (activeGroup == null) emptyList() else mergedNotes
+
+        // Auto-report cross-servant Friday card conflicts to Group Chat once per (studentId, cardType, weekKey)
+        if (activeGroup != null && precomputed.duplicateAlerts.isNotEmpty() && chatRepository != null) {
+            val alertsToReport = precomputed.duplicateAlerts.filter { alert ->
+                val conflictKey = "${alert.studentId}_${alert.cardType.id}_${alert.weekKey}"
+                val triggeringServant = alert.events.firstOrNull()?.servantId.orEmpty()
+                (triggeringServant == currentUserId || activeGroup.adminId == currentUserId) &&
+                    !LocalClassroomCache.isConflictNotificationReported(activeGroup.inviteCode, conflictKey)
+            }
+            if (alertsToReport.isNotEmpty()) {
+                val snapStudents = effectiveStudents
+                val snapBlocks = effectiveBlocks
+                val snapGroup = activeGroup
+                viewModelScope.launch(Dispatchers.IO) {
+                    alertsToReport.forEach { alert ->
+                        val conflictKey = "${alert.studentId}_${alert.cardType.id}_${alert.weekKey}"
+                        if (!LocalClassroomCache.isConflictNotificationReported(snapGroup.inviteCode, conflictKey)) {
+                            LocalClassroomCache.markConflictNotificationReported(snapGroup.inviteCode, conflictKey)
+                            val stu = snapStudents.firstOrNull { it.id == alert.studentId }
+                            val blkName = snapBlocks.firstOrNull { it.id == stu?.blockId }
+                                ?.servantName?.takeIf { it.isNotBlank() }?.let { "بلوك $it" } ?: "بدون بلوك"
+                            val msg = "⚠️ تضارب كارت ${alert.cardType.arabicTitle}: الطفل ${alert.studentName} ($blkName) أخد الكارت مرتين من (${alert.servantNames.joinToString(" و ")})"
+                            chatRepository.sendGroupMessage(
+                                groupId = snapGroup.inviteCode,
+                                senderName = "نظام التنبيهات",
+                                text = msg,
+                                memberUids = snapGroup.memberUids,
+                                type = ChatMessageType.SYSTEM,
+                                notificationCategory = NotificationCategory.CARD_CONFLICT.id,
+                                childId = alert.studentId,
+                                childName = alert.studentName,
+                                childBlockName = blkName,
+                                waitForServerAck = false
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         KamScreenState(
             isLoading = profile == null,
@@ -1241,6 +1360,7 @@ class KamViewModel(
             allGroupCardEvents = effectiveAllEvents,
             allGroupMonthlyBalances = effectiveAllBalances,
             invitations = effectiveInvitations,
+            childNotes = effectiveNotes,
             selectedMonthKey = SaturdayCalendarHelper.clampMonthKey(selectedMonth),
             selectedWeekKey = selectedWeek,
             currentWeekKey = currentYearWeek(),
@@ -1613,16 +1733,24 @@ class KamViewModel(
         showBanner("تم الإبقاء على الاسمين كطفلين منفصلين")
     }
 
-    // --- Servant Blocks ---
+    // --- Servant Blocks (Create & Delete strictly Admin-only) ---
 
-    fun createServantBlock(servantName: String, colorHex: String) {
+    fun createServantBlock(
+        servantName: String,
+        colorHex: String,
+        servantUid: String = currentUserId
+    ) {
         val state = uiState.value
         val group = state.group ?: return
+        if (!state.isAdmin) {
+            showBanner("إنشاء البلوكات متاح لأمين المجموعة فقط")
+            return
+        }
         viewModelScope.launch {
             val nextOrder = (state.blocks.maxOfOrNull { it.sortOrder.toInt() } ?: -1) + 1
             repository.createBlock(
                 groupId = group.inviteCode,
-                servantId = currentUserId,
+                servantId = servantUid.ifBlank { currentUserId },
                 servantName = servantName,
                 colorHex = colorHex,
                 sortOrder = nextOrder,
@@ -1631,12 +1759,17 @@ class KamViewModel(
             ).onSuccess {
                 showBanner("تم إضافة بلوك الخادم: $servantName")
             }.onFailure {
-                _operationError.value = it.localizedMessage ?: "تعذر إضافة البلوك"
+                _operationError.value = it.localizedMessage ?: "تعذر إضافة البلوك (متاح للأمين فقط)"
             }
         }
     }
 
-    fun updateServantBlock(block: ServantBlock, newName: String, newColorHex: String) {
+    fun updateServantBlock(
+        block: ServantBlock,
+        newName: String,
+        newColorHex: String,
+        newServantId: String? = null
+    ) {
         val state = uiState.value
         val group = state.group ?: return
         viewModelScope.launch {
@@ -1647,6 +1780,7 @@ class KamViewModel(
                 colorHex = newColorHex,
                 sortOrder = block.sortOrder,
                 memberUids = group.memberUids,
+                servantId = if (state.isAdmin) newServantId else null,
                 waitForServerAck = false
             ).onSuccess {
                 showBanner("تم تحديث بلوك $newName")
@@ -1715,33 +1849,65 @@ class KamViewModel(
 
     fun deleteServantBlock(block: ServantBlock) {
         val state = uiState.value
-        val group = state.group ?: return
-        // If this block belongs to a servant, remove & ban ONLY the servant while keeping the block and its children intact!
-        if (block.servantId.isNotBlank() && block.servantId != group.adminId) {
+        if (!state.isAdmin) {
+            showBanner("حذف البلوك متاح لأمين المجموعة فقط")
+            return
+        }
+        if (block.servantId.isNotBlank() && block.servantId != state.group?.adminId) {
             removeAndBanServantFromBlock(block)
             return
         }
+        deleteBlockKeepingChildren(block)
+    }
+
+    fun deleteBlockKeepingChildren(block: ServantBlock) {
+        val state = uiState.value
+        val group = state.group ?: return
+        if (!state.isAdmin) {
+            showBanner("حذف البلوك متاح لأمين المجموعة فقط")
+            return
+        }
+        val studentIdsInBlock = state.students.filter { it.blockId == block.id }.map { it.id }
         viewModelScope.launch {
-            // Move any students in this unassigned block back to "بدون بلوك" before deleting the empty shell
-            val studentsInBlock = state.students.filter { it.blockId == block.id }
-            studentsInBlock.forEach { stu ->
-                repository.moveStudentToBlock(
-                    groupId = group.inviteCode,
-                    studentId = stu.id,
-                    targetBlockId = "",
-                    newSortOrder = stu.sortOrder,
-                    newPosition = stu.effectivePosition,
-                    memberUids = group.memberUids,
-                    waitForServerAck = false
-                )
+            repository.deleteBlockKeepingChildren(
+                groupId = group.inviteCode,
+                blockId = block.id,
+                studentIdsInBlock = studentIdsInBlock,
+                memberUids = group.memberUids,
+                waitForServerAck = false
+            ).onSuccess {
+                showBanner("تم حذف بلوك '${block.servantName}' ونقل الأطفال (${studentIdsInBlock.size}) إلى بدون بلوك")
+            }.onFailure {
+                _operationError.value = "رفض السيرفر الحذف: الحذف مسموح للأمين فقط"
             }
-            repository.deleteBlock(group.inviteCode, block.id)
-                .onSuccess {
-                    showBanner("تم حذف البلوك الفارغ '${block.servantName}'")
-                }
-                .onFailure {
-                    _operationError.value = "رفض السيرفر الحذف: الحذف مسموح للأمين فقط"
-                }
+        }
+    }
+
+    fun deleteBlockWithChildren(block: ServantBlock) {
+        val state = uiState.value
+        val group = state.group ?: return
+        if (!state.isAdmin) {
+            showBanner("حذف البلوك والأطفال متاح لأمين المجموعة فقط")
+            return
+        }
+        val studentIdsInBlock = state.students.filter { it.blockId == block.id }.map { it.id }.toSet()
+        val noteIds = state.childNotes.filter { it.studentId in studentIdsInBlock }.map { it.id }
+        val balanceIds = state.effectiveAllMonthlyBalances.filter { it.studentId in studentIdsInBlock }.map { it.id }
+        viewModelScope.launch {
+            _isBusy.value = true
+            repository.deleteBlockWithChildren(
+                groupId = group.inviteCode,
+                blockId = block.id,
+                studentIdsInBlock = studentIdsInBlock.toList(),
+                noteIdsToDelete = noteIds,
+                balanceIdsToDelete = balanceIds,
+                waitForServerAck = false
+            ).onSuccess {
+                showBanner("تم حذف بلوك '${block.servantName}' مع أطفاله (${studentIdsInBlock.size})")
+            }.onFailure {
+                _operationError.value = "تعذر حذف البلوك والأطفال (متاح للأمين فقط)"
+            }
+            _isBusy.value = false
         }
     }
 
@@ -2376,7 +2542,7 @@ class KamViewModel(
     fun saveOwnPhoneNumbers(
         primaryPhone: String,
         secondaryPhone: String = "",
-        phoneHidden: Boolean = currentEffectiveLocalPrefs().phoneHidden
+        @Suppress("UNUSED_PARAMETER") phoneHidden: Boolean = false
     ) {
         val cleanPrimary = if (primaryPhone.isNotBlank()) {
             PhoneNumberFormatHelper.toInternationalPhone(primaryPhone)
@@ -2394,7 +2560,7 @@ class KamViewModel(
             phoneOnboardingDone = true,
             primaryPhone = cleanPrimary,
             secondaryPhone = cleanSecondary,
-            phoneHidden = phoneHidden
+            phoneHidden = false
         )
         _localPrefsOverride.value = nextPrefs
         LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
@@ -2416,8 +2582,8 @@ class KamViewModel(
                 primaryPhone = cleanPrimary,
                 secondaryPhone = cleanSecondary,
                 phoneVerified = false,
-                showPhone = !phoneHidden,
-                phoneHidden = phoneHidden
+                showPhone = true,
+                phoneHidden = false
             )
             _optimisticMemberOverrides.update { it + (currentUserId to optimisticProfile) }
 
@@ -2427,7 +2593,7 @@ class KamViewModel(
                     displayName = displayName,
                     primaryPhone = cleanPrimary,
                     secondaryPhone = cleanSecondary,
-                    phoneHidden = phoneHidden,
+                    phoneHidden = false,
                     avatarBase64 = null,
                     memberUids = group.memberUids,
                     existingProfile = existing,
@@ -2448,61 +2614,303 @@ class KamViewModel(
         }
     }
 
-    fun toggleHideOwnPhoneNumber(hidden: Boolean) {
-        val prefs = currentEffectiveLocalPrefs()
-        val nextPrefs = prefs.copy(phoneHidden = hidden)
-        _localPrefsOverride.value = nextPrefs
-        LocalClassroomCache.saveUserPreferences(currentUserId, nextPrefs)
-
+    fun editOwnDisplayName(newName: String) {
+        val cleanName = newName.trim().take(80)
+        if (cleanName.isBlank()) {
+            showBanner("يرجى إدخال اسم صحيح")
+            return
+        }
         val state = uiState.value
-        val group = state.group
-        if (group != null) {
-            val existing = state.memberProfileForServant(currentUserId)
-            val displayName = resolveOwnServantDisplayName(state)
-            val optimisticProfile = (existing ?: ServantMemberProfile(
-                id = currentUserId,
-                uid = currentUserId,
-                groupId = group.inviteCode,
-                displayName = displayName,
-                phone = nextPrefs.primaryPhone,
-                primaryPhone = nextPrefs.primaryPhone,
-                secondaryPhone = nextPrefs.secondaryPhone,
-                memberUids = group.memberUids
-            )).copy(
-                displayName = displayName,
-                showPhone = !hidden,
-                phoneHidden = hidden,
-                phoneVerified = false
-            )
-            _optimisticMemberOverrides.update { it + (currentUserId to optimisticProfile) }
-
-            viewModelScope.launch {
-                repository.upsertOwnMemberProfile(
-                    groupId = group.inviteCode,
-                    displayName = displayName,
-                    primaryPhone = nextPrefs.primaryPhone,
-                    secondaryPhone = nextPrefs.secondaryPhone,
-                    phoneHidden = hidden,
-                    avatarBase64 = null,
-                    memberUids = group.memberUids,
-                    existingProfile = existing,
-                    waitForServerAck = false
-                ).onSuccess {
-                    _optimisticMemberOverrides.update { it - currentUserId }
-                    showBanner(
-                        if (hidden) "تم إخفاء رقمك وأزرار التواصل عن باقي الخدام"
-                        else "تم إظهار رقمك وأزرار التواصل لخدام المجموعة"
-                    )
-                }.onFailure { err ->
-                    _optimisticMemberOverrides.update { it - currentUserId }
-                    _operationError.value = err.localizedMessage ?: "تعذر تحديث حالة إخفاء الرقم"
-                }
+        val ownBlocks = state.blocks.filter { it.servantId == currentUserId }
+        val existingMember = state.memberProfileForServant(currentUserId)
+        if (existingMember != null) {
+            _optimisticMemberOverrides.update { it + (currentUserId to existingMember.copy(displayName = cleanName)) }
+        }
+        viewModelScope.launch {
+            repository.updateOwnDisplayName(
+                newName = cleanName,
+                email = state.userProfile?.email?.ifBlank { initialEmail } ?: initialEmail,
+                memberGroups = (state.userGroups + listOfNotNull(state.group)).distinctBy { it.inviteCode },
+                ownBlocks = ownBlocks,
+                waitForServerAck = false
+            ).onSuccess {
+                _optimisticMemberOverrides.update { it - currentUserId }
+                showBanner("تم تحديث اسمك إلى '$cleanName'")
+            }.onFailure { err ->
+                _optimisticMemberOverrides.update { it - currentUserId }
+                _operationError.value = err.localizedMessage ?: "تعذر تحديث الاسم"
             }
+        }
+    }
+
+    fun savePersonalServantAlias(targetUid: String, alias: String) {
+        if (targetUid.isBlank() || targetUid == currentUserId) return
+        val state = uiState.value
+        val currentAliases = state.servantAliases.toMutableMap()
+        val cleanAlias = alias.trim().take(80)
+        if (cleanAlias.isBlank()) {
+            currentAliases.remove(targetUid)
         } else {
-            showBanner(
-                if (hidden) "تم تفعيل إخفاء الرقم عن باقي الخدام"
-                else "تم إلغاء إخفاء الرقم"
+            currentAliases[targetUid] = cleanAlias
+        }
+        viewModelScope.launch {
+            repository.updatePersonalServantAliases(currentAliases, waitForServerAck = false)
+                .onSuccess {
+                    showBanner(
+                        if (cleanAlias.isBlank()) "تمت العودة للاسم الأصلي للخادم"
+                        else "تم حفظ الاسم '$cleanAlias' في جهازك"
+                    )
+                }
+                .onFailure { err ->
+                    _operationError.value = err.localizedMessage ?: "تعذر حفظ التسمية"
+                }
+        }
+    }
+
+    fun updateGroupAvatar(avatarBase64: String) {
+        val state = uiState.value
+        val group = state.group ?: return
+        val cleanAvatar = avatarBase64.trim().take(50000)
+        val hash = if (cleanAvatar.isNotBlank()) Student.computeAvatarHash(cleanAvatar) else ""
+        StudentAvatarImageHelper.writeLocalAlbumRaw(null, "group_${group.inviteCode}", cleanAvatar)
+        _optimisticGroupPolicyOverride.value = group.copy(avatarBase64 = cleanAvatar, avatarHash = hash)
+        viewModelScope.launch {
+            repository.updateGroupAvatar(
+                groupId = group.inviteCode,
+                avatarBase64 = cleanAvatar,
+                waitForServerAck = false
+            ).onSuccess {
+                showBanner(if (cleanAvatar.isNotBlank()) "تم تحديث صورة الجروب" else "تم حذف صورة الجروب")
+                delay(400L)
+                _optimisticGroupPolicyOverride.value = null
+            }.onFailure { err ->
+                _optimisticGroupPolicyOverride.value = null
+                _operationError.value = err.localizedMessage ?: "تعذر تحديث صورة الجروب"
+            }
+        }
+    }
+
+    // --- Shared Child Notes, Memorization, Visitation & Group Chat Notifications ---
+
+    fun postChildGroupNotification(
+        student: Student,
+        category: NotificationCategory,
+        messageText: String
+    ) {
+        val state = uiState.value
+        val group = state.group ?: return
+        val repo = chatRepository ?: return
+        val cleanText = messageText.trim()
+        if (cleanText.isBlank()) return
+        val blkName = state.blockNameForStudent(student)
+        val senderName = resolveOwnServantDisplayName(state)
+        viewModelScope.launch(Dispatchers.IO) {
+            repo.sendGroupMessage(
+                groupId = group.inviteCode,
+                senderName = senderName,
+                text = cleanText,
+                memberUids = group.memberUids,
+                type = ChatMessageType.SYSTEM,
+                notificationCategory = category.id,
+                childId = student.id,
+                childName = student.name,
+                childBlockName = blkName,
+                waitForServerAck = false
             )
+        }
+    }
+
+    fun addChildComment(student: Student, text: String, notifyGroup: Boolean = true) {
+        val state = uiState.value
+        val group = state.group ?: return
+        val cleanText = text.trim()
+        if (cleanText.isBlank()) return
+        val authorName = resolveOwnServantDisplayName(state)
+        val blkName = state.blockNameForStudent(student)
+        val nowMs = System.currentTimeMillis()
+        val tempNote = ChildNote(
+            id = "temp_${nowMs}",
+            groupId = group.inviteCode,
+            studentId = student.id,
+            studentName = student.name,
+            type = ChildNoteType.COMMENT.id,
+            text = cleanText,
+            authorUid = currentUserId,
+            authorName = authorName,
+            clientCreatedAtMillis = nowMs,
+            memberUids = group.memberUids
+        )
+        _optimisticChildNotes.update { listOf(tempNote) + it }
+        viewModelScope.launch {
+            repository.addChildNote(
+                groupId = group.inviteCode,
+                student = student,
+                type = ChildNoteType.COMMENT,
+                text = cleanText,
+                authorName = authorName,
+                memberUids = group.memberUids,
+                waitForServerAck = false
+            ).onSuccess { saved ->
+                _optimisticChildNotes.update { list -> list.filterNot { it.id == tempNote.id } + saved }
+                showBanner("تم حفظ التعليق عن '${student.name}'")
+                if (notifyGroup) {
+                    chatRepository?.sendGroupMessage(
+                        groupId = group.inviteCode,
+                        senderName = authorName,
+                        text = "💬 تعليق عن ${student.name} ($blkName): $cleanText",
+                        memberUids = group.memberUids,
+                        type = ChatMessageType.SYSTEM,
+                        notificationCategory = NotificationCategory.CHILD_COMMENT.id,
+                        childId = student.id,
+                        childName = student.name,
+                        childBlockName = blkName,
+                        waitForServerAck = false
+                    )
+                }
+            }.onFailure { err ->
+                _optimisticChildNotes.update { list -> list.filterNot { it.id == tempNote.id } }
+                _operationError.value = err.localizedMessage ?: "تعذر حفظ التعليق"
+            }
+        }
+    }
+
+    fun addMemorizationNote(student: Student, text: String, awardMemorizationCard: Boolean = false) {
+        val state = uiState.value
+        val group = state.group ?: return
+        val cleanText = text.trim()
+        if (cleanText.isBlank()) return
+        val authorName = resolveOwnServantDisplayName(state)
+        val blkName = state.blockNameForStudent(student)
+        val nowMs = System.currentTimeMillis()
+        val tempNote = ChildNote(
+            id = "temp_mem_${nowMs}",
+            groupId = group.inviteCode,
+            studentId = student.id,
+            studentName = student.name,
+            type = ChildNoteType.MEMORIZATION.id,
+            text = cleanText,
+            authorUid = currentUserId,
+            authorName = authorName,
+            clientCreatedAtMillis = nowMs,
+            memberUids = group.memberUids
+        )
+        _optimisticChildNotes.update { listOf(tempNote) + it }
+        _optimisticStudentOverrides.update {
+            it + (student.id to student.copy(
+                lastMemorizedText = cleanText,
+                lastMemorizedBy = authorName,
+                lastMemorizedAtMillis = nowMs
+            ))
+        }
+        viewModelScope.launch {
+            repository.addChildNote(
+                groupId = group.inviteCode,
+                student = student,
+                type = ChildNoteType.MEMORIZATION,
+                text = cleanText,
+                authorName = authorName,
+                memberUids = group.memberUids,
+                waitForServerAck = false
+            ).onSuccess { saved ->
+                _optimisticChildNotes.update { list -> list.filterNot { it.id == tempNote.id } + saved }
+                _optimisticStudentOverrides.update { it - student.id }
+                showBanner("تم تحديث حفظ '${student.name}'")
+                chatRepository?.sendGroupMessage(
+                    groupId = group.inviteCode,
+                    senderName = authorName,
+                    text = "📖 تسميع ${student.name} ($blkName): $cleanText",
+                    memberUids = group.memberUids,
+                    type = ChatMessageType.SYSTEM,
+                    notificationCategory = NotificationCategory.MEMORIZATION.id,
+                    childId = student.id,
+                    childName = student.name,
+                    childBlockName = blkName,
+                    waitForServerAck = false
+                )
+            }.onFailure { err ->
+                _optimisticChildNotes.update { list -> list.filterNot { it.id == tempNote.id } }
+                _optimisticStudentOverrides.update { it - student.id }
+                _operationError.value = err.localizedMessage ?: "تعذر حفظ التسميع"
+            }
+        }
+        if (awardMemorizationCard) {
+            awardCardToStudent(student, CardType.MEMORIZATION)
+        }
+    }
+
+    fun recordVisitationNote(
+        student: Student,
+        status: VisitationStatus,
+        noteText: String,
+        notifyGroup: Boolean = true
+    ) {
+        val state = uiState.value
+        val group = state.group ?: return
+        val authorName = resolveOwnServantDisplayName(state)
+        val blkName = state.blockNameForStudent(student)
+        val effectiveText = noteText.trim().ifBlank { status.arabicLabel }
+        val nowMs = System.currentTimeMillis()
+        val tempNote = ChildNote(
+            id = "temp_vis_${nowMs}",
+            groupId = group.inviteCode,
+            studentId = student.id,
+            studentName = student.name,
+            type = ChildNoteType.VISITATION.id,
+            text = effectiveText,
+            status = status.id,
+            authorUid = currentUserId,
+            authorName = authorName,
+            clientCreatedAtMillis = nowMs,
+            memberUids = group.memberUids
+        )
+        _optimisticChildNotes.update { listOf(tempNote) + it }
+        viewModelScope.launch {
+            repository.addChildNote(
+                groupId = group.inviteCode,
+                student = student,
+                type = ChildNoteType.VISITATION,
+                text = effectiveText,
+                status = status.id,
+                authorName = authorName,
+                memberUids = group.memberUids,
+                waitForServerAck = false
+            ).onSuccess { saved ->
+                _optimisticChildNotes.update { list -> list.filterNot { it.id == tempNote.id } + saved }
+                showBanner("${status.arabicLabel}: ${student.name}")
+                if (notifyGroup) {
+                    val emoji = if (status == VisitationStatus.FOLLOWUP) "🔔" else "🏠"
+                    chatRepository?.sendGroupMessage(
+                        groupId = group.inviteCode,
+                        senderName = authorName,
+                        text = "$emoji افتقاد ${student.name} ($blkName) — ${status.arabicLabel}: $effectiveText",
+                        memberUids = group.memberUids,
+                        type = ChatMessageType.SYSTEM,
+                        notificationCategory = NotificationCategory.VISITATION.id,
+                        childId = student.id,
+                        childName = student.name,
+                        childBlockName = blkName,
+                        waitForServerAck = false
+                    )
+                }
+            }.onFailure { err ->
+                _optimisticChildNotes.update { list -> list.filterNot { it.id == tempNote.id } }
+                _operationError.value = err.localizedMessage ?: "تعذر حفظ الافتقاد"
+            }
+        }
+    }
+
+    fun deleteChildNote(note: ChildNote) {
+        val group = uiState.value.group ?: return
+        _optimisticDeletedNoteIds.update { it + note.id }
+        viewModelScope.launch {
+            repository.deleteChildNote(group.inviteCode, note.id, waitForServerAck = false)
+                .onSuccess {
+                    showBanner("تم حذف الملاحظة")
+                }
+                .onFailure { err ->
+                    _optimisticDeletedNoteIds.update { it - note.id }
+                    _operationError.value = err.localizedMessage ?: "تعذر حذف الملاحظة"
+                }
         }
     }
 
@@ -2587,8 +2995,8 @@ class KamViewModel(
                 phone = nextPrefs.primaryPhone,
                 primaryPhone = nextPrefs.primaryPhone,
                 secondaryPhone = nextPrefs.secondaryPhone,
-                showPhone = !nextPrefs.phoneHidden,
-                phoneHidden = nextPrefs.phoneHidden,
+                showPhone = true,
+                phoneHidden = false,
                 memberUids = group.memberUids
             )).copy(
                 displayName = displayName,
@@ -2605,7 +3013,7 @@ class KamViewModel(
                     displayName = displayName,
                     primaryPhone = nextPrefs.primaryPhone.takeIf { it.isNotBlank() } ?: existing?.effectivePrimaryPhone.orEmpty(),
                     secondaryPhone = nextPrefs.secondaryPhone.takeIf { it.isNotBlank() } ?: existing?.secondaryPhone.orEmpty(),
-                    phoneHidden = nextPrefs.phoneHidden,
+                    phoneHidden = false,
                     avatarBase64 = cleanAvatar,
                     memberUids = group.memberUids,
                     existingProfile = existing,
@@ -2670,12 +3078,13 @@ class KamViewModel(
                 ?: ownCachedMember?.effectivePrimaryPhone.orEmpty()
             val ownSecondary = localPrefs?.secondaryPhone?.takeIf { it.isNotBlank() }
                 ?: ownCachedMember?.secondaryPhone.orEmpty()
-            val ownHidden = localPrefs?.phoneHidden ?: (ownCachedMember?.let { !it.effectiveShowPhone } ?: false)
+            val ownHidden = false
             val ownAvatarHash = localPrefs?.servantAvatarHash?.takeIf { it.isNotBlank() }
                 ?: ownCachedMember?.effectiveAvatarKey.orEmpty()
             val onboardingDone = (localPrefs?.phoneOnboardingDone == true) ||
                 ownPrimary.isNotBlank() ||
                 ownSecondary.isNotBlank()
+            val cachedNotes = if (activeGroup == null) emptyList() else LocalClassroomCache.getMemoryChildNotes(activeGroup.inviteCode)
             return KamScreenState(
                 isLoading = false,
                 userProfile = effectiveProfile,
@@ -2689,6 +3098,7 @@ class KamViewModel(
                 monthlyBalances = if (activeGroup == null) emptyList() else cached.monthlyBalances.filter { it.monthKey == monthKey },
                 allGroupCardEvents = if (activeGroup == null) emptyList() else cached.cardEvents,
                 allGroupMonthlyBalances = if (activeGroup == null) emptyList() else cached.monthlyBalances,
+                childNotes = cachedNotes,
                 selectedMonthKey = monthKey,
                 selectedWeekKey = weekKey,
                 currentWeekKey = weekKey,

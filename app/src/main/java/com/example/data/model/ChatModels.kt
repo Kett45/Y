@@ -92,8 +92,14 @@ data class DmChatMeta(
             ?: participants.firstOrNull().orEmpty()
     }
 
-    fun peerDisplayName(currentUid: String, fallbackMembers: List<ServantMemberProfile>): String {
+    fun peerDisplayName(
+        currentUid: String,
+        fallbackMembers: List<ServantMemberProfile>,
+        personalAliases: Map<String, String> = emptyMap()
+    ): String {
         val peer = peerUid(currentUid)
+        val alias = personalAliases[peer]?.trim()?.takeIf { it.isNotBlank() }
+        if (alias != null) return alias
         val fromMember = fallbackMembers.firstOrNull { it.effectiveUid == peer }?.displayName?.takeIf { it.isNotBlank() }
         if (fromMember != null) return fromMember
         return participantNames[peer]?.takeIf { it.isNotBlank() } ?: "خادم"
@@ -131,6 +137,11 @@ data class ChatMessage(
     val audioDurationSec: Int = 0,
     val memberUids: List<String> = emptyList(),
     val participants: List<String> = emptyList(),
+    val notificationCategory: String = "",
+    val childId: String = "",
+    val childName: String = "",
+    val childBlockName: String = "",
+    val forwardedFromName: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
     val isPendingOffline: Boolean = false,

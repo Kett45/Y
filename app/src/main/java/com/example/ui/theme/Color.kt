@@ -49,3 +49,13 @@ val CardPraiseColor = Color(0xFF6366F1)
 val CardGoldColor = Color(0xFFF59E0B)
 val CardMemorizationColor = Color(0xFF14B8A6)
 val CardConfessionColor = Color(0xFFF43F5E)
+
+// Fixed Semantic Colors for Group Chat Notifications (Rule 4)
+val NotifyConflictOrange = Color(0xFFFF5722)
+val NotifyAbsentRed = Color(0xFFEF4444)
+val NotifyCommentSky = Color(0xFF0EA5E9)
+val NotifyVisitationPurple = Color(0xFF8B5CF6)
+val NotifyMemorizationTeal = Color(0xFF14B8A6)
+val NotifyCardGreen = Color(0xFF10B981)
+val NotifySystemIndigo = Color(0xFF6366F1)
+

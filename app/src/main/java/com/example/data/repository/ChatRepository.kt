@@ -1,6 +1,8 @@
 package com.example.data.repository
 
+import android.content.Context
 import android.util.Log
+import com.example.R
 import com.example.data.model.ActiveChatRoom
 import com.example.data.model.ChatMessage
 import com.example.data.model.ChatMessageType
@@ -35,9 +37,15 @@ import java.util.UUID
  * - Offline-first writes: all write operations queue locally and sync automatically when online.
  */
 class ChatRepository(
-    private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
+    private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 ) {
+    constructor(context: Context) : this(
+        db = FirebaseFirestore.getInstance(
+            context.applicationContext.getString(R.string.firestore_database_id)
+        ),
+        auth = FirebaseAuth.getInstance()
+    )
     companion object {
         private const val TAG = "ChatRepository"
     }
@@ -97,10 +105,9 @@ class ChatRepository(
                             }
                         }
                     }
-                    val filtered = metasById.values
-                        .filter { activeGroupId.isBlank() || it.groupId.isBlank() || it.groupId == activeGroupId }
+                    val sorted = metasById.values
                         .sortedByDescending { it.lastMessageAt?.toDate()?.time ?: it.updatedAt?.toDate()?.time ?: 0L }
-                    emit(filtered)
+                    emit(sorted)
                 }
         }.catch { err ->
             Log.w(TAG, "observeUserDmMetas($currentUid) error: ${err.message}")
@@ -185,6 +192,11 @@ class ChatRepository(
         memberUids: List<String>,
         type: ChatMessageType = ChatMessageType.TEXT,
         mediaPayload: PreparedChatMediaPayload? = null,
+        notificationCategory: String = "",
+        childId: String = "",
+        childName: String = "",
+        childBlockName: String = "",
+        forwardedFromName: String = "",
         waitForServerAck: Boolean = false
     ): Result<ChatMessage> = runCatching {
         val uid = requireUserId()
@@ -216,6 +228,11 @@ class ChatRepository(
 
         val safeSenderName = senderName.trim().ifBlank { "خادم" }.take(100)
         val safeMembers = (memberUids + uid).filter { it.isNotBlank() }.distinct().take(MAX_SERVANTS_PER_GROUP)
+        val safeCategory = notificationCategory.trim().take(40)
+        val safeChildId = childId.trim().take(80)
+        val safeChildName = childName.trim().take(100)
+        val safeChildBlock = childBlockName.trim().take(100)
+        val safeForwardFrom = forwardedFromName.trim().take(100)
         val msgId = "msg_${System.currentTimeMillis()}_${UUID.randomUUID().toString().replace("-", "").take(8)}"
 
         val groupRef = db.collection("groups").document(groupId)
@@ -235,6 +252,11 @@ class ChatRepository(
                 put("memberUids", safeMembers)
                 put("createdAt", FieldValue.serverTimestamp())
                 put("updatedAt", FieldValue.serverTimestamp())
+                if (safeCategory.isNotBlank()) put("notificationCategory", safeCategory)
+                if (safeChildId.isNotBlank()) put("childId", safeChildId)
+                if (safeChildName.isNotBlank()) put("childName", safeChildName)
+                if (safeChildBlock.isNotBlank()) put("childBlockName", safeChildBlock)
+                if (safeForwardFrom.isNotBlank()) put("forwardedFromName", safeForwardFrom)
                 if (mediaPayload != null) {
                     put("mediaBase64", mediaPayload.mediaBase64)
                     put("mediaUrl", mediaPayload.mediaUrl)
@@ -282,6 +304,11 @@ class ChatRepository(
                 imageHeight = mediaPayload?.imageHeight ?: 0,
                 audioDurationSec = mediaPayload?.audioDurationSec ?: 0,
                 memberUids = safeMembers,
+                notificationCategory = safeCategory,
+                childId = safeChildId,
+                childName = safeChildName,
+                childBlockName = safeChildBlock,
+                forwardedFromName = safeForwardFrom,
                 createdAt = now,
                 updatedAt = now,
                 isPendingOffline = true,
@@ -305,12 +332,22 @@ class ChatRepository(
         text: String,
         type: ChatMessageType = ChatMessageType.TEXT,
         mediaPayload: PreparedChatMediaPayload? = null,
+        notificationCategory: String = "",
+        childId: String = "",
+        childName: String = "",
+        childBlockName: String = "",
+        forwardedFromName: String = "",
         waitForServerAck: Boolean = false
     ): Result<ChatMessage> = runCatching {
         val uid = requireUserId()
         require(peerUid.isNotBlank() && peerUid != uid) { "الخادم الآخر غير محدد" }
         val finalType = mediaPayload?.type ?: type
-        val cleanText = text.trim().take(ChatMessage.MAX_TEXT_LENGTH).ifBlank {
+        val maxLen = if (finalType == ChatMessageType.SYSTEM) {
+            ChatMessage.MAX_SYSTEM_TEXT_LENGTH
+        } else {
+            ChatMessage.MAX_TEXT_LENGTH
+        }
+        val cleanText = text.trim().take(maxLen).ifBlank {
             mediaPayload?.textLabel.orEmpty()
         }
         require(cleanText.isNotBlank()) { "نص الرسالة فارغ" }
@@ -319,6 +356,11 @@ class ChatRepository(
         val chatId = DmChatMeta.buildDmChatId(uid, peerUid)
         val safeSenderName = senderName.trim().ifBlank { "خادم" }.take(100)
         val safePeerName = peerName.trim().ifBlank { "خادم" }.take(100)
+        val safeCategory = notificationCategory.trim().take(40)
+        val safeChildId = childId.trim().take(80)
+        val safeChildName = childName.trim().take(100)
+        val safeChildBlock = childBlockName.trim().take(100)
+        val safeForwardFrom = forwardedFromName.trim().take(100)
         val msgId = "msg_${System.currentTimeMillis()}_${UUID.randomUUID().toString().replace("-", "").take(8)}"
 
         val dmRef = db.collection("dms").document(chatId)
@@ -337,6 +379,11 @@ class ChatRepository(
                 put("participants", sortedParticipants)
                 put("createdAt", FieldValue.serverTimestamp())
                 put("updatedAt", FieldValue.serverTimestamp())
+                if (safeCategory.isNotBlank()) put("notificationCategory", safeCategory)
+                if (safeChildId.isNotBlank()) put("childId", safeChildId)
+                if (safeChildName.isNotBlank()) put("childName", safeChildName)
+                if (safeChildBlock.isNotBlank()) put("childBlockName", safeChildBlock)
+                if (safeForwardFrom.isNotBlank()) put("forwardedFromName", safeForwardFrom)
                 if (mediaPayload != null) {
                     put("mediaBase64", mediaPayload.mediaBase64)
                     put("mediaUrl", mediaPayload.mediaUrl)
@@ -389,6 +436,11 @@ class ChatRepository(
                 imageHeight = mediaPayload?.imageHeight ?: 0,
                 audioDurationSec = mediaPayload?.audioDurationSec ?: 0,
                 participants = sortedParticipants,
+                notificationCategory = safeCategory,
+                childId = safeChildId,
+                childName = safeChildName,
+                childBlockName = safeChildBlock,
+                forwardedFromName = safeForwardFrom,
                 createdAt = now,
                 updatedAt = now,
                 isPendingOffline = true,
@@ -396,6 +448,104 @@ class ChatRepository(
             )
         } catch (e: CancellationException) {
             throw e
+        }
+    }
+
+    suspend fun ensureDirectChatMeta(
+        peerUid: String,
+        senderName: String,
+        peerName: String,
+        groupId: String = "",
+        waitForServerAck: Boolean = false
+    ): Result<String> = runCatching {
+        val uid = requireUserId()
+        require(peerUid.isNotBlank() && peerUid != uid) { "لا يمكن مراسلة هذا الحساب" }
+        val sortedParticipants = listOf(uid, peerUid.trim()).sorted()
+        val chatId = DmChatMeta.buildDmChatId(uid, peerUid)
+        val dmRef = db.collection("dms").document(chatId)
+        val safeSenderName = senderName.trim().ifBlank { "خادم" }.take(100)
+        val safePeerName = peerName.trim().ifBlank { "خادم" }.take(100)
+        val payload = mapOf(
+            "chatId" to chatId,
+            "groupId" to groupId.take(40),
+            "participants" to sortedParticipants,
+            "participantNames" to mapOf(
+                uid to safeSenderName,
+                peerUid.trim() to safePeerName
+            ),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        val task = dmRef.set(payload, SetOptions.merge())
+        if (waitForServerAck) {
+            task.await()
+        }
+        chatId
+    }
+
+    suspend fun forwardMessageToRoom(
+        sourceMessage: ChatMessage,
+        targetRoom: ActiveChatRoom,
+        senderName: String,
+        memberUids: List<String>,
+        waitForServerAck: Boolean = false
+    ): Result<ChatMessage> {
+        require(!sourceMessage.isDeleted) { "لا يمكن إعادة توجيه رسالة محذوفة" }
+        val msgType = sourceMessage.messageType
+        val mediaPayload = when {
+            msgType == ChatMessageType.IMAGE && sourceMessage.mediaBase64.isNotBlank() ->
+                PreparedChatMediaPayload(
+                    type = ChatMessageType.IMAGE,
+                    textLabel = sourceMessage.text.ifBlank { ChatMessage.IMAGE_DEFAULT_LABEL },
+                    mediaBase64 = sourceMessage.mediaBase64,
+                    mediaUrl = sourceMessage.mediaUrl,
+                    mediaMimeType = sourceMessage.mediaMimeType,
+                    imageWidth = sourceMessage.imageWidth,
+                    imageHeight = sourceMessage.imageHeight
+                )
+            msgType == ChatMessageType.AUDIO && sourceMessage.mediaBase64.isNotBlank() ->
+                PreparedChatMediaPayload(
+                    type = ChatMessageType.AUDIO,
+                    textLabel = sourceMessage.text.ifBlank { ChatMessage.AUDIO_DEFAULT_LABEL },
+                    mediaBase64 = sourceMessage.mediaBase64,
+                    mediaUrl = sourceMessage.mediaUrl,
+                    mediaMimeType = sourceMessage.mediaMimeType,
+                    audioDurationSec = sourceMessage.audioDurationSec
+                )
+            else -> null
+        }
+        val forwardedFrom = sourceMessage.forwardedFromName.ifBlank {
+            sourceMessage.senderName.ifBlank { "خادم" }
+        }
+        return when (targetRoom) {
+            is ActiveChatRoom.GroupRoom -> sendGroupMessage(
+                groupId = targetRoom.groupId,
+                senderName = senderName,
+                text = sourceMessage.text,
+                memberUids = memberUids,
+                type = msgType,
+                mediaPayload = mediaPayload,
+                notificationCategory = sourceMessage.notificationCategory,
+                childId = sourceMessage.childId,
+                childName = sourceMessage.childName,
+                childBlockName = sourceMessage.childBlockName,
+                forwardedFromName = forwardedFrom,
+                waitForServerAck = waitForServerAck
+            )
+            is ActiveChatRoom.DirectRoom -> sendDirectMessage(
+                groupId = targetRoom.groupId,
+                peerUid = targetRoom.peerUid,
+                senderName = senderName,
+                peerName = targetRoom.peerName,
+                text = sourceMessage.text,
+                type = msgType,
+                mediaPayload = mediaPayload,
+                notificationCategory = sourceMessage.notificationCategory,
+                childId = sourceMessage.childId,
+                childName = sourceMessage.childName,
+                childBlockName = sourceMessage.childBlockName,
+                forwardedFromName = forwardedFrom,
+                waitForServerAck = waitForServerAck
+            )
         }
     }
 

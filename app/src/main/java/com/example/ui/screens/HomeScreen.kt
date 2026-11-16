@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,17 +33,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Comment
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -60,7 +56,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,9 +65,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -83,35 +81,38 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.BuildConfig
 import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
+import com.example.data.model.ChildNote
+import com.example.data.model.ChildNoteType
+import com.example.data.model.NotificationCategory
 import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.model.ServantBlock
 import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
+import com.example.ui.components.ChildProfileFullSheet
 import com.example.ui.components.CompactCardButtonsRow
+import com.example.ui.components.MemorizationNotesSheet
 import com.example.ui.components.ServantAvatarCircle
 import com.example.ui.components.ServantBlockContactRows
 import com.example.ui.components.ServantPhotoPickerDialog
 import com.example.ui.components.StudentAvatarCircle
 import com.example.ui.components.StudentAvatarImageHelper
-import com.example.ui.components.StudentPhotoAlbumSection
 import com.example.ui.components.StudentPhotoPickerDialog
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalAppAppearanceController
-import androidx.compose.runtime.LaunchedEffect
 import com.example.ui.viewmodel.BulkImportLinePreview
 import com.example.ui.viewmodel.KamScreenState
 import com.example.util.KamPerformanceTracker
-import java.text.SimpleDateFormat
-import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -126,7 +127,7 @@ fun HomeScreen(
     onAddSingleStudent: (name: String, customNumber: Int?, blockId: String) -> Unit,
     onAnalyzeBulkImport: (String) -> List<BulkImportLinePreview>,
     onConfirmBulkImport: (List<String>) -> Unit,
-    onCreateBlock: (servantName: String, colorHex: String) -> Unit,
+    onCreateBlock: (servantName: String, colorHex: String, servantUid: String) -> Unit,
     onMoveStudentToBlock: (Student, String) -> Unit,
     onReorderStudent: (Student, Boolean) -> Unit,
     onUpdateStudent: (Student, String, Int, String) -> Unit,
@@ -136,13 +137,18 @@ fun HomeScreen(
     onMergeDuplicateStudents: (Student, Student) -> Unit = { _, _ -> },
     onKeepBothDuplicateStudents: (String) -> Unit = {},
     onUpdateOwnServantAvatar: (String) -> Unit = {},
-    onOpenPhoneWizard: () -> Unit = {}
+    onOpenPhoneWizard: () -> Unit = {},
+    onAddChildComment: (Student, String) -> Unit = { _, _ -> },
+    onAddMemorizationNote: (Student, String, Boolean) -> Unit = { _, _, _ -> },
+    onPostChildGroupNotification: (Student, NotificationCategory, String) -> Unit = { _, _, _ -> },
+    onDeleteChildNote: (ChildNote) -> Unit = {}
 ) {
     val localCollapsedOverrides = remember { mutableStateMapOf<String, Boolean>() }
     var showLeaderboardExpanded by rememberSaveable { mutableStateOf(false) }
     var showSmartAttendanceScreen by rememberSaveable { mutableStateOf(false) }
+    var showSwipeCardsScreen by rememberSaveable { mutableStateOf(false) }
 
-    // Dialog states
+    // Dialog & Sheet states
     var showAddMenuDialog by rememberSaveable { mutableStateOf(false) }
     var showAddStudentDialog by rememberSaveable { mutableStateOf(false) }
     var showBulkImportDialog by rememberSaveable { mutableStateOf(false) }
@@ -154,6 +160,8 @@ fun HomeScreen(
     var studentForMoveSheet by remember { mutableStateOf<Student?>(null) }
     var studentForDetailsSheet by remember { mutableStateOf<Student?>(null) }
     var studentForPhotoDialog by remember { mutableStateOf<Student?>(null) }
+    var studentForQuickComment by remember { mutableStateOf<Student?>(null) }
+    var studentForMemorizationSheet by remember { mutableStateOf<Student?>(null) }
 
     val query = state.searchQuery.trim()
     val searchMatchedStudents = remember(state.students, query) {
@@ -234,11 +242,49 @@ fun HomeScreen(
         }
     }
 
+    val onOpenQuickCommentRemembered: (Student) -> Unit = remember { { studentForQuickComment = it } }
+    val onOpenMemorizationRemembered: (Student) -> Unit = remember { { studentForMemorizationSheet = it } }
+    val onHomeCardTapRemembered: (Student, CardType) -> Unit = remember(onAwardCard) {
+        { stu, cardType ->
+            if (cardType == CardType.MEMORIZATION) {
+                studentForMemorizationSheet = stu
+            } else {
+                onAwardCard(stu, cardType)
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
-        if (showSmartAttendanceScreen) {
+        if (showSwipeCardsScreen) {
+            SwipeCardsScreen(
+                state = state,
+                currentUserId = currentUserId,
+                onAwardCard = onAwardCard,
+                onUndoCardEvent = onUndoCardEvent,
+                onAddQuickComment = onAddChildComment,
+                onPostNotReceivedReport = { stu, card, note ->
+                    val noteSuffix = if (note.isNotBlank()) " — $note" else ""
+                    onPostChildGroupNotification(
+                        stu,
+                        NotificationCategory.ABSENT_ISSUE,
+                        "لم يستلم كارت ${card.arabicTitle}$noteSuffix"
+                    )
+                },
+                onOpenMemorizationSheet = onOpenMemorizationRemembered,
+                onOpenSmartAttendance = {
+                    showSwipeCardsScreen = false
+                    showSmartAttendanceScreen = true
+                },
+                onClose = { showSwipeCardsScreen = false }
+            )
+        } else if (showSmartAttendanceScreen) {
             SmartAttendanceScreen(
                 state = state,
                 currentUserId = currentUserId,
+                onOpenSwipeCards = {
+                    showSmartAttendanceScreen = false
+                    showSwipeCardsScreen = true
+                },
                 onClose = { showSmartAttendanceScreen = false }
             )
         } else if (showLeaderboardExpanded) {
@@ -256,13 +302,14 @@ fun HomeScreen(
                 contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 92.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // 1. Compact 56dp Top Header Bar: Group Name, Month/Week Chip, Search Icon, Leaderboard Icon, Smart Attendance Button, Bell + Badge
+                // 1. Compact Header Bar + Attendance & Swipe Cards quick launchers
                 item(key = "header_controls", contentType = "header_controls") {
                     HomeTopControlCard(
                         state = state,
                         showLeaderboardExpanded = showLeaderboardExpanded,
                         onToggleLeaderboard = { showLeaderboardExpanded = true },
                         onOpenSmartAttendance = { showSmartAttendanceScreen = true },
+                        onOpenSwipeCards = { showSwipeCardsScreen = true },
                         onMonthOffset = onMonthOffset,
                         onOpenMonthWeekTree = { showMonthWeekTreeDialog = true },
                         onOpenDuplicateAlerts = { showDuplicateAlertsDialog = true },
@@ -333,7 +380,7 @@ fun HomeScreen(
                             enabledCards = state.enabledCardTypes,
                             state = state,
                             onClearSearch = { onSearchQueryChange("") },
-                            onAwardCard = onAwardCard,
+                            onAwardCard = onHomeCardTapRemembered,
                             onOpenMoveDialog = { studentForMoveSheet = it },
                             onOpenDetailsDialog = { studentForDetailsSheet = it },
                             onOpenPhotoPicker = { studentForPhotoDialog = it }
@@ -345,6 +392,7 @@ fun HomeScreen(
                 if (state.students.isEmpty()) {
                     item(key = "empty_students_prompt", contentType = "empty_state") {
                         EmptyClassroomPromptCard(
+                            isAdmin = state.isAdmin,
                             onOpenBulkImport = { showBulkImportDialog = true },
                             onOpenAddStudent = { showAddStudentDialog = true },
                             onOpenAddBlock = { showAddBlockDialog = true }
@@ -357,6 +405,8 @@ fun HomeScreen(
                     val blockStudents = studentsByBlockId[block.id].orEmpty()
                     val isCollapsed = isBlockCollapsed(block.id)
                     val blockAccent = KamSemanticColors.blockColor(block.colorHex)
+                    val resolvedOwnerName = state.resolvedServantName(block.servantId, block.servantName)
+                    val blockTintSurface = blockAccent.copy(alpha = 0.12f).compositeOver(elevatedRowSurfaceColor)
 
                     item(
                         key = "block_header_${block.id}",
@@ -366,6 +416,7 @@ fun HomeScreen(
                         val servantProfile = state.memberProfileForServant(block.servantId)
                         ServantBlockHeaderCard(
                             block = block,
+                            resolvedOwnerName = resolvedOwnerName,
                             groupId = state.group?.id.orEmpty(),
                             groupName = state.group?.name.orEmpty(),
                             studentsCount = blockStudents.size,
@@ -388,7 +439,7 @@ fun HomeScreen(
                                 ServantBlockEmptyCard(blockAccent = blockAccent)
                             }
                         } else {
-                            val blockBorderColor = blockAccent.copy(alpha = 0.5f)
+                            val blockBorderColor = blockAccent.copy(alpha = 0.62f)
                             itemsIndexed(
                                 items = blockStudents,
                                 key = { _, student -> "blk_${block.id}_stu_${student.id}" },
@@ -397,15 +448,16 @@ fun HomeScreen(
                                 StudentFastCardRow(
                                     student = student,
                                     blockAccent = blockAccent,
-                                    rowSurfaceColor = elevatedRowSurfaceColor,
-                                    blockLabel = "بلوك ${block.servantName}",
+                                    rowSurfaceColor = blockTintSurface,
+                                    blockLabel = "بلوك $resolvedOwnerName",
                                     monthPoints = state.pointsForStudentInDisplayedScope(student.id),
                                     enabledCardsMask = state.enabledCardsMask,
                                     packedCardCounts = state.packedCardCountsForStudent(student.id),
                                     outerBorderColor = blockBorderColor,
                                     canMoveUp = idx > 0,
                                     canMoveDown = idx < blockStudents.lastIndex,
-                                    onAwardCard = onAwardCard,
+                                    onAwardCard = onHomeCardTapRemembered,
+                                    onOpenQuickComment = onOpenQuickCommentRemembered,
                                     onOpenMoveDialog = onOpenMoveSheetRemembered,
                                     onOpenDetailsDialog = onOpenDetailsSheetRemembered,
                                     onOpenPhotoDialog = onOpenPhotoSheetRemembered,
@@ -452,7 +504,8 @@ fun HomeScreen(
                                 packedCardCounts = state.packedCardCountsForStudent(student.id),
                                 canMoveUp = idx > 0,
                                 canMoveDown = idx < unassignedStudents.lastIndex,
-                                onAwardCard = onAwardCard,
+                                onAwardCard = onHomeCardTapRemembered,
+                                onOpenQuickComment = onOpenQuickCommentRemembered,
                                 onMoveStudentToBlock = onMoveStudentToBlock,
                                 onOpenMoveDialog = onOpenMoveSheetRemembered,
                                 onOpenDetailsDialog = onOpenDetailsSheetRemembered,
@@ -482,6 +535,7 @@ fun HomeScreen(
 
     if (showAddMenuDialog) {
         QuickAddActionDialog(
+            isAdmin = state.isAdmin,
             onDismiss = { showAddMenuDialog = false },
             onSelectAddSingleStudent = {
                 showAddMenuDialog = false
@@ -493,7 +547,7 @@ fun HomeScreen(
             },
             onSelectAddBlock = {
                 showAddMenuDialog = false
-                showAddBlockDialog = true
+                if (state.isAdmin) showAddBlockDialog = true
             }
         )
     }
@@ -525,11 +579,16 @@ fun HomeScreen(
         )
     }
 
-    if (showAddBlockDialog) {
+    if (showAddBlockDialog && state.isAdmin) {
         AddServantBlockDialog(
+            memberProfiles = state.memberProfiles,
+            existingBlocks = state.blocks,
+            resolvedMemberName = { profile ->
+                state.resolvedServantName(profile.effectiveUid, profile.displayName)
+            },
             onDismiss = { showAddBlockDialog = false },
-            onConfirm = { servantName, colorHex ->
-                onCreateBlock(servantName, colorHex)
+            onConfirm = { servantName, colorHex, servantUid ->
+                onCreateBlock(servantName, colorHex, servantUid)
                 showAddBlockDialog = false
             }
         )
@@ -550,19 +609,26 @@ fun HomeScreen(
     studentForDetailsSheet?.let { initialStudent ->
         val targetStudent = state.students.firstOrNull { it.id == initialStudent.id } ?: initialStudent
         val canUndoEvents = state.isAdmin || (state.group?.allowServantUndo == true)
-        StudentDetailsAndHistoryDialog(
+        val leaderboardEntries = remember(state.selectedMonthKey, state.students.size, state.cardEvents.size) {
+            state.computeClassLeaderboardEntries(selectedMonths = setOf(state.selectedMonthKey))
+        }
+        val studentRank = leaderboardEntries.firstOrNull { it.student.id == targetStudent.id }?.rank
+        ChildProfileFullSheet(
             student = targetStudent,
             blocks = state.blocks,
+            resolvedServantName = { blk -> state.resolvedServantName(blk.servantId, blk.servantName) },
             monthKey = state.selectedMonthKey,
             monthPoints = state.pointsForStudentInSelectedMonth(targetStudent.id),
+            leaderboardRank = studentRank,
+            totalStudentsCount = state.students.size,
             events = state.eventsForStudent(targetStudent.id),
+            comments = state.notesForStudent(targetStudent.id, ChildNoteType.COMMENT),
             isAdmin = state.isAdmin,
             currentUserId = currentUserId,
             canServantUndoOwnEvents = canUndoEvents,
             onDismiss = { studentForDetailsSheet = null },
             onSaveEdits = { newName, newNumber, newBlockId ->
                 onUpdateStudent(targetStudent, newName, newNumber, newBlockId)
-                studentForDetailsSheet = null
             },
             onDeleteStudent = {
                 onDeleteStudent(targetStudent)
@@ -575,7 +641,56 @@ fun HomeScreen(
             onUpdateStudentAvatar = { updatedAvatarField ->
                 onUpdateStudentAvatar(targetStudent, updatedAvatarField)
                 studentForDetailsSheet = targetStudent.copy(avatarBase64 = updatedAvatarField)
+            },
+            onAddChildComment = { text ->
+                onAddChildComment(targetStudent, text)
+            },
+            onDeleteNote = onDeleteChildNote,
+            onOpenMemorizationSheet = {
+                studentForMemorizationSheet = targetStudent
             }
+        )
+    }
+
+    studentForQuickComment?.let { initialStudent ->
+        val targetStudent = state.students.firstOrNull { it.id == initialStudent.id } ?: initialStudent
+        QuickHomeCommentDialog(
+            studentName = targetStudent.name,
+            blockName = state.blockNameForStudent(targetStudent),
+            onConfirm = { text ->
+                onAddChildComment(targetStudent, text)
+                studentForQuickComment = null
+            },
+            onDismiss = { studentForQuickComment = null }
+        )
+    }
+
+    studentForMemorizationSheet?.let { initialStudent ->
+        val targetStudent = state.students.firstOrNull { it.id == initialStudent.id } ?: initialStudent
+        val ownerBlock = state.blocks.firstOrNull { it.id == targetStudent.blockId }
+        val blockAccent = if (ownerBlock != null) KamSemanticColors.blockColor(ownerBlock.colorHex) else KamSemanticColors.unassignedBlock
+        val activeWeekKey = state.selectedWeekKey?.takeIf { it.isNotBlank() } ?: state.currentWeekKey
+        val alreadyHasMemCard = state.effectiveAllCardEvents.any {
+            it.studentId == targetStudent.id &&
+                it.cardType == CardType.MEMORIZATION.id &&
+                it.weekKey == activeWeekKey
+        }
+        MemorizationNotesSheet(
+            student = targetStudent,
+            blockName = state.blockNameForStudent(targetStudent),
+            blockAccent = blockAccent,
+            memorizationNotes = state.notesForStudent(targetStudent.id, ChildNoteType.MEMORIZATION),
+            alreadyHasMemorizationCardThisWeek = alreadyHasMemCard,
+            isAdmin = state.isAdmin,
+            currentUserId = currentUserId,
+            onAddMemorizationNote = { text, awardCard ->
+                onAddMemorizationNote(targetStudent, text, awardCard)
+            },
+            onToggleMemorizationCardOnly = {
+                onAwardCard(targetStudent, CardType.MEMORIZATION)
+            },
+            onDeleteNote = onDeleteChildNote,
+            onDismiss = { studentForMemorizationSheet = null }
         )
     }
 
@@ -675,6 +790,7 @@ private fun HomeTopControlCard(
     showLeaderboardExpanded: Boolean,
     onToggleLeaderboard: () -> Unit,
     onOpenSmartAttendance: () -> Unit = {},
+    onOpenSwipeCards: () -> Unit = {},
     @Suppress("UNUSED_PARAMETER") onMonthOffset: (Int) -> Unit,
     onOpenMonthWeekTree: () -> Unit,
     onOpenDuplicateAlerts: () -> Unit,
@@ -828,35 +944,6 @@ private fun HomeTopControlCard(
                         }
                     }
 
-                    // Smart Swipe Attendance Compact Button ("التحضير الذكي بسحب الصور")
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
-                        modifier = Modifier
-                            .height(38.dp)
-                            .clickable(onClick = onOpenSmartAttendance)
-                            .testTag("open_smart_attendance_button")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp)
-                        ) {
-                            Text(
-                                text = "📋",
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                            Text(
-                                text = "تحضير",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                fontWeight = FontWeight.ExtraBold,
-                                maxLines = 1
-                            )
-                        }
-                    }
-
                     // Duplicate Card Bell + Badge Button ("جرس + شارة عدد")
                     Surface(
                         shape = RoundedCornerShape(10.dp),
@@ -906,6 +993,67 @@ private fun HomeTopControlCard(
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Quick Mode Launchers: Smart Attendance ("تحضير") + Swipe Cards ("كروت")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 40.dp)
+                        .clickable(onClick = onOpenSmartAttendance)
+                        .testTag("open_smart_attendance_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(text = "📋", style = MaterialTheme.typography.labelMedium)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "التحضير بالسحب",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 40.dp)
+                        .clickable(onClick = onOpenSwipeCards)
+                        .testTag("open_swipe_cards_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(text = "⭐", style = MaterialTheme.typography.labelMedium)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "الكروت بالسحب",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
                     }
                 }
             }
@@ -996,6 +1144,7 @@ private fun HomeTopControlCard(
 
 @Composable
 private fun EmptyClassroomPromptCard(
+    isAdmin: Boolean,
     onOpenBulkImport: () -> Unit,
     onOpenAddStudent: () -> Unit,
     onOpenAddBlock: () -> Unit
@@ -1047,10 +1196,12 @@ private fun EmptyClassroomPromptCard(
                 Text("إضافة طفل")
             }
         }
-        TextButton(onClick = onOpenAddBlock) {
-            Icon(Icons.Default.ViewModule, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("إضافة بلوك خادم جديد")
+        if (isAdmin) {
+            TextButton(onClick = onOpenAddBlock) {
+                Icon(Icons.Default.ViewModule, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("إضافة بلوك خادم جديد")
+            }
         }
     }
 }
@@ -1058,6 +1209,7 @@ private fun EmptyClassroomPromptCard(
 @Composable
 private fun ServantBlockHeaderCard(
     block: ServantBlock,
+    resolvedOwnerName: String = block.servantName,
     groupId: String,
     groupName: String,
     studentsCount: Int,
@@ -1073,21 +1225,17 @@ private fun ServantBlockHeaderCard(
     val currentOnToggle by rememberUpdatedState(onToggleCollapseById)
     val onRowClick = remember { { currentOnToggle(currentBlockId) } }
 
-    val hasContactFooter = servantProfile == null || servantProfile.effectiveShowPhone
     val cardShape = RoundedCornerShape(18.dp)
-    val headerAccentShape = if (hasContactFooter) {
-        RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
-    } else {
-        cardShape
-    }
+    val headerAccentShape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+    val tintedContainerColor = blockAccent.copy(alpha = 0.18f).compositeOver(MaterialTheme.colorScheme.surface)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, cardShape)
+            .background(tintedContainerColor, cardShape)
             .border(
-                width = 1.5.dp,
-                color = blockAccent.copy(alpha = 0.65f),
+                width = 1.8.dp,
+                color = blockAccent.copy(alpha = 0.75f),
                 shape = cardShape
             )
             .testTag("servant_block_header_card_${block.id}")
@@ -1095,7 +1243,7 @@ private fun ServantBlockHeaderCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(blockAccent.copy(alpha = 0.22f), headerAccentShape)
+                .background(blockAccent.copy(alpha = 0.28f), headerAccentShape)
                 .clickable(onClick = onRowClick)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1107,7 +1255,7 @@ private fun ServantBlockHeaderCard(
             ) {
                 ServantAvatarCircle(
                     servantUid = block.servantId.ifBlank { block.id },
-                    servantName = block.servantName,
+                    servantName = resolvedOwnerName,
                     groupId = groupId,
                     memberProfile = servantProfile,
                     accentColor = blockAccent,
@@ -1118,7 +1266,7 @@ private fun ServantBlockHeaderCard(
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
                     Text(
-                        text = "بلوك ${block.servantName}",
+                        text = "بلوك $resolvedOwnerName",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold
@@ -1167,13 +1315,14 @@ private fun ServantBlockHeaderCard(
 @Composable
 private fun ServantBlockEmptyCard(blockAccent: Color) {
     val shape = RoundedCornerShape(14.dp)
+    val tintedBg = blockAccent.copy(alpha = 0.12f).compositeOver(MaterialTheme.colorScheme.surface)
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, shape)
+            .background(tintedBg, shape)
             .border(
-                width = 1.dp,
-                color = blockAccent.copy(alpha = 0.45f),
+                width = 1.2.dp,
+                color = blockAccent.copy(alpha = 0.55f),
                 shape = shape
             )
             .padding(14.dp),
@@ -1310,6 +1459,7 @@ private fun UnassignedStudentLazyRow(
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onAwardCard: (Student, CardType) -> Unit,
+    onOpenQuickComment: (Student) -> Unit = {},
     onMoveStudentToBlock: (Student, String) -> Unit,
     onOpenMoveDialog: (Student) -> Unit,
     onOpenDetailsDialog: (Student) -> Unit,
@@ -1344,6 +1494,7 @@ private fun UnassignedStudentLazyRow(
             canMoveUp = canMoveUp,
             canMoveDown = canMoveDown,
             onAwardCard = onAwardCard,
+            onOpenQuickComment = onOpenQuickComment,
             onOpenMoveDialog = onOpenMoveDialog,
             onOpenDetailsDialog = onOpenDetailsDialog,
             onOpenPhotoDialog = onOpenPhotoDialog,
@@ -1387,14 +1538,6 @@ private fun UnassignedStudentLazyRow(
 private val StudentRowCornerShape = RoundedCornerShape(14.dp)
 private val PointsPillCornerShape = RoundedCornerShape(8.dp)
 
-/**
- * 100% Compose-skippable student row:
- * - Every parameter is `@Immutable` (`Student`, `Color`) or primitive (`Long`, `Int`, `Boolean`, `String`),
- *   so tapping a card for 1 student skips recomposing the other 57 student rows completely.
- * - Uses `rememberUpdatedState` + `remember` for all 7 row/button actions so zero new closures are allocated
- *   across recompositions or card taps.
- * - Avoids hardware `.clip(...)` layers on row containers, points pill, and icon buttons.
- */
 @Composable
 private fun StudentFastCardRow(
     student: Student,
@@ -1408,6 +1551,7 @@ private fun StudentFastCardRow(
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onAwardCard: (Student, CardType) -> Unit,
+    onOpenQuickComment: (Student) -> Unit = {},
     onOpenMoveDialog: (Student) -> Unit,
     onOpenDetailsDialog: (Student) -> Unit,
     onOpenPhotoDialog: (Student) -> Unit,
@@ -1419,6 +1563,7 @@ private fun StudentFastCardRow(
 
     val currentStudent by rememberUpdatedState(student)
     val currentOnAwardCard by rememberUpdatedState(onAwardCard)
+    val currentOnOpenQuickComment by rememberUpdatedState(onOpenQuickComment)
     val currentOnOpenMoveDialog by rememberUpdatedState(onOpenMoveDialog)
     val currentOnOpenDetailsDialog by rememberUpdatedState(onOpenDetailsDialog)
     val currentOnOpenPhotoDialog by rememberUpdatedState(onOpenPhotoDialog)
@@ -1431,25 +1576,74 @@ private fun StudentFastCardRow(
     val clickMoveDown = remember { { currentOnReorder(currentStudent, false) } }
     val clickAwardCard = remember { { cardType: CardType -> currentOnAwardCard(currentStudent, cardType) } }
 
-    val rowModifier = if (outerBorderColor != null) {
+    var dragOffsetX by remember(student.id) { mutableFloatStateOf(0f) }
+
+    val baseModifier = if (outerBorderColor != null) {
         Modifier
             .fillMaxWidth()
             .background(rowSurfaceColor, StudentRowCornerShape)
-            .border(1.dp, outerBorderColor, StudentRowCornerShape)
-            .padding(horizontal = 10.dp, vertical = 8.dp)
-            .testTag("student_row_${student.id}")
+            .border(1.2.dp, outerBorderColor, StudentRowCornerShape)
     } else {
         Modifier
             .fillMaxWidth()
             .background(rowSurfaceColor, StudentRowCornerShape)
-            .padding(horizontal = 10.dp, vertical = 8.dp)
-            .testTag("student_row_${student.id}")
     }
 
-    Column(
-        modifier = rowModifier,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
+    Box(modifier = Modifier.fillMaxWidth()) {
+        if (dragOffsetX > 12f) {
+            Row(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        KamSemanticColors.NotificationChildComment.copy(alpha = 0.22f),
+                        StudentRowCornerShape
+                    )
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Start
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Comment,
+                    contentDescription = "تعليق سريع",
+                    tint = KamSemanticColors.NotificationChildComment,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "💬 اكتب تعليقاً",
+                    style = typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = KamSemanticColors.NotificationChildComment
+                )
+            }
+        }
+
+        Column(
+            modifier = baseModifier
+                .graphicsLayer { translationX = dragOffsetX }
+                .pointerInput(student.id) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (dragOffsetX >= 75f) {
+                                currentOnOpenQuickComment(currentStudent)
+                            }
+                            dragOffsetX = 0f
+                        },
+                        onDragCancel = {
+                            dragOffsetX = 0f
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            if (dragAmount > 0f || dragOffsetX > 0f) {
+                                change.consume()
+                                dragOffsetX = (dragOffsetX + dragAmount).coerceIn(0f, 110f)
+                            }
+                        }
+                    )
+                }
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+                .testTag("student_row_${student.id}"),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
         // Line 1: Dedicated Full-Width Row for Avatar + Full Student Name (prevents name truncation on mobile)
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1587,11 +1781,13 @@ private fun StudentFastCardRow(
             tagPrefix = "card_btn",
             onCardClick = clickAwardCard
         )
+        }
     }
 }
 
 @Composable
 private fun QuickAddActionDialog(
+    isAdmin: Boolean,
     onDismiss: () -> Unit,
     onSelectAddSingleStudent: () -> Unit,
     onSelectBulkImport: () -> Unit,
@@ -1637,17 +1833,19 @@ private fun QuickAddActionDialog(
                     Text("استيراد قائمة أسماء (حتى ١٥٠ للمجموعة)")
                 }
 
-                OutlinedButton(
-                    onClick = onSelectAddBlock,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("menu_add_servant_block"),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(Icons.Default.ViewModule, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("إضافة بلوك خادم جديد")
+                if (isAdmin) {
+                    OutlinedButton(
+                        onClick = onSelectAddBlock,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("menu_add_servant_block"),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.ViewModule, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("إضافة بلوك خادم جديد")
+                    }
                 }
             }
         },
@@ -1968,26 +2166,105 @@ private fun BulkImportStudentsDialog(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AddServantBlockDialog(
+    memberProfiles: List<ServantMemberProfile>,
+    existingBlocks: List<ServantBlock>,
+    resolvedMemberName: (ServantMemberProfile) -> String,
     onDismiss: () -> Unit,
-    onConfirm: (servantName: String, colorHex: String) -> Unit
+    onConfirm: (servantName: String, colorHex: String, servantUid: String) -> Unit
 ) {
+    var selectedMemberUid by rememberSaveable { mutableStateOf("") }
     var servantName by rememberSaveable { mutableStateOf("") }
     var selectedPreset by rememberSaveable { mutableStateOf(BlockColorPreset.BLUE) }
+    var showMultiBlockConfirmWarning by remember { mutableStateOf(false) }
+
+    val existingBlockOwnerUids = remember(existingBlocks) {
+        existingBlocks.mapNotNull { it.servantId.takeIf { uid -> uid.isNotBlank() } }.toSet()
+    }
+    val selectedAlreadyHasBlock = selectedMemberUid.isNotBlank() && selectedMemberUid in existingBlockOwnerUids
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("إنشاء بلوك خادم جديد") },
+        title = { Text("إنشاء بلوك خادم جديد (الأمين)") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (memberProfiles.isNotEmpty()) {
+                    Text(
+                        text = "اختر الخادم من أعضاء المجموعة:",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        memberProfiles.forEach { member ->
+                            val uid = member.effectiveUid
+                            val displayName = resolvedMemberName(member)
+                            val isSelected = selectedMemberUid == uid
+                            val alreadyOwns = uid in existingBlockOwnerUids
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        selectedMemberUid = uid
+                                        servantName = displayName
+                                        showMultiBlockConfirmWarning = false
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = displayName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (alreadyOwns) {
+                                        Text(
+                                            text = "لديه بلوك",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.secondary,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = servantName,
-                    onValueChange = { servantName = it },
+                    onValueChange = {
+                        servantName = it.take(80)
+                        showMultiBlockConfirmWarning = false
+                    },
                     label = { Text("اسم الخادم المسؤول عن البلوك") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("add_block_servant_name_input")
                 )
+
+                if (selectedAlreadyHasBlock || showMultiBlockConfirmWarning) {
+                    Surface(
+                        color = KamSemanticColors.NotificationCardConflict.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, KamSemanticColors.NotificationCardConflict)
+                    ) {
+                        Text(
+                            text = "تنبيه: هذا الخادم لديه بلوك بالفعل. يمكنك استثناءه كأمين ومنحه بلوكاً إضافياً بالضغط على إنشاء.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
 
                 Text(
                     text = "اختر لون البلوك:",
@@ -2030,11 +2307,17 @@ private fun AddServantBlockDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(servantName, selectedPreset.hex) },
+                onClick = {
+                    if (selectedAlreadyHasBlock && !showMultiBlockConfirmWarning) {
+                        showMultiBlockConfirmWarning = true
+                    } else {
+                        onConfirm(servantName.trim(), selectedPreset.hex, selectedMemberUid)
+                    }
+                },
                 enabled = servantName.trim().isNotBlank(),
                 modifier = Modifier.testTag("confirm_add_block_button")
             ) {
-                Text("إنشاء البلوك")
+                Text(if (showMultiBlockConfirmWarning) "تأكيد ومنح بلوك إضافي" else "إنشاء البلوك")
             }
         },
         dismissButton = {
@@ -2117,219 +2400,74 @@ private fun MoveStudentBlockDialog(
 }
 
 @Composable
-private fun StudentDetailsAndHistoryDialog(
-    student: Student,
-    blocks: List<ServantBlock>,
-    monthKey: String,
-    monthPoints: Long,
-    events: List<CardEvent>,
-    isAdmin: Boolean,
-    currentUserId: String,
-    canServantUndoOwnEvents: Boolean,
-    onDismiss: () -> Unit,
-    onSaveEdits: (String, Int, String) -> Unit,
-    onDeleteStudent: () -> Unit,
-    onUndoCardEvent: (CardEvent) -> Unit,
-    onOpenPhotoPickerDialog: () -> Unit = {},
-    onUpdateStudentAvatar: (String) -> Unit = {}
+private fun QuickHomeCommentDialog(
+    studentName: String,
+    blockName: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
 ) {
-    var isEditing by rememberSaveable { mutableStateOf(false) }
-    var editedName by rememberSaveable(student.name) { mutableStateOf(student.name) }
-    var editedNumber by rememberSaveable(student.studentNumber) { mutableStateOf(student.studentNumber.toString()) }
-    var editedBlockId by rememberSaveable(student.blockId) { mutableStateOf(student.blockId) }
-    val timeFormatter = remember { SimpleDateFormat("dd/MM hh:mm a", Locale.getDefault()) }
-
-    val ownerBlock = blocks.firstOrNull { it.id == student.blockId }
-    val blockAccent = if (ownerBlock != null) {
-        KamSemanticColors.blockColor(ownerBlock.colorHex)
-    } else {
-        KamSemanticColors.unassignedBlock
-    }
-
+    var commentText by rememberSaveable { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    StudentAvatarCircle(
-                        student = student,
-                        blockAccent = blockAccent,
-                        size = 40.dp,
-                        onClick = onOpenPhotoPickerDialog,
-                        testTag = "details_dialog_student_avatar_${student.id}",
-                        blockLabel = ownerBlock?.let { "بلوك ${it.servantName}" } ?: "بدون بلوك"
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
+                Icon(
+                    imageVector = Icons.Default.Comment,
+                    contentDescription = null,
+                    tint = KamSemanticColors.NotificationChildComment
+                )
+                Column {
                     Text(
-                        text = "${student.name} (#${student.studentNumber})",
+                        text = "تعليق سريع — $studentName",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
+                        fontWeight = FontWeight.ExtraBold
                     )
-                }
-                IconButton(onClick = { isEditing = !isEditing }) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "تعديل بيانات الطفل",
-                        tint = MaterialTheme.colorScheme.primary
+                    Text(
+                        text = blockName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
         },
         text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "رصيد شهر $monthKey",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Text(
-                            text = "$monthPoints نقطة (${events.size} كارت)",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                if (isEditing) {
-                    OutlinedTextField(
-                        value = editedName,
-                        onValueChange = { editedName = it },
-                        label = { Text("اسم الطفل") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = editedNumber,
-                        onValueChange = { editedNumber = it.filter { ch -> ch.isDigit() } },
-                        label = { Text("رقم الطفل") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Button(
-                            onClick = {
-                                val num = editedNumber.toIntOrNull() ?: student.studentNumber.toInt()
-                                onSaveEdits(editedName, num, editedBlockId)
-                            }
-                        ) {
-                            Text("حفظ التعديلات")
-                        }
-
-                        // Delete button: strictly Admin only in UI + enforced by Firestore Security Rules
-                        if (isAdmin) {
-                            OutlinedButton(
-                                onClick = onDeleteStudent,
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = MaterialTheme.colorScheme.error
-                                ),
-                                modifier = Modifier.testTag("admin_delete_student_button")
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = "حذف الطفل", modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("حذف نهائي")
-                            }
-                        }
-                    }
-                    HorizontalDivider()
-                }
-
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "سجل الكروت التفصيلي للشهر (مين، إيه، إمتى):",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
+                    text = "يُحفظ التعليق في ملف الطفل ويُرسل تلقائياً لجروب الخدّام بصورة الطفل واسمه وبلوكه.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-
-                if (events.isEmpty()) {
-                    Text(
-                        text = "لا توجد كروت مسجلة لهذا الطفل في شهر $monthKey.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    events.forEach { evt ->
-                        val cardType = CardType.fromId(evt.cardType)
-                        val canUndoThis = isAdmin || (canServantUndoOwnEvents && evt.servantId == currentUserId)
-                        val dateStr = evt.createdAt?.toDate()?.let { timeFormatter.format(it) } ?: "الآن"
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${cardType?.badgeSymbol.orEmpty()} ${cardType?.arabicTitle ?: evt.cardType} (+${evt.points})",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "بواسطة: ${evt.servantName} • $dateStr",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (canUndoThis) {
-                                IconButton(
-                                    onClick = { onUndoCardEvent(evt) },
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.Undo,
-                                        contentDescription = "إلغاء الكارت",
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider()
-
-                // Dedicated White Page Section at the bottom of the Student Profile for the Student's Photo Album
-                StudentPhotoAlbumSection(
-                    student = student,
-                    isAdmin = isAdmin,
-                    onUpdatePackedAvatarField = onUpdateStudentAvatar
+                OutlinedTextField(
+                    value = commentText,
+                    onValueChange = { commentText = it.take(ChildNote.MAX_TEXT_LENGTH) },
+                    placeholder = { Text("اكتب تعليقك عن الطفل...") },
+                    maxLines = 4,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("home_swipe_comment_input")
                 )
             }
         },
         confirmButton = {
+            Button(
+                onClick = { onConfirm(commentText.trim()) },
+                enabled = commentText.trim().isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = KamSemanticColors.NotificationChildComment,
+                    contentColor = Color.White
+                ),
+                modifier = Modifier.testTag("confirm_home_swipe_comment_button")
+            ) {
+                Text("حفظ وإرسال")
+            }
+        },
+        dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("إغلاق")
+                Text("إلغاء")
             }
         }
     )

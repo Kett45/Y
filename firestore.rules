@@ -2,9 +2,17 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
     // ===============================================================
     // Helper Functions
     // ===============================================================
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
 
     function isSignedIn() {
       return request.auth != null;
@@ -82,7 +90,7 @@ service cloud.firestore {
           'userId', 'displayName', 'email', 'groupId', 'joinedGroupIds',
           'enabledCards', 'collapsedBlockIds', 'hiddenBlockIds',
           'compactViewMode', 'themeId', 'uiScaleMode', 'uiScaleFactor',
-          'showFloatingAddButton', 'createdAt', 'updatedAt'
+          'showFloatingAddButton', 'servantAliases', 'createdAt', 'updatedAt'
         ]) &&
         data.userId == uid() &&
         isNonEmptyString(data.displayName, 80) &&
@@ -97,7 +105,17 @@ service cloud.firestore {
         (!('uiScaleMode' in data) || isOptionalString(data.uiScaleMode, 20)) &&
         (!('uiScaleFactor' in data) || ((data.uiScaleFactor is int || data.uiScaleFactor is float) && data.uiScaleFactor >= 0.5 && data.uiScaleFactor <= 2.0)) &&
         (!('showFloatingAddButton' in data) || data.showFloatingAddButton is bool) &&
+        (!('servantAliases' in data) || (data.servantAliases is map && data.servantAliases.size() <= 100)) &&
         data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidEmailDirectoryEntry(data) {
+      return data.keys().hasAll(['email', 'uid', 'displayName', 'updatedAt']) &&
+        data.keys().hasOnly(['email', 'uid', 'displayName', 'updatedAt']) &&
+        isNonEmptyString(data.email, 150) &&
+        data.uid == uid() &&
+        isNonEmptyString(data.displayName, 80) &&
         data.updatedAt is timestamp;
     }
 
@@ -113,6 +131,7 @@ service cloud.firestore {
           'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
           'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
           'bannedUids', 'bannedServantEntries', 'dailyInviteToken', 'inviteCodeUpdatedAtMillis',
+          'avatarBase64', 'avatarHash',
           'createdAt', 'updatedAt'
         ]) &&
         data.inviteCode == groupId &&
@@ -132,6 +151,8 @@ service cloud.firestore {
         (!('bannedServantEntries' in data) || isBoundedStringList(data.bannedServantEntries, 0, 50)) &&
         (!('dailyInviteToken' in data) || isOptionalString(data.dailyInviteToken, 16)) &&
         (!('inviteCodeUpdatedAtMillis' in data) || (data.inviteCodeUpdatedAtMillis is int && data.inviteCodeUpdatedAtMillis >= 0)) &&
+        (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 50000)) &&
+        (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
         (!('createdAt' in data) || data.createdAt is timestamp) &&
         data.updatedAt is timestamp;
     }
@@ -186,7 +207,8 @@ service cloud.firestore {
           'groupId', 'name', 'studentNumber', 'blockId',
           'sortOrder', 'position', 'avatarInitials', 'avatarBase64',
           'hasAvatar', 'avatarHash', 'createdByUid',
-          'memberUids', 'createdAt', 'updatedAt'
+          'memberUids', 'lastMemorizedText', 'lastMemorizedBy', 'lastMemorizedAtMillis',
+          'createdAt', 'updatedAt'
         ]) &&
         data.groupId == groupId &&
         isNonEmptyString(data.name, 100) &&
@@ -200,6 +222,9 @@ service cloud.firestore {
         (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
         isNonEmptyString(data.createdByUid, 64) &&
         (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
+        (!('lastMemorizedText' in data) || isOptionalString(data.lastMemorizedText, 500)) &&
+        (!('lastMemorizedBy' in data) || isOptionalString(data.lastMemorizedBy, 80)) &&
+        (!('lastMemorizedAtMillis' in data) || (data.lastMemorizedAtMillis is int && data.lastMemorizedAtMillis >= 0)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -286,7 +311,7 @@ service cloud.firestore {
           'uid', 'groupId', 'displayName', 'phoneVerified', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'uid', 'groupId', 'displayName', 'phone', 'primaryPhone', 'secondaryPhone',
+          'uid', 'groupId', 'displayName', 'email', 'phone', 'primaryPhone', 'secondaryPhone',
           'phoneVerified', 'showPhone', 'phoneHidden', 'avatar', 'hasAvatar',
           'avatarHash', 'avatarBase64', 'memberUids', 'lastSeenAt', 'createdAt', 'updatedAt'
         ]) &&
@@ -294,6 +319,7 @@ service cloud.firestore {
         data.groupId == groupId &&
         isNonEmptyString(data.uid, 64) &&
         isNonEmptyString(data.displayName, 100) &&
+        (!('email' in data) || isOptionalString(data.email, 150)) &&
         (!('phone' in data) || isOptionalString(data.phone, 24)) &&
         (!('primaryPhone' in data) || isOptionalString(data.primaryPhone, 24)) &&
         (!('secondaryPhone' in data) || isOptionalString(data.secondaryPhone, 24)) &&
@@ -368,6 +394,7 @@ service cloud.firestore {
         data.keys().hasOnly([
           'chatId', 'groupId', 'senderUid', 'senderName', 'type', 'text',
           'mediaBase64', 'mediaUrl', 'mediaMimeType', 'imageWidth', 'imageHeight', 'audioDurationSec',
+          'notificationCategory', 'childId', 'childName', 'childBlockName', 'forwardedFromName',
           'isDeleted', 'memberUids', 'createdAt', 'updatedAt'
         ]) &&
         data.groupId == groupId &&
@@ -375,6 +402,11 @@ service cloud.firestore {
         isNonEmptyString(data.senderName, 100) &&
         data.type in ['TEXT', 'IMAGE', 'AUDIO', 'SYSTEM'] &&
         isValidChatMessagePayloadByType(data) &&
+        (!('notificationCategory' in data) || isOptionalString(data.notificationCategory, 40)) &&
+        (!('childId' in data) || isOptionalString(data.childId, 80)) &&
+        (!('childName' in data) || isOptionalString(data.childName, 100)) &&
+        (!('childBlockName' in data) || isOptionalString(data.childBlockName, 100)) &&
+        (!('forwardedFromName' in data) || isOptionalString(data.forwardedFromName, 100)) &&
         data.isDeleted == false &&
         isBoundedStringList(data.memberUids, 1, 50) &&
         uid() in data.memberUids &&
@@ -427,6 +459,7 @@ service cloud.firestore {
         data.keys().hasOnly([
           'chatId', 'groupId', 'senderUid', 'senderName', 'type', 'text',
           'mediaBase64', 'mediaUrl', 'mediaMimeType', 'imageWidth', 'imageHeight', 'audioDurationSec',
+          'notificationCategory', 'childId', 'childName', 'childBlockName', 'forwardedFromName',
           'isDeleted', 'participants', 'createdAt', 'updatedAt'
         ]) &&
         (!('chatId' in data) || data.chatId == chatId) &&
@@ -435,6 +468,11 @@ service cloud.firestore {
         isNonEmptyString(data.senderName, 100) &&
         data.type in ['TEXT', 'IMAGE', 'AUDIO', 'SYSTEM'] &&
         isValidChatMessagePayloadByType(data) &&
+        (!('notificationCategory' in data) || isOptionalString(data.notificationCategory, 40)) &&
+        (!('childId' in data) || isOptionalString(data.childId, 80)) &&
+        (!('childName' in data) || isOptionalString(data.childName, 100)) &&
+        (!('childBlockName' in data) || isOptionalString(data.childBlockName, 100)) &&
+        (!('forwardedFromName' in data) || isOptionalString(data.forwardedFromName, 100)) &&
         data.isDeleted == false &&
         isBoundedStringList(data.participants, 2, 2) &&
         uid() in data.participants &&
@@ -465,6 +503,30 @@ service cloud.firestore {
         (!('updatedAt' in data) || data.updatedAt is timestamp);
     }
 
+    function isValidChildNote(data, groupId) {
+      return data.keys().hasAll([
+          'groupId', 'studentId', 'studentName', 'type', 'text',
+          'authorUid', 'authorName', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'groupId', 'studentId', 'studentName', 'type', 'text',
+          'status', 'authorUid', 'authorName', 'clientCreatedAtMillis',
+          'memberUids', 'createdAt', 'updatedAt'
+        ]) &&
+        data.groupId == groupId &&
+        isNonEmptyString(data.studentId, 80) &&
+        isNonEmptyString(data.studentName, 100) &&
+        data.type in ['COMMENT', 'MEMORIZATION', 'VISITATION'] &&
+        isNonEmptyString(data.text, 500) &&
+        (!('status' in data) || isOptionalString(data.status, 30)) &&
+        data.authorUid == uid() &&
+        isNonEmptyString(data.authorName, 80) &&
+        (!('clientCreatedAtMillis' in data) || (data.clientCreatedAtMillis is int && data.clientCreatedAtMillis >= 0)) &&
+        (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // ===============================================================
     // Collection Rules
     // ===============================================================
@@ -478,6 +540,17 @@ service cloud.firestore {
         isValidUserProfile(incoming()) &&
         (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt);
       allow delete: if isDocOwner(userId);
+    }
+
+    // 1b. Email Lookup Directory (exact get only; no list scraping)
+    match /emailDirectory/{emailKey} {
+      allow get: if isSignedIn() && isValidId(emailKey);
+      allow list: if false;
+      allow create: if isSignedIn() && isValidId(emailKey) && isValidEmailDirectoryEntry(incoming());
+      allow update: if isSignedIn() && isValidId(emailKey) &&
+        existing().uid == uid() &&
+        isValidEmailDirectoryEntry(incoming());
+      allow delete: if isSignedIn() && existing().uid == uid();
     }
 
     // 2. Groups (Admin + up to 6 Servants)
@@ -543,15 +616,24 @@ service cloud.firestore {
 
       // 2b. Servant Blocks
       // Read/List: Any member of the group (queried by groupId).
-      // Create/Update: Any member of the group.
-      // Delete: Strictly Group Admin ONLY.
+      // Create & Delete: Strictly Group Admin ONLY.
+      // Update: Group Admin OR assigned servant updating only their own servantName / claiming unassigned block.
       match /blocks/{blockId} {
         allow get, list: if isGroupMember(groupId);
-        allow create: if isGroupMember(groupId) && isValidServantBlock(incoming(), groupId);
-        allow update: if isGroupMember(groupId) &&
-          isValidServantBlock(incoming(), groupId) &&
+        allow create: if isGroupAdmin(groupId) && isValidServantBlock(incoming(), groupId);
+        allow update: if isValidServantBlock(incoming(), groupId) &&
           incoming().groupId == existing().groupId &&
-          incoming().createdAt == existing().createdAt;
+          incoming().createdAt == existing().createdAt &&
+          (
+            isGroupAdmin(groupId) ||
+            (
+              isGroupMember(groupId) &&
+              existing().servantId == uid() &&
+              incoming().servantId == existing().servantId &&
+              incoming().colorHex == existing().colorHex &&
+              incoming().sortOrder == existing().sortOrder
+            )
+          );
         allow delete: if isGroupAdmin(groupId);
       }
 
@@ -630,8 +712,7 @@ service cloud.firestore {
           isDocOwner(memberUid) &&
           isValidGroupMemberProfile(incoming(), groupId, memberUid) &&
           incoming().uid == existing().uid &&
-          incoming().groupId == existing().groupId &&
-          (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt);
+          incoming().groupId == existing().groupId;
         allow delete: if isDocOwner(memberUid) || isGroupAdmin(groupId);
       }
 
@@ -682,6 +763,26 @@ service cloud.firestore {
           (existing().servantId == uid() || isGroupAdmin(groupId));
         allow delete: if isGroupAdmin(groupId) ||
           (isGroupMember(groupId) && existing().servantId == uid());
+      }
+
+      // 2k. Shared Child Notes (Comments, Memorization progress, Visitation follow-ups)
+      match /childNotes/{noteId} {
+        allow get, list: if isSignedIn() && (
+          ('memberUids' in existing() && uid() in existing().memberUids) ||
+          isGroupMember(groupId)
+        );
+        allow create: if isGroupMember(groupId) && isValidChildNote(incoming(), groupId);
+        allow update: if (
+            isGroupAdmin(groupId) ||
+            (isGroupMember(groupId) && existing().authorUid == uid())
+          ) &&
+          isValidChildNote(incoming(), groupId) &&
+          incoming().groupId == existing().groupId &&
+          incoming().studentId == existing().studentId &&
+          incoming().authorUid == existing().authorUid &&
+          incoming().createdAt == existing().createdAt;
+        allow delete: if isGroupAdmin(groupId) ||
+          (isGroupMember(groupId) && existing().authorUid == uid());
       }
     }
 

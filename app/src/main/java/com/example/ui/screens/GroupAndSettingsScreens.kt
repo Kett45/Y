@@ -86,19 +86,31 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardType
 import com.example.data.model.Group
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_SERVANTS_PER_GROUP
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
 import com.example.data.model.ServantBlock
+import com.example.data.model.ServantMemberProfile
 import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.sync.GitHubSmartSyncEngine
 import com.example.ui.components.AppearanceFullScreen
 import com.example.ui.components.AppearanceSettingsEntryCard
+import com.example.ui.components.ServantAvatarCircle
 import com.example.ui.components.ServantPhotoPickerDialog
 import com.example.ui.components.ServantProfileSettingsCard
 import com.example.ui.components.StudentAvatarImageHelper
+import com.example.ui.components.openDialerForPhone
+import com.example.ui.components.openWhatsAppForPhone
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.viewmodel.KamScreenState
@@ -130,6 +142,7 @@ private fun shareInvitationText(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GroupInvitationsScreen(
     state: KamScreenState,
@@ -144,12 +157,27 @@ fun GroupInvitationsScreen(
     onToggleBlockHidden: (String) -> Unit = {},
     onRefreshDailyInviteCode: () -> Unit = {},
     onRemoveAndBanServant: (ServantBlock) -> Unit = onDeleteBlock,
-    onUnbanServant: (servantUid: String, servantName: String) -> Unit = { _, _ -> }
+    onUnbanServant: (servantUid: String, servantName: String) -> Unit = { _, _ -> },
+    currentUserId: String = "",
+    onCreateBlock: (servantName: String, colorHex: String, servantUid: String) -> Unit = { _, _, _ -> },
+    onUpdateBlock: (block: ServantBlock, newName: String, newColorHex: String, newServantId: String?) -> Unit = { _, _, _, _ -> },
+    onDeleteBlockKeepingChildren: (ServantBlock) -> Unit = onDeleteBlock,
+    onDeleteBlockWithChildren: (ServantBlock) -> Unit = {},
+    onSavePersonalServantAlias: (targetUid: String, alias: String) -> Unit = { _, _ -> },
+    onEditOwnDisplayName: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     var inviteeName by rememberSaveable { mutableStateOf("") }
     var blockPendingServantRemoval by remember { mutableStateOf<ServantBlock?>(null) }
     var activeInfoDialogTopic by rememberSaveable { mutableStateOf<String?>(null) }
+    var showCreateBlockDialog by rememberSaveable { mutableStateOf(false) }
+    var blockBeingEdited by remember { mutableStateOf<ServantBlock?>(null) }
+    var blockPendingSafeDelete by remember { mutableStateOf<ServantBlock?>(null) }
+    var blockPendingHardDeleteConfirm by remember { mutableStateOf<ServantBlock?>(null) }
+    var memberPendingAlias by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var aliasInputText by rememberSaveable { mutableStateOf("") }
+    var showEditOwnNameDialog by rememberSaveable { mutableStateOf(false) }
+    var ownNameDraft by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_GROUP, scrolling = false)
@@ -577,7 +605,7 @@ fun GroupInvitationsScreen(
             }
         }
 
-        // 4. Servant Blocks Management (Remove & Ban Servant ONLY — Preserve Block & Children)
+        // 4. Servant Blocks Management (Admin-Only Create/Edit/Delete + Personal Visibility)
         item(key = "blocks_management_header") {
             Row(
                 modifier = Modifier
@@ -592,16 +620,35 @@ fun GroupInvitationsScreen(
                     fontWeight = FontWeight.Bold
                 )
                 if (state.isAdmin) {
-                    IconButton(
-                        onClick = { activeInfoDialogTopic = "BLOCKS" },
-                        modifier = Modifier.size(28.dp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Info,
-                            contentDescription = "توضيح إزالة الخادم",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        OutlinedButton(
+                            onClick = { showCreateBlockDialog = true },
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("group_add_block_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("إضافة بلوك", style = MaterialTheme.typography.labelMedium)
+                        }
+                        IconButton(
+                            onClick = { activeInfoDialogTopic = "BLOCKS" },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Info,
+                                contentDescription = "توضيح إدارة البلوكات",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -648,7 +695,7 @@ fun GroupInvitationsScreen(
                             val servantStatusText = when {
                                 isBlockAdminOwner -> "بلوك أمين المجموعة"
                                 hasActiveServant -> "خادم مشترك في المجموعة"
-                                else -> "تمت إزالة حساب الخادم • البلوك وأطفاله محفوظون"
+                                else -> "بلوك بدون خادم مرتبط حالياً"
                             }
                             Text(
                                 text = "عدد الأطفال المسكنين: $countInBlock • $servantStatusText" +
@@ -671,25 +718,38 @@ fun GroupInvitationsScreen(
                             )
                         }
 
-                        if (state.isAdmin && hasActiveServant) {
+                        if (state.isAdmin) {
                             IconButton(
-                                onClick = { blockPendingServantRemoval = blk },
+                                onClick = { blockBeingEdited = blk },
+                                modifier = Modifier.testTag("edit_block_${blk.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "تعديل اسم ولون وخادم البلوك",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            if (hasActiveServant) {
+                                IconButton(
+                                    onClick = { blockPendingServantRemoval = blk },
+                                    modifier = Modifier.testTag("ban_servant_block_${blk.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PersonRemove,
+                                        contentDescription = "إزالة وحظر الخادم من المجموعة مع بقاء البلوك والأطفال",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { blockPendingSafeDelete = blk },
                                 modifier = Modifier.testTag("delete_block_${blk.id}")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.PersonRemove,
-                                    contentDescription = "إزالة وحظر الخادم من المجموعة مع بقاء البلوك والأطفال",
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        } else if (state.isAdmin && blk.servantId.isBlank() && countInBlock == 0) {
-                            IconButton(
-                                onClick = { onDeleteBlock(blk) },
-                                modifier = Modifier.testTag("delete_empty_block_${blk.id}")
-                            ) {
-                                Icon(
                                     imageVector = Icons.Default.Delete,
-                                    contentDescription = "حذف البلوك الفارغ",
+                                    contentDescription = "حذف البلوك",
                                     tint = MaterialTheme.colorScheme.error
                                 )
                             }
@@ -699,7 +759,284 @@ fun GroupInvitationsScreen(
             }
         }
 
-        // 4b. Banned Servants List & Unban Action (Admin Only)
+        // 4a. Personal Block Visibility Settings (Moved from SettingsScreen to Group tab)
+        if (state.blocks.isNotEmpty()) {
+            item(key = "personal_blocks_visibility_in_group") {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("personal_blocks_visibility_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "إظهار / إخفاء البلوكات في شاشتي (تفضيل شخصي)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "تُحفظ حالة إظهار أو إخفاء البلوكات في حسابك الشخصي فقط دون التأثير على باقي الخدام.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        HorizontalDivider()
+                        state.blocks.forEach { blk ->
+                            val isVisibleOnHome = blk.id !in state.hiddenBlockIds
+                            val blkColor = KamSemanticColors.blockColor(blk.colorHex)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onToggleBlockHidden(blk.id) }
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .background(blkColor, CircleShape)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = "بلوك ${blk.servantName}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Switch(
+                                    checked = isVisibleOnHome,
+                                    onCheckedChange = { onToggleBlockHidden(blk.id) },
+                                    modifier = Modifier.testTag("switch_block_visible_${blk.id}")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4b. Group Members Directory (All Members with Phone/WhatsApp, Own Name Edit & Personal Alias)
+        item(key = "group_members_directory_section") {
+            val directoryMembers = remember(state.memberProfiles, state.blocks, state.group, state.userProfile, currentUserId) {
+                val byUid = linkedMapOf<String, ServantMemberProfile>()
+                state.memberProfiles.forEach { profile ->
+                    val uid = profile.effectiveUid
+                    if (uid.isNotBlank()) {
+                        byUid[uid] = profile
+                    }
+                }
+                state.blocks.forEach { blk ->
+                    if (blk.servantId.isNotBlank() && blk.servantId !in byUid) {
+                        byUid[blk.servantId] = ServantMemberProfile(
+                            id = blk.servantId,
+                            uid = blk.servantId,
+                            displayName = blk.servantName,
+                            groupId = blk.groupId
+                        )
+                    }
+                }
+                if (currentUserId.isNotBlank() && currentUserId !in byUid) {
+                    byUid[currentUserId] = ServantMemberProfile(
+                        id = currentUserId,
+                        uid = currentUserId,
+                        displayName = state.userProfile?.displayName ?: "خادم",
+                        groupId = state.group?.id.orEmpty(),
+                        primaryPhone = state.ownPrimaryPhone,
+                        secondaryPhone = state.ownSecondaryPhone
+                    )
+                }
+                byUid.values.toList()
+            }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("group_members_directory_card"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Groups,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "قائمة الأعضاء والخدام في المجموعة (${directoryMembers.size})",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    HorizontalDivider()
+
+                    directoryMembers.forEach { member ->
+                        val memberUid = member.effectiveUid
+                        val isMe = memberUid == currentUserId
+                        val memberBlock = state.blocks.firstOrNull { it.servantId == memberUid }
+                        val accentColor = if (memberBlock != null) {
+                            KamSemanticColors.blockColor(memberBlock.colorHex)
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        }
+                        val officialName = memberBlock?.servantName?.takeIf { it.isNotBlank() }
+                            ?: member.displayName.ifBlank { "خادم" }
+                        val resolvedName = state.resolvedServantName(memberUid, officialName)
+                        val personalAlias = state.servantAliases[memberUid].orEmpty()
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("group_member_row_$memberUid")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        ServantAvatarCircle(
+                                            servantUid = memberUid,
+                                            servantName = resolvedName,
+                                            groupId = state.group?.id.orEmpty(),
+                                            memberProfile = member,
+                                            size = 40.dp,
+                                            accentColor = accentColor
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = resolvedName + if (isMe) " (أنت)" else "",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                if (memberUid == state.group?.adminId) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(999.dp),
+                                                        color = MaterialTheme.colorScheme.primaryContainer
+                                                    ) {
+                                                        Text(
+                                                            text = "الأمين",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                            fontWeight = FontWeight.Bold,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            if (personalAlias.isNotBlank() && personalAlias != officialName) {
+                                                Text(
+                                                    text = "الاسم الأصلي: $officialName",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            if (isMe && !state.userProfile?.email.isNullOrBlank()) {
+                                                Text(
+                                                    text = state.userProfile?.email.orEmpty(),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    if (isMe) {
+                                        TextButton(
+                                            onClick = {
+                                                ownNameDraft = officialName
+                                                showEditOwnNameDialog = true
+                                            },
+                                            modifier = Modifier.testTag("group_edit_own_name_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Edit,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("تعديل اسمي", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    } else {
+                                        TextButton(
+                                            onClick = {
+                                                aliasInputText = personalAlias.ifBlank { officialName }
+                                                memberPendingAlias = memberUid to officialName
+                                            },
+                                            modifier = Modifier.testTag("group_alias_member_$memberUid")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Edit,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("تسمية خاصة بك", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
+                                }
+
+                                val phones = member.nonEmptyPhones
+                                if (phones.isNotEmpty()) {
+                                    val firstPhone = phones.first()
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = { openDialerForPhone(context, firstPhone) },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Call,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(firstPhone, style = MaterialTheme.typography.labelSmall)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { openWhatsAppForPhone(context, firstPhone) },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("واتساب", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4c. Banned Servants List & Unban Action (Admin Only)
         if (state.isAdmin) {
             item(key = "banned_servants_section") {
                 Card(
@@ -816,6 +1153,389 @@ fun GroupInvitationsScreen(
         }
     }
 
+    // Admin Create Block Dialog
+    if (showCreateBlockDialog && state.isAdmin) {
+        var newBlockName by rememberSaveable { mutableStateOf("") }
+        var selectedColorHex by rememberSaveable { mutableStateOf(BlockColorPreset.entries.first().hex) }
+        var selectedServantUid by rememberSaveable { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showCreateBlockDialog = false },
+            title = { Text("إنشاء بلوك خادم جديد", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = newBlockName,
+                        onValueChange = { newBlockName = it },
+                        label = { Text("اسم البلوك / الخادم") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("dialog_create_block_name_input")
+                    )
+                    Text("اختر لون البلوك:", style = MaterialTheme.typography.labelMedium)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BlockColorPreset.entries.forEach { preset ->
+                            val hex = preset.hex
+                            val label = preset.arabicName
+                            val color = KamSemanticColors.blockColor(hex)
+                            val isSelected = selectedColorHex.equals(hex, ignoreCase = true)
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = color.copy(alpha = if (isSelected) 0.25f else 0.12f),
+                                border = BorderStroke(if (isSelected) 2.dp else 1.dp, color),
+                                modifier = Modifier.clickable { selectedColorHex = hex }
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = color,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                    if (state.memberProfiles.isNotEmpty()) {
+                        Text("ربط البلوك بحساب خادم في المجموعة (اختياري):", style = MaterialTheme.typography.labelMedium)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            state.memberProfiles.forEach { member ->
+                                val mUid = member.effectiveUid
+                                val selected = selectedServantUid == mUid
+                                OutlinedButton(
+                                    onClick = {
+                                        selectedServantUid = if (selected) "" else mUid
+                                        if (newBlockName.isBlank()) {
+                                            newBlockName = member.displayName
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(999.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = if (selected) "✓ ${member.displayName}" else member.displayName,
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = newBlockName.trim()
+                        if (trimmed.isNotEmpty()) {
+                            onCreateBlock(trimmed, selectedColorHex, selectedServantUid)
+                            showCreateBlockDialog = false
+                        }
+                    },
+                    enabled = newBlockName.trim().isNotEmpty(),
+                    modifier = Modifier.testTag("dialog_confirm_create_block_button")
+                ) {
+                    Text("إنشاء البلوك")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateBlockDialog = false }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Admin Edit Block Dialog (Name, Color, Assigned Servant)
+    val editingBlock = blockBeingEdited
+    if (editingBlock != null && state.isAdmin) {
+        var editedName by rememberSaveable(editingBlock.id) { mutableStateOf(editingBlock.servantName) }
+        var editedColorHex by rememberSaveable(editingBlock.id) { mutableStateOf(editingBlock.colorHex) }
+        var editedServantId by rememberSaveable(editingBlock.id) { mutableStateOf(editingBlock.servantId) }
+
+        AlertDialog(
+            onDismissRequest = { blockBeingEdited = null },
+            title = { Text("تعديل بلوك «${editingBlock.servantName}»", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = editedName,
+                        onValueChange = { editedName = it },
+                        label = { Text("اسم البلوك / الخادم") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("dialog_edit_block_name_input")
+                    )
+                    Text("لون البلوك:", style = MaterialTheme.typography.labelMedium)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BlockColorPreset.entries.forEach { preset ->
+                            val hex = preset.hex
+                            val label = preset.arabicName
+                            val color = KamSemanticColors.blockColor(hex)
+                            val isSelected = editedColorHex.equals(hex, ignoreCase = true)
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = color.copy(alpha = if (isSelected) 0.25f else 0.12f),
+                                border = BorderStroke(if (isSelected) 2.dp else 1.dp, color),
+                                modifier = Modifier.clickable { editedColorHex = hex }
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = color,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                    if (state.memberProfiles.isNotEmpty()) {
+                        Text("الخادم المسؤول عن البلوك:", style = MaterialTheme.typography.labelMedium)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            state.memberProfiles.forEach { member ->
+                                val mUid = member.effectiveUid
+                                val selected = editedServantId == mUid
+                                OutlinedButton(
+                                    onClick = {
+                                        editedServantId = if (selected) "" else mUid
+                                    },
+                                    shape = RoundedCornerShape(999.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = if (selected) "✓ ${member.displayName}" else member.displayName,
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = editedName.trim()
+                        if (trimmed.isNotEmpty()) {
+                            onUpdateBlock(editingBlock, trimmed, editedColorHex, editedServantId)
+                            blockBeingEdited = null
+                        }
+                    },
+                    enabled = editedName.trim().isNotEmpty(),
+                    modifier = Modifier.testTag("dialog_save_edit_block_button")
+                ) {
+                    Text("حفظ التعديلات")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { blockBeingEdited = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // 3-Tier Safe Delete Block Dialog (Tier 1 & Tier 2 options)
+    val safeDeleteTarget = blockPendingSafeDelete
+    if (safeDeleteTarget != null && state.isAdmin) {
+        val countInTarget = state.students.count { it.blockId == safeDeleteTarget.id }
+        AlertDialog(
+            onDismissRequest = { blockPendingSafeDelete = null },
+            title = {
+                Text(
+                    text = "خيارات حذف «بلوك ${safeDeleteTarget.servantName}»",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "يحتوي هذا البلوك على $countInTarget طفل. اختر طريقة الحذف المطلوبة:"
+                    )
+                    Button(
+                        onClick = {
+                            onDeleteBlockKeepingChildren(safeDeleteTarget)
+                            blockPendingSafeDelete = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("delete_block_keep_children_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "حذف البلوك فقط (الاحتفاظ بالأطفال بدون بلوك)",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    HorizontalDivider()
+
+                    OutlinedButton(
+                        onClick = {
+                            blockPendingHardDeleteConfirm = safeDeleteTarget
+                            blockPendingSafeDelete = null
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        ),
+                        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("delete_block_with_children_danger_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "حذف البلوك مع كل أطفاله نهائياً ($countInTarget طفل)",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { blockPendingSafeDelete = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Second Confirmation Dialog for Hard-Deleting Block WITH All Its Children
+    val hardDeleteTarget = blockPendingHardDeleteConfirm
+    if (hardDeleteTarget != null && state.isAdmin) {
+        val countInTarget = state.students.count { it.blockId == hardDeleteTarget.id }
+        AlertDialog(
+            onDismissRequest = { blockPendingHardDeleteConfirm = null },
+            title = {
+                Text(
+                    text = "تأكيد نهائي لحذف البلوك والأطفال",
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            },
+            text = {
+                Text(
+                    text = "تحذير: سيتم حذف «بلوك ${hardDeleteTarget.servantName}» وحذف جميع أطفاله ($countInTarget طفل) ونقاطهم وسجل حضورهم نهائياً. هل أنت متأكد تماماً؟"
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteBlockWithChildren(hardDeleteTarget)
+                        blockPendingHardDeleteConfirm = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ),
+                    modifier = Modifier.testTag("confirm_delete_block_with_children_button")
+                ) {
+                    Text("نعم، احذف البلوك وكل أطفاله")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { blockPendingHardDeleteConfirm = null }) {
+                    Text("تراجع")
+                }
+            }
+        )
+    }
+
+    // Personal Servant Alias Dialog (Visible only to current user)
+    val aliasTarget = memberPendingAlias
+    if (aliasTarget != null) {
+        val (targetUid, officialName) = aliasTarget
+        AlertDialog(
+            onDismissRequest = { memberPendingAlias = null },
+            title = { Text("تسمية خاصة لـ «$officialName»", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "هذا الاسم يظهر لك أنت فقط في المحادثات وقائمة الأعضاء (مثل الأسماء المحفوظة على هاتفك).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = aliasInputText,
+                        onValueChange = { aliasInputText = it },
+                        label = { Text("الاسم المفضل لديك (اتركه فارغاً للاسم الأصلي)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("group_member_alias_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onSavePersonalServantAlias(targetUid, aliasInputText.trim())
+                        memberPendingAlias = null
+                    },
+                    modifier = Modifier.testTag("group_member_save_alias_button")
+                ) {
+                    Text("حفظ التسمية")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { memberPendingAlias = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Edit Own Display Name Dialog from Group Members List
+    if (showEditOwnNameDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditOwnNameDialog = false },
+            title = { Text("تعديل اسمك في الخدمة", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = ownNameDraft,
+                    onValueChange = { ownNameDraft = it },
+                    label = { Text("اسمك الظاهر لباقي الخدام") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("group_edit_own_name_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = ownNameDraft.trim()
+                        if (trimmed.isNotEmpty()) {
+                            onEditOwnDisplayName(trimmed)
+                            showEditOwnNameDialog = false
+                        }
+                    },
+                    enabled = ownNameDraft.trim().isNotEmpty(),
+                    modifier = Modifier.testTag("group_save_own_name_button")
+                ) {
+                    Text("حفظ")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditOwnNameDialog = false }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
     // Confirmation Dialog for removing & banning ONLY the servant while keeping the block and its children intact
     val targetBlockForBan = blockPendingServantRemoval
     if (targetBlockForBan != null) {
@@ -889,10 +1609,11 @@ fun SettingsScreen(
     onCreateNewGroup: (groupName: String, adminName: String) -> Unit = { _, _ -> },
     onToggleBlockHidden: (String) -> Unit = {},
     currentUserId: String = "",
+    currentUserEmail: String = "",
     onOpenPhoneWizard: () -> Unit = {},
     onUpdateOwnServantAvatar: (String) -> Unit = {},
-    onToggleHideOwnPhone: (Boolean) -> Unit = {},
-    onDeleteOwnPhones: () -> Unit = {}
+    onDeleteOwnPhones: () -> Unit = {},
+    onEditOwnDisplayName: (String) -> Unit = {}
 ) {
     val enabledIds = state.userProfile?.enabledCards ?: CardType.defaultEnabledIds
     val group = state.group
@@ -976,16 +1697,16 @@ fun SettingsScreen(
             ServantProfileSettingsCard(
                 servantUid = currentUserId,
                 servantName = ownServantName,
+                email = currentUserEmail.ifBlank { state.userProfile?.email.orEmpty() },
                 groupId = group?.id.orEmpty(),
                 memberProfile = ownMemberProfile,
                 primaryPhone = state.ownPrimaryPhone,
                 secondaryPhone = state.ownSecondaryPhone,
-                phoneHidden = state.ownPhoneHidden,
                 accentColor = ownAccentColor,
                 onOpenPhoneWizard = onOpenPhoneWizard,
                 onOpenAvatarPicker = { showOwnServantPhotoDialog = true },
-                onTogglePhoneHidden = onToggleHideOwnPhone,
-                onDeletePhones = onDeleteOwnPhones
+                onDeletePhones = onDeleteOwnPhones,
+                onEditDisplayName = onEditOwnDisplayName
             )
         }
         item(key = "spacer_after_servant_profile", contentType = "settings_spacer") {
@@ -1185,81 +1906,6 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(12.dp))
         }
 
-        // 1b. Personal Block Visibility Settings — flattened header + discrete LazyColumn rows
-        if (state.blocks.isNotEmpty()) {
-            item(key = "personal_blocks_visibility_settings", contentType = "settings_section_header") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "إظهار / إخفاء البلوكات في شاشتي (تفضيل شخصي)",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "تُحفظ حالة طي وإخفاء البلوكات في حسابك الشخصي فقط دون التأثير على باقي أعضاء المجموعة.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    HorizontalDivider()
-                }
-            }
-            itemsIndexed(
-                items = state.blocks,
-                key = { _, blk -> "personal_block_row_${blk.id}" },
-                contentType = { _, _ -> "settings_switch_row" }
-            ) { index, blk ->
-                val isVisibleOnHome = blk.id !in state.hiddenBlockIds
-                val blkColor = KamSemanticColors.blockColor(blk.colorHex)
-                val isLast = index == state.blocks.lastIndex
-                val rowShape = if (isLast) {
-                    RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
-                } else {
-                    RectangleShape
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface, rowShape)
-                        .clickable { onToggleBlockHidden(blk.id) }
-                        .padding(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = 4.dp,
-                            bottom = if (isLast) 14.dp else 4.dp
-                        ),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(14.dp)
-                                .background(blkColor, CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "بلوك ${blk.servantName}",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    Switch(
-                        checked = isVisibleOnHome,
-                        onCheckedChange = { onToggleBlockHidden(blk.id) },
-                        modifier = Modifier.testTag("switch_block_visible_${blk.id}")
-                    )
-                }
-            }
-            item(key = "spacer_after_personal_blocks", contentType = "settings_spacer") {
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-        }
-
         // 2. Group Policy Decisions — flattened header + 5 discrete switch items + footer
         item(key = "group_policy_settings", contentType = "settings_section_header") {
             Box(
@@ -1420,12 +2066,6 @@ fun SettingsScreen(
             GitHubAutoSyncSettingsCard()
         }
         item(key = "spacer_after_github_sync", contentType = "settings_spacer") {
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-
-        // 2c. Live Performance & Timing Metrics Section (flattened into incremental LazyColumn items)
-        performanceMetricsSettingsItems()
-        item(key = "spacer_after_perf_metrics", contentType = "settings_spacer") {
             Spacer(modifier = Modifier.height(12.dp))
         }
 
@@ -2068,331 +2708,6 @@ private fun PolicySwitchRow(
     }
 }
 
-private fun LazyListScope.performanceMetricsSettingsItems() {
-    item(key = "performance_metrics_card", contentType = "settings_section_header") {
-        val diagnosticsEnabled by KamPerformanceTracker.liveDiagnosticsEnabled.collectAsStateWithLifecycle()
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)
-                .testTag("performance_metrics_settings_card"),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "لوحة قياس الأداء والأوقات (KAM_PERF)",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "مراقبة الإطارات مغلقة افتراضياً لتسريع الواجهة (فعّلها للتشخيص فقط)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-                Switch(
-                    checked = diagnosticsEnabled,
-                    onCheckedChange = { KamPerformanceTracker.setLiveDiagnosticsEnabled(it) },
-                    modifier = Modifier.testTag("switch_live_perf_diagnostics")
-                )
-            }
-            HorizontalDivider()
-        }
-    }
-
-    items(
-        count = 9,
-        key = { idx -> "perf_metric_row_$idx" },
-        contentType = { "settings_perf_row" }
-    ) { rowIdx ->
-        val metrics by KamPerformanceTracker.metrics.collectAsStateWithLifecycle()
-        val (label, beforeValue, afterValue) = when (rowIdx) {
-            0 -> Triple(
-                "١. وقت فتح التطبيق (Cold Start)",
-                "${KamPerformanceTracker.BEFORE_APP_START_MS} ms",
-                if (metrics.appColdStartMs > 0L) "${metrics.appColdStartMs} ms" else "٢٩٠ ms (مقاس)"
-            )
-            1 -> Triple(
-                "٢. وقت أول عرض للقائمة",
-                "${KamPerformanceTracker.BEFORE_FIRST_LIST_MS} ms",
-                if (metrics.firstListRenderMs > 0L) "${metrics.firstListRenderMs} ms" else "٣٤٠ ms (مقاس)"
-            )
-            2 -> Triple(
-                "٣. وقت ضغطة الكارت (Card Tap)",
-                "${KamPerformanceTracker.BEFORE_CARD_TAP_MS.toInt()} ms",
-                if (metrics.cardTapCount > 0) {
-                    String.format(Locale.US, "%.1f ms (متوسط %.1f ms)", metrics.lastCardTapMs, metrics.avgCardTapMs)
-                } else {
-                    "١.٨ ms (فوري)"
-                }
-            )
-            3 -> Triple(
-                "٤. وقت فتح لوحة الشرف",
-                "${KamPerformanceTracker.BEFORE_LEADERBOARD_OPEN_MS.toInt()} ms",
-                if (metrics.lastLeaderboardOpenMs > 0.0) {
-                    String.format(Locale.US, "%.1f ms (كاش: %d)", metrics.lastLeaderboardOpenMs, metrics.leaderboardCacheHits)
-                } else {
-                    "٠.٤ ms (مخزن مسبقاً)"
-                }
-            )
-            4 -> Triple(
-                "٥. حجم ملف الـ Snapshot المحلي",
-                "${KamPerformanceTracker.BEFORE_SNAPSHOT_SIZE_KB.toInt()} KB",
-                if (metrics.lastSnapshotSizeKb > 0.0) {
-                    String.format(Locale.US, "%.1f KB (كتابة %.1f ms)", metrics.lastSnapshotSizeKb, metrics.lastSnapshotWriteMs)
-                } else {
-                    "٤٢ KB (بدون صور)"
-                }
-            )
-            5 -> Triple(
-                "٦. نسبة الإطارات البطيئة (Jank > 16ms)",
-                "٩٢.٩% (١٩٢٩ من ٢٠٧٦)",
-                if (metrics.totalFramesTracked > 0L) {
-                    String.format(
-                        Locale.US,
-                        "%.1f%% (%d من %d إطار)",
-                        metrics.jankPercentage,
-                        metrics.jankFramesCount,
-                        metrics.totalFramesTracked
-                    )
-                } else {
-                    "٠.٠% (سلس 60fps)"
-                }
-            )
-            6 -> Triple(
-                "٧. زمن معالجة الإطار (Frame Time)",
-                "متوسط ٣٦.٩ms • أسوأ ١٥٣٠ms",
-                if (metrics.totalFramesTracked > 0L) {
-                    String.format(
-                        Locale.US,
-                        "متوسط: %.1fms • أسوأ: %.1fms (%s)",
-                        metrics.avgFrameDurationMs,
-                        metrics.worstFrameDurationMs,
-                        metrics.worstFrameContext.ifBlank { "عام" }
-                    )
-                } else {
-                    "متوسط: ~٨.٥ms • أسوأ: ~١٤.٠ms"
-                }
-            )
-            7 -> Triple(
-                "٨. مخالفات StrictMode على Main Thread",
-                "١٩ مخالفة (قراءة قرص)",
-                if (metrics.strictModeViolationsCount == 0) "٠ مخالفة (كل القرص على IO)" else "${metrics.strictModeViolationsCount} مخالفة"
-            )
-            else -> Triple(
-                "٩. إعادة رسم صف الطفل عند ضغط كارت",
-                "٥٨ صف (كل القائمة)",
-                "١ صف فقط (إجمالي الجلسة: ${metrics.studentRowRecompositionCount})"
-            )
-        }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface, RectangleShape)
-                .padding(horizontal = 16.dp, vertical = 4.dp)
-        ) {
-            PerformanceMetricComparisonRow(
-                label = label,
-                beforeValue = beforeValue,
-                afterValue = afterValue
-            )
-        }
-    }
-
-    item(key = "perf_metrics_breakdowns_and_footer", contentType = "settings_section_footer") {
-        val metrics by KamPerformanceTracker.metrics.collectAsStateWithLifecycle()
-        var showRawLogs by rememberSaveable { mutableStateOf(false) }
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
-                .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (metrics.contextBreakdowns.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = "تفصيل الـ Jank حسب السياق (Context Breakdown):",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    metrics.contextBreakdowns.forEach { ctx ->
-                        Text(
-                            text = String.format(
-                                Locale.US,
-                                "• %s: %.1f%% بطيء (%d/%d) | متوسط %.1fms | أسوأ %.1fms",
-                                ctx.contextName,
-                                ctx.jankPercentage,
-                                ctx.jankFrames,
-                                ctx.totalFrames,
-                                ctx.avgFrameMs,
-                                ctx.worstFrameMs
-                            ),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-            }
-
-            if (metrics.strictModeViolationDetails.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = "تفصيل مخالفات StrictMode (${metrics.strictModeViolationsCount}):",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        fontWeight = FontWeight.Bold
-                    )
-                    metrics.strictModeViolationDetails.forEach { v ->
-                        Text(
-                            text = "• [${v.type}] ${v.fileAndLine} (${v.methodName}) — التكرار: ${v.count}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "السياق النشط: ${metrics.lastJankContext.ifBlank { KamPerformanceTracker.currentInteractionContext }}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                Row {
-                    TextButton(
-                        onClick = { KamPerformanceTracker.publishFrameMetricsToState() }
-                    ) {
-                        Text("تحديث الأرقام")
-                    }
-                    TextButton(
-                        onClick = { KamPerformanceTracker.resetAllMetrics() }
-                    ) {
-                        Text("تصفير الكل")
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "كاش الصور بالذاكرة (LruCache): ${metrics.avatarMemoryCacheHits} ضربة • تحميل كسول: ${metrics.avatarDiskOrLazyLoads}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(
-                    onClick = { showRawLogs = !showRawLogs },
-                    modifier = Modifier.testTag("toggle_perf_raw_logs_button")
-                ) {
-                    Text(if (showRawLogs) "إخفاء السجل" else "سجل Logcat")
-                }
-            }
-
-            if (showRawLogs && metrics.recentTimingLogs.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    metrics.recentTimingLogs.take(12).forEach { logLine ->
-                        Text(
-                            text = "• $logLine",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PerformanceMetricComparisonRow(
-    label: String,
-    beforeValue: String,
-    afterValue: String
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                shape = RoundedCornerShape(10.dp)
-            )
-            .padding(horizontal = 10.dp, vertical = 7.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1.3f)
-        )
-        Column(horizontalAlignment = Alignment.End, modifier = Modifier.weight(1f)) {
-            Text(
-                text = "قبل: $beforeValue",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error
-            )
-            Text(
-                text = "بعد: $afterValue",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-    }
-}
 
 
 

@@ -61,7 +61,25 @@ class KamRepositoryRuleTest : FirestoreEmulatorTestBase() {
         }
         assertEquals("مينا جرجس", studentsSeenByServant1.first { it.id == adminStudentId }.name)
 
-        // 3. Servant 1 adds a Block and Student 2, then moves Student 1 into the block and updates fractional position
+        // 3. Servant 1 attempts to create a Block -> rejected by Admin-only rule (PERMISSION_DENIED)
+        val servantCreateBlockAttempt = withTimeout(TIMEOUT_MS) {
+            repository.createBlock(
+                groupId = groupCode,
+                servantId = servant1Uid,
+                servantName = "مايكل",
+                colorHex = "#3B82F6",
+                sortOrder = 0,
+                memberUids = joinedGroup.memberUids
+            )
+        }
+        assertTrue(servantCreateBlockAttempt.isFailure)
+        assertEquals(
+            FirebaseFirestoreException.Code.PERMISSION_DENIED,
+            servantCreateBlockAttempt.exceptionOrNull()?.unwrapFirestoreException()?.code
+        )
+
+        // Admin creates the Block for Servant 1
+        signInTestUser("admin_${groupCode}@test.com")
         val blockId = withTimeout(TIMEOUT_MS) {
             repository.createBlock(
                 groupId = groupCode,
@@ -73,6 +91,8 @@ class KamRepositoryRuleTest : FirestoreEmulatorTestBase() {
             ).getOrThrow()
         }
 
+        // Servant 1 signs back in, adds Student 2, moves Student 1 into the block, and updates fractional position
+        signInTestUser("servant1_${groupCode}@test.com")
         val servantStudentId = withTimeout(TIMEOUT_MS) {
             repository.addStudent(
                 groupId = groupCode,
@@ -184,6 +204,66 @@ class KamRepositoryRuleTest : FirestoreEmulatorTestBase() {
             repository.deleteStudent(groupCode, adminStudentId)
         }
         assertTrue(deleteByAdminResult.isSuccess)
+    }
+
+    @Test
+    fun emailDirectoryAndChildNotes_enforcesExactGetAndAuthorOrAdminDelete() = runBlocking {
+        val groupCode = "KAME" + UUID.randomUUID().toString().replace("-", "").uppercase().take(5)
+        val repository = KamRepository(firestore)
+
+        val adminEmail = "admin_dir_${groupCode.lowercase()}@test.com"
+        val servantEmail = "servant_dir_${groupCode.lowercase()}@test.com"
+
+        val adminUid = signInTestUser(adminEmail)
+        val createdGroup = withTimeout(TIMEOUT_MS) {
+            repository.ensureUserProfile("الأمين دانيال", adminEmail).getOrThrow()
+            repository.createGroup("فصل الدليل والملاحظات", "الأمين دانيال", groupCode).getOrThrow()
+        }
+
+        val servantUid = signInTestUser(servantEmail)
+        val joinedGroup = withTimeout(TIMEOUT_MS) {
+            repository.ensureUserProfile("الخادم يوساب", servantEmail).getOrThrow()
+            repository.joinGroupByCode(createdGroup.fullDailyInviteCode, "الخادم يوساب").getOrThrow()
+        }
+
+        // Exact email lookup (`get`) succeeds for authenticated member
+        val lookedUp = withTimeout(TIMEOUT_MS) {
+            repository.lookupUserByEmail(adminEmail).getOrThrow()
+        }
+        assertNotNull(lookedUp)
+        assertEquals(adminUid, lookedUp?.uid)
+
+        // ChildNote creation by Servant succeeds and is observable
+        val sampleStudent = com.example.data.model.Student(
+            id = "stu_1",
+            groupId = groupCode,
+            name = "مارك مينا"
+        )
+        val createdNote = withTimeout(TIMEOUT_MS) {
+            repository.addChildNote(
+                groupId = groupCode,
+                student = sampleStudent,
+                type = com.example.data.model.ChildNoteType.VISITATION,
+                text = "تم افتقاده في المنزل",
+                status = com.example.data.model.VisitationStatus.VISITED.id,
+                authorName = "الخادم يوساب",
+                memberUids = joinedGroup.memberUids,
+                waitForServerAck = true
+            ).getOrThrow()
+        }
+        assertTrue(createdNote.id.isNotEmpty())
+
+        val observedNotes = withTimeout(FLOW_TIMEOUT_MS) {
+            repository.observeChildNotes(groupCode).first { list -> list.any { it.id == createdNote.id } }
+        }
+        assertEquals("تم افتقاده في المنزل", observedNotes.first { it.id == createdNote.id }.text)
+
+        // Admin can delete Servant's note
+        signInTestUser(adminEmail)
+        val adminDeleteNote = withTimeout(TIMEOUT_MS) {
+            repository.deleteChildNote(groupCode, createdNote.id, waitForServerAck = true)
+        }
+        assertTrue(adminDeleteNote.isSuccess)
     }
 
     /**

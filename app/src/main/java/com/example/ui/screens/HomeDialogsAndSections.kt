@@ -199,7 +199,7 @@ fun SearchResultsWithBlockOwnerSection(
                             KamSemanticColors.unassignedBlock
                         }
                         val servantOwnerLabel = if (ownerBlock != null) {
-                            "بلوك الخادم: ${ownerBlock.servantName}"
+                            "بلوك الخادم: ${state.resolvedServantName(ownerBlock.servantId, ownerBlock.servantName)}"
                         } else {
                             "بدون بلوك"
                         }

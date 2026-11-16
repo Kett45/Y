@@ -16,12 +16,12 @@ import com.example.data.model.ChatMessageType
 import com.example.data.model.DmChatMeta
 import com.example.data.model.Group
 import com.example.data.model.GroupChatMeta
+import com.example.data.model.NotificationCategory
 import com.example.data.model.PreparedChatMediaPayload
 import com.example.data.model.ServantBlock
 import com.example.data.model.ServantMemberProfile
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.KamRepository
-import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -51,8 +51,11 @@ data class GroupFellowServantItem(
 data class ChatUiState(
     val activeGroupId: String = "",
     val activeGroupName: String = "",
+    val activeGroupAvatarBase64: String = "",
+    val activeGroupAvatarHash: String = "",
     val groupMemberUids: List<String> = emptyList(),
     val fellowServants: List<GroupFellowServantItem> = emptyList(),
+    val servantAliases: Map<String, String> = emptyMap(),
     val groupChatMeta: GroupChatMeta? = null,
     val groupUnreadCount: Int = 0,
     val dmConversations: List<DmChatMeta> = emptyList(),
@@ -63,27 +66,33 @@ data class ChatUiState(
     val isLoadingOlderMessages: Boolean = false,
     val canLoadOlderMessages: Boolean = false,
     val isSendingMedia: Boolean = false,
-    val mediaErrorMessage: String? = null
+    val mediaErrorMessage: String? = null,
+    val isLookingUpEmail: Boolean = false,
+    val emailLookupError: String? = null,
+    val forwardStatusMessage: String? = null
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModel(
     private val currentUserId: String,
     private val initialDisplayName: String,
-    private val chatRepository: ChatRepository = ChatRepository(),
-    private val kamRepository: KamRepository = KamRepository(FirebaseFirestore.getInstance()),
+    private val chatRepository: ChatRepository,
+    private val kamRepository: KamRepository,
     val mediaStorage: ChatMediaStorageProvider = InlineFirestoreChatMediaStorageProvider
 ) : ViewModel() {
 
     private data class ClassroomChatContext(
         val groupId: String = "",
         val groupName: String = "",
+        val groupAvatarBase64: String = "",
+        val groupAvatarHash: String = "",
         val adminId: String = "",
         val adminName: String = "",
         val memberUids: List<String> = emptyList(),
         val memberProfiles: List<ServantMemberProfile> = emptyList(),
         val blocks: List<ServantBlock> = emptyList(),
-        val ownDisplayName: String = ""
+        val ownDisplayName: String = "",
+        val servantAliases: Map<String, String> = emptyMap()
     )
 
     private val _classroomContext = MutableStateFlow(
@@ -100,6 +109,9 @@ class ChatViewModel(
     private val _exhaustedOlderRooms = MutableStateFlow<Set<String>>(emptySet())
     private val _isSendingMedia = MutableStateFlow(false)
     private val _mediaErrorMessage = MutableStateFlow<String?>(null)
+    private val _isLookingUpEmail = MutableStateFlow(false)
+    private val _emailLookupError = MutableStateFlow<String?>(null)
+    private val _forwardStatusMessage = MutableStateFlow<String?>(null)
 
     private val lastSeenWriteMillis = AtomicLong(0L)
 
@@ -123,7 +135,7 @@ class ChatViewModel(
     }
 
     private val dmMetasFlow: Flow<List<DmChatMeta>> = activeGroupIdFlow.flatMapLatest { groupId ->
-        if (currentUserId.isBlank() || groupId.isBlank()) {
+        if (currentUserId.isBlank()) {
             flowOf(emptyList())
         } else {
             chatRepository.observeUserDmMetas(currentUserId, groupId)
@@ -138,6 +150,14 @@ class ChatViewModel(
         }
     }
 
+    private val lookupStatusFlow = combine(
+        _isLookingUpEmail,
+        _emailLookupError,
+        _forwardStatusMessage
+    ) { lookingUp, lookupErr, fwdMsg ->
+        Triple(lookingUp, lookupErr, fwdMsg)
+    }
+
     val chatState: StateFlow<ChatUiState> = combine(
         combine(_classroomContext, groupChatMetaFlow, dmMetasFlow, _localReadCounts) { ctx, groupMeta, dmMetas, readCounts ->
             arrayOf<Any?>(ctx, groupMeta, dmMetas, readCounts)
@@ -145,8 +165,8 @@ class ChatViewModel(
         combine(_activeRoom, latestRoomMessagesFlow, _olderMessagesByRoom, _optimisticMessagesByRoom, _optimisticDeletedIds) { room, latestMsgs, olderMap, optMap, deletedIds ->
             arrayOf<Any?>(room, latestMsgs, olderMap, optMap, deletedIds)
         },
-        combine(_isLoadingOlder, _exhaustedOlderRooms, _isSendingMedia, _mediaErrorMessage) { loadingOlder, exhaustedRooms, sendingMedia, mediaError ->
-            arrayOf<Any?>(loadingOlder, exhaustedRooms, sendingMedia, mediaError)
+        combine(_isLoadingOlder, _exhaustedOlderRooms, _isSendingMedia, _mediaErrorMessage, lookupStatusFlow) { loadingOlder, exhaustedRooms, sendingMedia, mediaError, lookupStatus ->
+            arrayOf<Any?>(loadingOlder, exhaustedRooms, sendingMedia, mediaError, lookupStatus)
         }
     ) { metaPart, roomPart, pagingPart ->
         @Suppress("UNCHECKED_CAST")
@@ -172,12 +192,13 @@ class ChatViewModel(
         val exhaustedRooms = pagingPart[1] as Set<String>
         val isSendingMedia = pagingPart[2] as Boolean
         val mediaErrorMessage = pagingPart[3] as String?
+        @Suppress("UNCHECKED_CAST")
+        val lookupStatus = pagingPart[4] as Triple<Boolean, String?, String?>
 
         val groupRoomKey = "group_${ctx.groupId}"
         val groupTotal = groupMeta?.totalMessagesCount ?: 0L
         val groupRead = readCounts[groupRoomKey] ?: 0L
 
-        // If the group room is currently open OR the last message was sent by currentUserId, treat as read
         val effectiveGroupUnread = if (
             ctx.groupId.isBlank() ||
             activeRoom?.roomKey == groupRoomKey ||
@@ -212,7 +233,6 @@ class ChatViewModel(
             dmUnreadSum += unread
         }
 
-        // Build fellow servants list from group.memberUids + memberProfiles + blocks (excluding currentUserId)
         val profileByUid = ctx.memberProfiles.associateBy { it.effectiveUid }
         val blockNameByUid = ctx.blocks
             .filter { it.servantId.isNotBlank() && it.servantName.isNotBlank() }
@@ -224,7 +244,9 @@ class ChatViewModel(
 
         val fellowServants = allCandidateUids.map { uid ->
             val memberProf = profileByUid[uid]
-            val name = memberProf?.displayName?.takeIf { it.isNotBlank() }
+            val alias = ctx.servantAliases[uid]?.takeIf { it.isNotBlank() }
+            val name = alias
+                ?: memberProf?.displayName?.takeIf { it.isNotBlank() }
                 ?: blockNameByUid[uid]?.takeIf { it.isNotBlank() }
                 ?: (if (uid == ctx.adminId && ctx.adminName.isNotBlank()) ctx.adminName else "خادم")
             GroupFellowServantItem(
@@ -234,7 +256,6 @@ class ChatViewModel(
             )
         }.sortedBy { it.displayName }
 
-        // Merge older + latest cloud + optimistic messages for the active room
         val mergedRoomMessages = if (activeRoom == null) {
             emptyList()
         } else {
@@ -265,8 +286,11 @@ class ChatViewModel(
         ChatUiState(
             activeGroupId = ctx.groupId,
             activeGroupName = ctx.groupName,
+            activeGroupAvatarBase64 = ctx.groupAvatarBase64,
+            activeGroupAvatarHash = ctx.groupAvatarHash,
             groupMemberUids = ctx.memberUids,
             fellowServants = fellowServants,
+            servantAliases = ctx.servantAliases,
             groupChatMeta = groupMeta,
             groupUnreadCount = effectiveGroupUnread,
             dmConversations = dmMetas,
@@ -277,7 +301,10 @@ class ChatViewModel(
             isLoadingOlderMessages = isLoadingOlder,
             canLoadOlderMessages = canLoadOlder,
             isSendingMedia = isSendingMedia,
-            mediaErrorMessage = mediaErrorMessage
+            mediaErrorMessage = mediaErrorMessage,
+            isLookingUpEmail = lookupStatus.first,
+            emailLookupError = lookupStatus.second,
+            forwardStatusMessage = lookupStatus.third
         )
     }
         .flowOn(Dispatchers.Default)
@@ -313,11 +340,20 @@ class ChatViewModel(
         _mediaErrorMessage.value = null
     }
 
+    fun clearEmailLookupError() {
+        _emailLookupError.value = null
+    }
+
+    fun clearForwardStatus() {
+        _forwardStatusMessage.value = null
+    }
+
     fun syncWithClassroomState(
         group: Group?,
         memberProfiles: List<ServantMemberProfile>,
         blocks: List<ServantBlock>,
-        ownDisplayName: String
+        ownDisplayName: String,
+        servantAliases: Map<String, String> = emptyMap()
     ) {
         val groupId = group?.inviteCode.orEmpty()
         val prevGroupId = _classroomContext.value.groupId
@@ -327,12 +363,15 @@ class ChatViewModel(
         _classroomContext.value = ClassroomChatContext(
             groupId = groupId,
             groupName = group?.name?.ifBlank { "فصل مدارس الأحد" } ?: "فصل مدارس الأحد",
+            groupAvatarBase64 = group?.avatarBase64.orEmpty(),
+            groupAvatarHash = group?.avatarHash.orEmpty(),
             adminId = group?.adminId.orEmpty(),
             adminName = group?.adminName.orEmpty(),
             memberUids = group?.memberUids.orEmpty(),
             memberProfiles = memberProfiles,
             blocks = blocks,
-            ownDisplayName = ownDisplayName.ifBlank { initialDisplayName.ifBlank { "خادم" } }
+            ownDisplayName = ownDisplayName.ifBlank { initialDisplayName.ifBlank { "خادم" } },
+            servantAliases = servantAliases
         )
     }
 
@@ -353,20 +392,59 @@ class ChatViewModel(
 
     fun openDirectChat(peerUid: String, peerName: String) {
         val ctx = _classroomContext.value
-        if (ctx.groupId.isBlank() || peerUid.isBlank() || peerUid == currentUserId) return
+        if (peerUid.isBlank() || peerUid == currentUserId) return
         _mediaErrorMessage.value = null
+        val resolvedName = ctx.servantAliases[peerUid]?.takeIf { it.isNotBlank() }
+            ?: peerName.ifBlank { "خادم" }
         val chatId = DmChatMeta.buildDmChatId(currentUserId, peerUid)
         val room = ActiveChatRoom.DirectRoom(
             chatId = chatId,
             groupId = ctx.groupId,
             peerUid = peerUid,
-            peerName = peerName.ifBlank { "خادم" }
+            peerName = resolvedName
         )
         _activeRoom.value = room
         val dmMeta = chatState.value.dmConversations.firstOrNull { it.effectiveChatId == chatId }
         val total = dmMeta?.totalMessagesCount ?: 0L
         if (total > 0L) {
             markRoomReadCountInternal(chatId, total)
+        }
+    }
+
+    fun openDirectChatByEmail(rawEmail: String, onOpened: () -> Unit = {}) {
+        val cleaned = rawEmail.trim()
+        if (cleaned.isBlank() || !cleaned.contains("@")) {
+            _emailLookupError.value = "يرجى إدخال بريد إلكتروني صحيح"
+            return
+        }
+        _emailLookupError.value = null
+        _isLookingUpEmail.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            kamRepository.lookupUserByEmail(cleaned)
+                .onSuccess { entry ->
+                    if (entry == null || entry.uid.isBlank()) {
+                        _emailLookupError.value = "لا يوجد حساب مسجل بهذا البريد حتى الآن. اطلب من الشخص فتح التطبيق أولاً."
+                    } else if (entry.uid == currentUserId) {
+                        _emailLookupError.value = "لا يمكنك فتح محادثة مع نفسك"
+                    } else {
+                        val ctx = _classroomContext.value
+                        val resolvedPeerName = ctx.servantAliases[entry.uid]?.takeIf { it.isNotBlank() }
+                            ?: entry.displayName.ifBlank { "خادم" }
+                        chatRepository.ensureDirectChatMeta(
+                            peerUid = entry.uid,
+                            senderName = ctx.ownDisplayName.ifBlank { "خادم" },
+                            peerName = resolvedPeerName,
+                            groupId = ctx.groupId,
+                            waitForServerAck = false
+                        )
+                        openDirectChat(entry.uid, resolvedPeerName)
+                        onOpened()
+                    }
+                }
+                .onFailure { err ->
+                    _emailLookupError.value = err.message ?: "تعذّر البحث بالبريد الإلكتروني"
+                }
+            _isLookingUpEmail.value = false
         }
     }
 
@@ -586,10 +664,13 @@ class ChatViewModel(
         }
     }
 
-    /**
-     * Helper ready for sending `type = "SYSTEM"` messages to the group chat room.
-     */
-    fun sendGroupSystemMessage(systemText: String) {
+    fun sendGroupSystemMessage(
+        systemText: String,
+        notificationCategory: NotificationCategory? = null,
+        childId: String = "",
+        childName: String = "",
+        childBlockName: String = ""
+    ) {
         val ctx = _classroomContext.value
         if (ctx.groupId.isBlank() || systemText.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
@@ -599,8 +680,35 @@ class ChatViewModel(
                 text = systemText.trim().take(ChatMessage.MAX_SYSTEM_TEXT_LENGTH),
                 memberUids = ctx.memberUids.ifEmpty { listOf(currentUserId) },
                 type = ChatMessageType.SYSTEM,
+                notificationCategory = notificationCategory?.id.orEmpty(),
+                childId = childId,
+                childName = childName,
+                childBlockName = childBlockName,
                 waitForServerAck = false
             )
+        }
+    }
+
+    fun forwardMessage(sourceMessage: ChatMessage, targetRoom: ActiveChatRoom) {
+        val ctx = _classroomContext.value
+        val senderName = ctx.ownDisplayName.ifBlank { "خادم" }
+        val members = ctx.memberUids.ifEmpty { listOf(currentUserId) }
+        viewModelScope.launch(Dispatchers.IO) {
+            chatRepository.forwardMessageToRoom(
+                sourceMessage = sourceMessage,
+                targetRoom = targetRoom,
+                senderName = senderName,
+                memberUids = members,
+                waitForServerAck = false
+            ).onSuccess { forwardedMsg ->
+                _optimisticMessagesByRoom.update { map ->
+                    val list = map[targetRoom.roomKey].orEmpty() + forwardedMsg
+                    map + (targetRoom.roomKey to list)
+                }
+                _forwardStatusMessage.value = "تم إعادة توجيه الرسالة"
+            }.onFailure { err ->
+                _forwardStatusMessage.value = err.message ?: "تعذّر إعادة التوجيه"
+            }
         }
     }
 
@@ -657,14 +765,18 @@ class ChatViewModel(
     }
 
     class Factory(
+        private val context: Context,
         private val currentUserId: String,
         private val initialDisplayName: String
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            val appCtx = context.applicationContext
             return ChatViewModel(
                 currentUserId = currentUserId,
-                initialDisplayName = initialDisplayName
+                initialDisplayName = initialDisplayName,
+                chatRepository = ChatRepository(appCtx),
+                kamRepository = KamRepository(appCtx)
             ) as T
         }
     }

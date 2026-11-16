@@ -59,6 +59,7 @@ data class UserProfile(
     val uiScaleMode: String = "AUTO",
     val uiScaleFactor: Double = 0.85,
     val showFloatingAddButton: Boolean = true,
+    val servantAliases: Map<String, String> = emptyMap(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -88,6 +89,8 @@ data class Group(
     val bannedServantEntries: List<String> = emptyList(),
     val dailyInviteToken: String = "",
     val inviteCodeUpdatedAtMillis: Long = 0L,
+    val avatarBase64: String = "",
+    val avatarHash: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -199,6 +202,7 @@ data class ServantMemberProfile(
     val uid: String = "",
     val groupId: String = "",
     val displayName: String = "",
+    val email: String = "",
     val phone: String = "",
     val primaryPhone: String = "",
     val secondaryPhone: String = "",
@@ -237,7 +241,7 @@ data class ServantMemberProfile(
         get() = primaryPhone.ifBlank { phone }.trim()
 
     val effectiveShowPhone: Boolean
-        get() = !phoneHidden && showPhone
+        get() = true
 
     val nonEmptyPhones: List<String>
         get() = listOf(effectivePrimaryPhone, secondaryPhone.trim())
@@ -352,6 +356,9 @@ data class Student(
     val avatarHash: String = "",
     val createdByUid: String = "",
     val memberUids: List<String> = emptyList(),
+    val lastMemorizedText: String = "",
+    val lastMemorizedBy: String = "",
+    val lastMemorizedAtMillis: Long = 0L,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -1173,3 +1180,113 @@ data class AttendanceRecord(
         }
     }
 }
+
+enum class NotificationCategory(
+    val id: String,
+    val arabicLabel: String,
+    val badgeEmoji: String,
+    val colorHex: Long
+) {
+    CARD_CONFLICT("CARD_CONFLICT", "تضارب كروت", "⚠️", 0xFFFF5722),
+    ABSENT_ISSUE("ABSENT_ISSUE", "غياب أو مشكلة", "🚨", 0xFFEF4444),
+    CHILD_COMMENT("CHILD_COMMENT", "تعليق عن طفل", "💬", 0xFF0EA5E9),
+    VISITATION("VISITATION", "افتقاد", "🏠", 0xFF8B5CF6),
+    MEMORIZATION("MEMORIZATION", "حفظ ومناهج", "📖", 0xFF14B8A6),
+    CARD_POSITIVE("CARD_POSITIVE", "إضافة كارت", "⭐", 0xFF10B981),
+    GENERAL_SYSTEM("GENERAL_SYSTEM", "إشعار عام", "🔔", 0xFF6366F1);
+
+    companion object {
+        fun fromId(raw: String?): NotificationCategory? {
+            if (raw.isNullOrBlank()) return null
+            return entries.firstOrNull { it.id.equals(raw.trim(), ignoreCase = true) }
+        }
+    }
+}
+
+enum class ChildNoteType(val id: String, val arabicLabel: String) {
+    COMMENT("COMMENT", "تعليق / ملاحظة"),
+    MEMORIZATION("MEMORIZATION", "ملاحظة حفظ"),
+    VISITATION("VISITATION", "افتقاد");
+
+    companion object {
+        fun fromId(raw: String?): ChildNoteType {
+            return entries.firstOrNull { it.id.equals(raw, ignoreCase = true) } ?: COMMENT
+        }
+    }
+}
+
+@Immutable
+@IgnoreExtraProperties
+data class ChildNote(
+    @DocumentId val id: String = "",
+    val groupId: String = "",
+    val studentId: String = "",
+    val studentName: String = "",
+    val type: String = ChildNoteType.COMMENT.id,
+    val text: String = "",
+    val status: String = "",
+    val authorUid: String = "",
+    val authorName: String = "",
+    val clientCreatedAtMillis: Long = 0L,
+    val memberUids: List<String> = emptyList(),
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val noteType: ChildNoteType
+        get() = ChildNoteType.fromId(type)
+
+    val effectiveTimeMillis: Long
+        get() = createdAt?.toDate()?.time ?: clientCreatedAtMillis
+
+    val effectiveTimestampMillis: Long
+        get() = effectiveTimeMillis
+
+    companion object {
+        const val MAX_TEXT_LENGTH = 500
+    }
+}
+
+enum class VisitationStatus(
+    val id: String,
+    val arabicLabel: String,
+    val shortLabel: String
+) {
+    VISITED("VISITED", "تم افتقاده", "تم الافتقاد"),
+    FOLLOWUP("FOLLOWUP", "محتاج متابعة", "متابعة");
+
+    companion object {
+        fun fromId(raw: String?): VisitationStatus {
+            return entries.firstOrNull { it.id.equals(raw, ignoreCase = true) } ?: VISITED
+        }
+    }
+}
+
+@Immutable
+@IgnoreExtraProperties
+data class EmailDirectoryEntry(
+    @DocumentId val id: String = "",
+    val email: String = "",
+    val uid: String = "",
+    val displayName: String = "",
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    companion object {
+        fun normalizeEmail(raw: String): String = raw.trim().lowercase(java.util.Locale.US)
+
+        /**
+         * Deterministic Firestore-safe document ID for an email address so exact lookup uses `get()` without `list`.
+         */
+        fun buildDocId(rawEmail: String): String {
+            val norm = normalizeEmail(rawEmail)
+            if (norm.isBlank()) return ""
+            return try {
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(norm.toByteArray(Charsets.UTF_8))
+                "em_" + digest.joinToString("") { "%02x".format(it) }.take(40)
+            } catch (_: Exception) {
+                "em_" + norm.replace(Regex("[^a-z0-9]"), "_").take(80)
+            }
+        }
+    }
+}
+

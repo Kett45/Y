@@ -101,18 +101,27 @@ import com.example.data.media.ChatMediaStorageProvider
 import com.example.data.media.ChatVoiceRecorderHelper
 import com.example.data.media.InlineFirestoreChatMediaStorageProvider
 import com.example.data.model.ActiveChatRoom
+import com.example.data.model.ArabicInitialsHelper
 import com.example.data.model.AttendanceStatus
 import com.example.data.model.ChatFormatHelper
 import com.example.data.model.ChatMessage
 import com.example.data.model.ChatMessageType
 import com.example.data.model.DmChatMeta
+import com.example.data.model.NotificationCategory
 import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
 import com.example.ui.components.ServantAvatarCircle
 import com.example.ui.components.StudentAvatarCircle
 import com.example.ui.components.StudentAvatarImageHelper
+import com.example.ui.components.StudentPhotoPickerDialog
+import com.example.ui.theme.KamSemanticColors
 import com.example.ui.viewmodel.ChatUiState
 import com.example.ui.viewmodel.GroupFellowServantItem
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -145,15 +154,30 @@ fun MessagesScreen(
     mediaStorage: ChatMediaStorageProvider = InlineFirestoreChatMediaStorageProvider,
     onOpenGroupChat: () -> Unit,
     onOpenDirectChat: (peerUid: String, peerName: String) -> Unit,
+    onOpenDirectChatByEmail: (String, () -> Unit) -> Unit = { _, _ -> },
+    onClearEmailLookupError: () -> Unit = {},
     onCloseActiveChat: () -> Unit,
     onSendMessage: (String) -> Unit,
     onSendImageMessage: (Uri, String) -> Unit = { _, _ -> },
     onSendAudioMessage: (File, Int) -> Unit = { _, _ -> },
     onClearMediaError: () -> Unit = {},
     onDeleteOwnMessage: (ChatMessage) -> Unit,
+    onForwardMessage: (ChatMessage, ActiveChatRoom) -> Unit = { _, _ -> },
+    onClearForwardStatus: () -> Unit = {},
+    onUpdateGroupAvatar: (String) -> Unit = {},
+    onSavePersonalAlias: (String, String) -> Unit = { _, _ -> },
     onLoadOlderMessages: () -> Unit
 ) {
+    val context = LocalContext.current
     var showNewDmPickerDialog by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(chatState.forwardStatusMessage) {
+        val msg = chatState.forwardStatusMessage
+        if (!msg.isNullOrBlank()) {
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            onClearForwardStatus()
+        }
+    }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         val activeRoom = chatState.activeRoom
@@ -171,6 +195,9 @@ fun MessagesScreen(
                 onSendAudioMessage = onSendAudioMessage,
                 onClearMediaError = onClearMediaError,
                 onDeleteOwnMessage = onDeleteOwnMessage,
+                onForwardMessage = onForwardMessage,
+                onUpdateGroupAvatar = onUpdateGroupAvatar,
+                onSavePersonalAlias = onSavePersonalAlias,
                 onLoadOlderMessages = onLoadOlderMessages
             )
         } else {
@@ -180,7 +207,11 @@ fun MessagesScreen(
                 currentUserId = currentUserId,
                 onOpenGroupChat = onOpenGroupChat,
                 onOpenDirectChat = onOpenDirectChat,
-                onOpenNewDmPicker = { showNewDmPickerDialog = true }
+                onOpenNewDmPicker = {
+                    onClearEmailLookupError()
+                    showNewDmPickerDialog = true
+                },
+                onUpdateGroupAvatar = onUpdateGroupAvatar
             )
         }
 
@@ -189,12 +220,102 @@ fun MessagesScreen(
                 groupName = chatState.activeGroupName,
                 fellowServants = chatState.fellowServants,
                 groupId = chatState.activeGroupId,
+                isLookingUpEmail = chatState.isLookingUpEmail,
+                emailLookupError = chatState.emailLookupError,
+                onLookupByEmail = { email ->
+                    onOpenDirectChatByEmail(email) {
+                        showNewDmPickerDialog = false
+                    }
+                },
+                onClearEmailError = onClearEmailLookupError,
                 onSelectServant = { item ->
                     showNewDmPickerDialog = false
                     onOpenDirectChat(item.uid, item.displayName)
                 },
-                onDismiss = { showNewDmPickerDialog = false }
+                onDismiss = {
+                    onClearEmailLookupError()
+                    showNewDmPickerDialog = false
+                }
             )
+        }
+    }
+}
+
+@Composable
+private fun GroupChatAvatarCircle(
+    groupId: String,
+    groupName: String,
+    avatarBase64: String,
+    avatarHash: String,
+    size: androidx.compose.ui.unit.Dp = 50.dp,
+    isEditable: Boolean = false,
+    onClick: (() -> Unit)? = null
+) {
+    val hasCustomAvatar = avatarBase64.isNotBlank() || avatarHash.isNotBlank() ||
+        StudentAvatarImageHelper.peekCachedLocalAlbumRaw("group_$groupId").isNotBlank()
+
+    val syntheticGroupStudent = remember(groupId, groupName, avatarBase64, avatarHash) {
+        Student(
+            id = "group_${groupId.ifBlank { "default" }}",
+            groupId = groupId,
+            name = groupName.ifBlank { "جروب الفصل" },
+            avatarInitials = ArabicInitialsHelper.extractInitials(groupName.ifBlank { "جروب الفصل" }),
+            avatarBase64 = avatarBase64,
+            hasAvatar = avatarBase64.isNotBlank() || avatarHash.isNotBlank(),
+            avatarHash = avatarHash
+        )
+    }
+
+    Box(contentAlignment = Alignment.BottomEnd) {
+        if (hasCustomAvatar) {
+            StudentAvatarCircle(
+                student = syntheticGroupStudent,
+                blockAccent = Color(0xFF0284C7),
+                size = size,
+                onClick = onClick ?: {},
+                testTag = "group_avatar_${groupId.ifBlank { "main" }}",
+                blockLabel = groupName.ifBlank { "جروب الفصل" }
+            )
+        } else {
+            Surface(
+                shape = CircleShape,
+                color = Color(0xFF0284C7),
+                modifier = Modifier
+                    .size(size)
+                    .clip(CircleShape)
+                    .then(
+                        if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+                    )
+                    .testTag("group_avatar_${groupId.ifBlank { "main" }}")
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Groups,
+                        contentDescription = groupName.ifBlank { "جروب الفصل" },
+                        tint = Color.White,
+                        modifier = Modifier.size(size * 0.54f)
+                    )
+                }
+            }
+        }
+
+        if (isEditable && onClick != null) {
+            Box(
+                modifier = Modifier
+                    .size(18.dp)
+                    .background(MaterialTheme.colorScheme.primary, CircleShape)
+                    .border(1.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                    .clickable(onClick = onClick)
+                    .testTag("edit_group_avatar_badge"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.CameraAlt,
+                    contentDescription = "تغيير صورة الجروب",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(11.dp)
+                )
+            }
         }
     }
 }
@@ -206,10 +327,37 @@ private fun ConversationsListView(
     currentUserId: String,
     onOpenGroupChat: () -> Unit,
     onOpenDirectChat: (peerUid: String, peerName: String) -> Unit,
-    onOpenNewDmPicker: () -> Unit
+    onOpenNewDmPicker: () -> Unit,
+    onUpdateGroupAvatar: (String) -> Unit
 ) {
     val profileByUid = remember(memberProfiles) {
         memberProfiles.associateBy { it.effectiveUid }
+    }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var isSearchExpanded by rememberSaveable { mutableStateOf(false) }
+    var showGroupPhotoDialog by rememberSaveable { mutableStateOf(false) }
+
+    val cleanSearch = searchQuery.trim()
+    val filteredDms = remember(chatState.dmConversations, cleanSearch, memberProfiles, chatState.servantAliases, currentUserId) {
+        if (cleanSearch.isBlank()) {
+            chatState.dmConversations
+        } else {
+            chatState.dmConversations.filter { dm ->
+                val pName = dm.peerDisplayName(currentUserId, memberProfiles, chatState.servantAliases)
+                pName.contains(cleanSearch, ignoreCase = true) ||
+                    dm.lastMessageText.contains(cleanSearch, ignoreCase = true)
+            }
+        }
+    }
+
+    val showPinnedGroup = remember(cleanSearch, chatState.activeGroupName, chatState.groupChatMeta) {
+        if (cleanSearch.isBlank()) {
+            true
+        } else {
+            chatState.activeGroupName.contains(cleanSearch, ignoreCase = true) ||
+                "جروب الفصل".contains(cleanSearch, ignoreCase = true) ||
+                (chatState.groupChatMeta?.lastMessageText?.contains(cleanSearch, ignoreCase = true) == true)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -217,65 +365,116 @@ private fun ConversationsListView(
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("conversations_list"),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Header
+            // Telegram-Style Top Header Bar
             item(key = "messages_header") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            text = "الرسائل",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            text = if (chatState.activeGroupName.isNotBlank()) {
-                                "تواصل خدام ${chatState.activeGroupName}"
-                            } else {
-                                "شات الفصل والمحادثات الخاصة"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "المحادثات",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (chatState.activeGroupName.isNotBlank()) {
+                                    "جروب ${chatState.activeGroupName} والمحادثات الخاصة"
+                                } else {
+                                    "جروب الخدام والمحادثات الخاصة"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    isSearchExpanded = !isSearchExpanded
+                                    if (!isSearchExpanded) searchQuery = ""
+                                },
+                                modifier = Modifier.testTag("toggle_conversations_search_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isSearchExpanded) Icons.Default.Close else Icons.Default.Search,
+                                    contentDescription = "بحث في المحادثات",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = onOpenNewDmPicker,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.testTag("start_private_chat_top_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "محادثة خاصة جديدة",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "محادثة جديدة",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
 
-                    OutlinedButton(
-                        onClick = onOpenNewDmPicker,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.testTag("start_private_chat_top_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "محادثة خاصة جديدة",
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "محادثة خاصة",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold
+                    AnimatedVisibility(visible = isSearchExpanded) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("ابحث في المحادثات أو الرسائل...") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null)
+                            },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "مسح البحث")
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("conversations_search_input")
                         )
                     }
                 }
             }
 
-            // 1. Pinned Group Chat Room ("جروب الفصل")
-            item(key = "pinned_group_chat_room") {
-                val totalServants = maxOf(chatState.groupMemberUids.size, chatState.fellowServants.size + 1).coerceAtLeast(1)
-                PinnedGroupChatCard(
-                    groupName = chatState.activeGroupName,
-                    servantsCount = totalServants,
-                    groupMeta = chatState.groupChatMeta,
-                    unreadCount = chatState.groupUnreadCount,
-                    currentUserId = currentUserId,
-                    onClick = onOpenGroupChat
-                )
+            // 1. Pinned Group Chat Room (Displays real Group Name + Circular Group Avatar)
+            if (showPinnedGroup) {
+                item(key = "pinned_group_chat_room") {
+                    val totalServants = maxOf(chatState.groupMemberUids.size, chatState.fellowServants.size + 1).coerceAtLeast(1)
+                    PinnedGroupChatCard(
+                        groupId = chatState.activeGroupId,
+                        groupName = chatState.activeGroupName,
+                        groupAvatarBase64 = chatState.activeGroupAvatarBase64,
+                        groupAvatarHash = chatState.activeGroupAvatarHash,
+                        servantsCount = totalServants,
+                        groupMeta = chatState.groupChatMeta,
+                        unreadCount = chatState.groupUnreadCount,
+                        currentUserId = currentUserId,
+                        servantAliases = chatState.servantAliases,
+                        onClick = onOpenGroupChat,
+                        onAvatarClick = { showGroupPhotoDialog = true }
+                    )
+                }
             }
 
             // 2. Private Conversations Section Header
@@ -283,7 +482,7 @@ private fun ConversationsListView(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = 2.dp),
+                        .padding(top = 6.dp, bottom = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -294,14 +493,14 @@ private fun ConversationsListView(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "${chatState.dmConversations.size} محادثة",
+                        text = "${filteredDms.size} محادثة",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
-            if (chatState.dmConversations.isEmpty()) {
+            if (filteredDms.isEmpty()) {
                 item(key = "empty_dms_placeholder") {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
@@ -317,13 +516,13 @@ private fun ConversationsListView(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Text(
-                                text = "لا توجد محادثات خاصة بعد",
+                                text = if (cleanSearch.isNotBlank()) "لا توجد محادثات مطابقة للبحث" else "لا توجد محادثات خاصة بعد",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "اضغط على زر (+) لبدء محادثة خاصة مع أي خادم مشترك معك في نفس الفصل.",
+                                text = "اضغط على زر (+) لاختيار خادم من الفصل أو كتابة حساب Gmail لبدء محادثة فورية.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
@@ -333,12 +532,12 @@ private fun ConversationsListView(
                 }
             } else {
                 items(
-                    items = chatState.dmConversations,
+                    items = filteredDms,
                     key = { dm -> "dm_row_${dm.effectiveChatId}" }
                 ) { dm ->
                     val peerUid = dm.peerUid(currentUserId)
                     val peerProfile = profileByUid[peerUid]
-                    val peerName = dm.peerDisplayName(currentUserId, memberProfiles)
+                    val peerName = dm.peerDisplayName(currentUserId, memberProfiles, chatState.servantAliases)
                     val unread = chatState.dmUnreadCounts[dm.effectiveChatId] ?: 0
                     DmConversationRowCard(
                         dm = dm,
@@ -356,8 +555,8 @@ private fun ConversationsListView(
 
         FloatingActionButton(
             onClick = onOpenNewDmPicker,
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
+            containerColor = Color(0xFF0284C7),
+            contentColor = Color.White,
             shape = CircleShape,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -370,17 +569,56 @@ private fun ConversationsListView(
             )
         }
     }
+
+    if (showGroupPhotoDialog) {
+        val syntheticGroupStudent = remember(
+            chatState.activeGroupId,
+            chatState.activeGroupName,
+            chatState.activeGroupAvatarBase64,
+            chatState.activeGroupAvatarHash
+        ) {
+            Student(
+                id = "group_${chatState.activeGroupId.ifBlank { "default" }}",
+                groupId = chatState.activeGroupId,
+                name = chatState.activeGroupName.ifBlank { "جروب الفصل" },
+                avatarInitials = ArabicInitialsHelper.extractInitials(chatState.activeGroupName.ifBlank { "جروب الفصل" }),
+                avatarBase64 = chatState.activeGroupAvatarBase64,
+                hasAvatar = chatState.activeGroupAvatarBase64.isNotBlank() || chatState.activeGroupAvatarHash.isNotBlank(),
+                avatarHash = chatState.activeGroupAvatarHash
+            )
+        }
+        StudentPhotoPickerDialog(
+            student = syntheticGroupStudent,
+            blockAccent = Color(0xFF0284C7),
+            isAdmin = true,
+            onDismiss = { showGroupPhotoDialog = false },
+            onSaveAvatarBase64 = { newBase64 ->
+                onUpdateGroupAvatar(newBase64)
+                showGroupPhotoDialog = false
+            }
+        )
+    }
 }
 
 @Composable
 private fun PinnedGroupChatCard(
+    groupId: String,
     groupName: String,
+    groupAvatarBase64: String,
+    groupAvatarHash: String,
     servantsCount: Int,
     groupMeta: com.example.data.model.GroupChatMeta?,
     unreadCount: Int,
     currentUserId: String,
-    onClick: () -> Unit
+    servantAliases: Map<String, String>,
+    onClick: () -> Unit,
+    onAvatarClick: () -> Unit
 ) {
+    val resolvedLastSender = remember(groupMeta?.lastMessageSenderUid, groupMeta?.lastMessageSenderName, servantAliases) {
+        val sUid = groupMeta?.lastMessageSenderUid.orEmpty()
+        servantAliases[sUid]?.takeIf { it.isNotBlank() }
+            ?: groupMeta?.lastMessageSenderName.orEmpty()
+    }
     val lastText = when {
         groupMeta == null || groupMeta.lastMessageText.isBlank() ->
             "غرفة خدام الفصل ($servantsCount خدام) — اضغط للفتح"
@@ -388,11 +626,12 @@ private fun PinnedGroupChatCard(
             groupMeta.lastMessageText
         groupMeta.lastMessageSenderUid == currentUserId ->
             "أنت: ${groupMeta.lastMessageText}"
-        groupMeta.lastMessageSenderName.isNotBlank() ->
-            "${groupMeta.lastMessageSenderName}: ${groupMeta.lastMessageText}"
+        resolvedLastSender.isNotBlank() ->
+            "$resolvedLastSender: ${groupMeta.lastMessageText}"
         else -> groupMeta.lastMessageText
     }
     val timeLabel = ChatFormatHelper.formatConversationListTime(groupMeta?.lastMessageAt)
+    val effectiveTitle = groupName.trim().ifBlank { "جروب الفصل" }
 
     Card(
         modifier = Modifier
@@ -401,31 +640,26 @@ private fun PinnedGroupChatCard(
             .testTag("pinned_group_chat_card"),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+            containerColor = Color(0xFF0284C7).copy(alpha = 0.14f)
         ),
-        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+        border = BorderStroke(1.5.dp, Color(0xFF0284C7).copy(alpha = 0.55f))
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 14.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(50.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.Groups,
-                        contentDescription = "جروب الفصل",
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
+            GroupChatAvatarCircle(
+                groupId = groupId,
+                groupName = effectiveTitle,
+                avatarBase64 = groupAvatarBase64,
+                avatarHash = groupAvatarHash,
+                size = 52.dp,
+                isEditable = true,
+                onClick = onAvatarClick
+            )
 
             Column(
                 modifier = Modifier.weight(1f),
@@ -442,7 +676,7 @@ private fun PinnedGroupChatCard(
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(
-                            text = "جروب الفصل",
+                            text = effectiveTitle,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -450,14 +684,14 @@ private fun PinnedGroupChatCard(
                             overflow = TextOverflow.Ellipsis
                         )
                         Surface(
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                            color = Color(0xFF0284C7).copy(alpha = 0.22f),
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Text(
-                                text = "مثبّت",
+                                text = "📌 جروب الخدام",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = Color(0xFF38BDF8),
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
@@ -467,21 +701,10 @@ private fun PinnedGroupChatCard(
                         Text(
                             text = timeLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (unreadCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (unreadCount > 0) Color(0xFF38BDF8) else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = if (unreadCount > 0) FontWeight.Bold else FontWeight.Normal
                         )
                     }
-                }
-
-                if (groupName.isNotBlank()) {
-                    Text(
-                        text = groupName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
                 }
 
                 Row(
@@ -521,9 +744,10 @@ private fun DmConversationRowCard(
     onClick: () -> Unit
 ) {
     val isActiveNow = ChatFormatHelper.isServantActiveNow(peerProfile?.lastSeenAt)
+    val isLastFromMe = dm.lastMessageSenderUid == currentUserId && dm.lastMessageText.isNotBlank()
     val lastText = when {
         dm.lastMessageText.isBlank() -> "اضغط لبدء المحادثة"
-        dm.lastMessageSenderUid == currentUserId -> "أنت: ${dm.lastMessageText}"
+        isLastFromMe -> "✓✓ أنت: ${dm.lastMessageText}"
         else -> dm.lastMessageText
     }
     val timeLabel = ChatFormatHelper.formatConversationListTime(dm.lastMessageAt ?: dm.updatedAt)
@@ -540,7 +764,7 @@ private fun DmConversationRowCard(
         border = BorderStroke(
             width = 1.dp,
             color = if (unreadCount > 0) {
-                MaterialTheme.colorScheme.error.copy(alpha = 0.55f)
+                Color(0xFF0284C7).copy(alpha = 0.65f)
             } else {
                 MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
             }
@@ -560,7 +784,7 @@ private fun DmConversationRowCard(
                     groupId = groupId,
                     memberProfile = peerProfile,
                     accentColor = senderDeterministicColor(peerUid),
-                    size = 48.dp,
+                    size = 50.dp,
                     isEditable = false
                 )
                 if (isActiveNow) {
@@ -570,6 +794,7 @@ private fun DmConversationRowCard(
                             .align(Alignment.BottomEnd)
                             .clip(CircleShape)
                             .background(Color(0xFF22C55E))
+                            .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape)
                     )
                 }
             }
@@ -596,7 +821,7 @@ private fun DmConversationRowCard(
                         Text(
                             text = timeLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (unreadCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (unreadCount > 0) Color(0xFF38BDF8) else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = if (unreadCount > 0) FontWeight.Bold else FontWeight.Normal
                         )
                     }
@@ -634,7 +859,7 @@ fun UnreadCountPill(
     val label = ChatFormatHelper.formatUnreadBadge(count)
     if (label.isBlank()) return
     Surface(
-        color = Color(0xFFEF4444),
+        color = Color(0xFF0284C7),
         contentColor = Color.White,
         shape = RoundedCornerShape(999.dp),
         modifier = modifier
@@ -656,9 +881,15 @@ private fun NewPrivateChatServantPickerDialog(
     groupName: String,
     fellowServants: List<GroupFellowServantItem>,
     groupId: String,
+    isLookingUpEmail: Boolean,
+    emailLookupError: String?,
+    onLookupByEmail: (String) -> Unit,
+    onClearEmailError: () -> Unit,
     onSelectServant: (GroupFellowServantItem) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var emailInput by rememberSaveable { mutableStateOf("") }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -669,13 +900,13 @@ private fun NewPrivateChatServantPickerDialog(
             ) {
                 Column {
                     Text(
-                        text = "بدء محادثة خاصة",
+                        text = "بدء محادثة خاصة جديدة",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold
                     )
                     if (groupName.isNotBlank()) {
                         Text(
-                            text = "خدام $groupName",
+                            text = "اختر من خدام $groupName أو ابحث بحساب Gmail",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -687,62 +918,154 @@ private fun NewPrivateChatServantPickerDialog(
             }
         },
         text = {
-            if (fellowServants.isEmpty()) {
-                Text(
-                    text = "لا يوجد خدام آخرون في نفس المجموعة حالياً. يمكنك دعوة خدام الفصل من تبويب المجموعة.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(320.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // 1. Direct Chat by Gmail Lookup Section
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    items(
-                        items = fellowServants,
-                        key = { it.uid }
-                    ) { servant ->
-                        val isActive = ChatFormatHelper.isServantActiveNow(servant.memberProfile?.lastSeenAt)
-                        val statusText = ChatFormatHelper.formatLastSeenStatus(servant.memberProfile?.lastSeenAt)
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Email,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "بدء محادثة عبر Gmail",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        OutlinedTextField(
+                            value = emailInput,
+                            onValueChange = {
+                                emailInput = it
+                                if (emailLookupError != null) onClearEmailError()
+                            },
+                            placeholder = { Text("example@gmail.com") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onSelectServant(servant) }
-                                .testTag("pick_dm_servant_${servant.uid}")
+                                .testTag("gmail_lookup_input")
+                        )
+                        if (!emailLookupError.isNullOrBlank()) {
+                            Text(
+                                text = emailLookupError,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Button(
+                            onClick = { onLookupByEmail(emailInput.trim()) },
+                            enabled = emailInput.trim().contains("@") && !isLookingUpEmail,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 44.dp)
+                                .testTag("gmail_lookup_button")
                         ) {
-                            Row(
+                            if (isLookingUpEmail) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("جاري البحث...")
+                            } else {
+                                Text("فتح محادثة بالبريد الإلكتروني", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider()
+
+                Text(
+                    text = "أعضاء وخدام المجموعة (${fellowServants.size})",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                if (fellowServants.isEmpty()) {
+                    Text(
+                        text = "لا يوجد خدام آخرون في نفس المجموعة حالياً. يمكنك البحث عبر Gmail أعلاه أو دعوة خدام من تبويب المجموعة.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 250.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(
+                            items = fellowServants,
+                            key = { it.uid }
+                        ) { servant ->
+                            val isActive = ChatFormatHelper.isServantActiveNow(servant.memberProfile?.lastSeenAt)
+                            val statusText = ChatFormatHelper.formatLastSeenStatus(servant.memberProfile?.lastSeenAt)
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    .clickable { onSelectServant(servant) }
+                                    .testTag("pick_dm_servant_${servant.uid}")
                             ) {
-                                ServantAvatarCircle(
-                                    servantUid = servant.uid,
-                                    servantName = servant.displayName,
-                                    groupId = groupId,
-                                    memberProfile = servant.memberProfile,
-                                    accentColor = senderDeterministicColor(servant.uid),
-                                    size = 42.dp,
-                                    isEditable = false
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = servant.displayName,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    ServantAvatarCircle(
+                                        servantUid = servant.uid,
+                                        servantName = servant.displayName,
+                                        groupId = groupId,
+                                        memberProfile = servant.memberProfile,
+                                        accentColor = senderDeterministicColor(servant.uid),
+                                        size = 42.dp,
+                                        isEditable = false
                                     )
-                                    Text(
-                                        text = statusText,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (isActive) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
-                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = servant.displayName,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        val emailSub = servant.memberProfile?.email.orEmpty()
+                                        Text(
+                                            text = if (emailSub.isNotBlank()) "$statusText • $emailSub" else statusText,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isActive) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -791,6 +1114,9 @@ private fun ChatConversationView(
     onSendAudioMessage: (File, Int) -> Unit,
     onClearMediaError: () -> Unit,
     onDeleteOwnMessage: (ChatMessage) -> Unit,
+    onForwardMessage: (ChatMessage, ActiveChatRoom) -> Unit,
+    onUpdateGroupAvatar: (String) -> Unit,
+    onSavePersonalAlias: (String, String) -> Unit,
     onLoadOlderMessages: () -> Unit
 ) {
     val context = LocalContext.current
@@ -803,6 +1129,9 @@ private fun ChatConversationView(
     var localVoiceError by remember { mutableStateOf<String?>(null) }
     var fullscreenImagePreview by remember { mutableStateOf<Pair<ChatMessage, Bitmap>?>(null) }
     var inspectedAttendanceStudent by remember { mutableStateOf<Pair<Student, String>?>(null) }
+    var messagePendingForward by remember { mutableStateOf<ChatMessage?>(null) }
+    var showGroupAvatarEditor by rememberSaveable { mutableStateOf(false) }
+    var showPeerAliasDialog by rememberSaveable { mutableStateOf(false) }
 
     DisposableEffect(room.roomKey) {
         onDispose {
@@ -933,9 +1262,9 @@ private fun ChatConversationView(
             .imePadding()
             .testTag("chat_conversation_screen")
     ) {
-        // Conversation Header Bar
+        // Telegram-Style Conversation Header Bar
         Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
             tonalElevation = 3.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -963,23 +1292,23 @@ private fun ChatConversationView(
 
                 when (room) {
                     is ActiveChatRoom.GroupRoom -> {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(42.dp)
+                        val effectiveGroupTitle = room.groupName.ifBlank { chatState.activeGroupName.ifBlank { "جروب الفصل" } }
+                        GroupChatAvatarCircle(
+                            groupId = room.groupId,
+                            groupName = effectiveGroupTitle,
+                            avatarBase64 = chatState.activeGroupAvatarBase64,
+                            avatarHash = chatState.activeGroupAvatarHash,
+                            size = 44.dp,
+                            isEditable = true,
+                            onClick = { showGroupAvatarEditor = true }
+                        )
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { showGroupAvatarEditor = true }
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Groups,
-                                    contentDescription = "جروب الفصل",
-                                    tint = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "جروب الفصل — ${room.groupName}",
+                                text = effectiveGroupTitle,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 maxLines = 1,
@@ -987,7 +1316,7 @@ private fun ChatConversationView(
                             )
                             val totalServants = maxOf(chatState.groupMemberUids.size, chatState.fellowServants.size + 1).coerceAtLeast(1)
                             Text(
-                                text = "غرفة خدام الفصل ($totalServants خدام)",
+                                text = "$totalServants خدام • اضغط لتغيير صورة الجروب",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -997,18 +1326,25 @@ private fun ChatConversationView(
                     is ActiveChatRoom.DirectRoom -> {
                         val isActiveNow = ChatFormatHelper.isServantActiveNow(peerProfile?.lastSeenAt)
                         val statusText = ChatFormatHelper.formatLastSeenStatus(peerProfile?.lastSeenAt)
+                        val resolvedPeerName = chatState.servantAliases[room.peerUid]?.takeIf { it.isNotBlank() }
+                            ?: peerProfile?.displayName?.takeIf { it.isNotBlank() }
+                            ?: room.peerName
                         ServantAvatarCircle(
                             servantUid = room.peerUid,
-                            servantName = room.peerName,
+                            servantName = resolvedPeerName,
                             groupId = room.groupId,
                             memberProfile = peerProfile,
                             accentColor = senderDeterministicColor(room.peerUid),
-                            size = 42.dp,
+                            size = 44.dp,
                             isEditable = false
                         )
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { showPeerAliasDialog = true }
+                        ) {
                             Text(
-                                text = room.peerName,
+                                text = resolvedPeerName,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 maxLines = 1,
@@ -1019,6 +1355,16 @@ private fun ChatConversationView(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (isActiveNow) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontWeight = if (isActiveNow) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                        IconButton(
+                            onClick = { showPeerAliasDialog = true },
+                            modifier = Modifier.testTag("edit_peer_alias_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "تسمية خاصة للخادم في جهازك",
+                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
                     }
@@ -1100,23 +1446,36 @@ private fun ChatConversationView(
                             }
                             is ChatTimelineRowItem.MessageRow -> {
                                 val msg = row.message
+                                val resolvedSender = chatState.servantAliases[msg.senderUid]?.takeIf { it.isNotBlank() }
+                                    ?: msg.senderName
                                 if (msg.messageType == ChatMessageType.SYSTEM) {
                                     SystemMessageCenteredPill(
                                         message = msg,
                                         students = students,
                                         onInspectStudentPhoto = { stu, note ->
                                             inspectedAttendanceStudent = stu to note
+                                        },
+                                        onRequestForward = {
+                                            if (!msg.isDeleted) {
+                                                messagePendingForward = msg
+                                            }
                                         }
                                     )
                                 } else {
-                                    WhatsAppStyleMessageBubble(
+                                    TelegramStyleMessageBubble(
                                         message = msg,
+                                        resolvedSenderName = resolvedSender,
                                         isOwnMessage = msg.senderUid == currentUserId,
                                         showSenderName = room is ActiveChatRoom.GroupRoom && msg.senderUid != currentUserId,
                                         mediaStorage = mediaStorage,
                                         audioPlayer = audioPlayer,
                                         onOpenFullscreenImage = { bmp ->
                                             fullscreenImagePreview = msg to bmp
+                                        },
+                                        onRequestForward = {
+                                            if (!msg.isDeleted) {
+                                                messagePendingForward = msg
+                                            }
                                         },
                                         onRequestDelete = {
                                             if (msg.senderUid == currentUserId && !msg.isDeleted) {
@@ -1463,6 +1822,285 @@ private fun ChatConversationView(
             }
         )
     }
+
+    // Forward Message Dialog
+    val targetForward = messagePendingForward
+    if (targetForward != null) {
+        ForwardMessagePickerDialog(
+            message = targetForward,
+            chatState = chatState,
+            memberProfiles = memberProfiles,
+            currentUserId = currentUserId,
+            onSelectTargetRoom = { targetRoom ->
+                onForwardMessage(targetForward, targetRoom)
+                messagePendingForward = null
+            },
+            onDismiss = { messagePendingForward = null }
+        )
+    }
+
+    // Group Avatar Picker inside Conversation View
+    if (showGroupAvatarEditor && room is ActiveChatRoom.GroupRoom) {
+        val syntheticGroupStudent = remember(
+            room.groupId,
+            room.groupName,
+            chatState.activeGroupAvatarBase64,
+            chatState.activeGroupAvatarHash
+        ) {
+            Student(
+                id = "group_${room.groupId.ifBlank { "default" }}",
+                groupId = room.groupId,
+                name = room.groupName.ifBlank { "جروب الفصل" },
+                avatarInitials = ArabicInitialsHelper.extractInitials(room.groupName.ifBlank { "جروب الفصل" }),
+                avatarBase64 = chatState.activeGroupAvatarBase64,
+                hasAvatar = chatState.activeGroupAvatarBase64.isNotBlank() || chatState.activeGroupAvatarHash.isNotBlank(),
+                avatarHash = chatState.activeGroupAvatarHash
+            )
+        }
+        StudentPhotoPickerDialog(
+            student = syntheticGroupStudent,
+            blockAccent = Color(0xFF0284C7),
+            isAdmin = true,
+            onDismiss = { showGroupAvatarEditor = false },
+            onSaveAvatarBase64 = { newBase64 ->
+                onUpdateGroupAvatar(newBase64)
+                showGroupAvatarEditor = false
+            }
+        )
+    }
+
+    // Personal Alias Editor Dialog for Direct Chat Peer
+    if (showPeerAliasDialog && room is ActiveChatRoom.DirectRoom) {
+        val currentAlias = chatState.servantAliases[room.peerUid].orEmpty()
+        var aliasDraft by rememberSaveable(room.peerUid, currentAlias) {
+            mutableStateOf(currentAlias.ifBlank { room.peerName })
+        }
+        AlertDialog(
+            onDismissRequest = { showPeerAliasDialog = false },
+            title = {
+                Text(
+                    text = "تغيير اسم الخادم (في جهازك فقط)",
+                    fontWeight = FontWeight.ExtraBold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "هذا الاسم يظهر في تليفونك أنت فقط في المحادثات والبلوكات دون أن يتغير عند باقي الخدام.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = aliasDraft,
+                        onValueChange = { aliasDraft = it.take(80) },
+                        label = { Text("اللقب / الاسم المفضل") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("peer_alias_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onSavePersonalAlias(room.peerUid, aliasDraft.trim())
+                        showPeerAliasDialog = false
+                    },
+                    modifier = Modifier.testTag("save_peer_alias_button")
+                ) {
+                    Text("حفظ اللقب")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (currentAlias.isNotBlank()) {
+                        TextButton(
+                            onClick = {
+                                onSavePersonalAlias(room.peerUid, "")
+                                showPeerAliasDialog = false
+                            }
+                        ) {
+                            Text("استعادة الأصلي")
+                        }
+                    }
+                    TextButton(onClick = { showPeerAliasDialog = false }) {
+                        Text("إلغاء")
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ForwardMessagePickerDialog(
+    message: ChatMessage,
+    chatState: ChatUiState,
+    memberProfiles: List<ServantMemberProfile>,
+    currentUserId: String,
+    onSelectTargetRoom: (ActiveChatRoom) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "إعادة توجيه الرسالة إلى...",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = message.displayText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+
+                // Target 1: Pinned Group Chat
+                if (chatState.activeGroupId.isNotBlank()) {
+                    val gTitle = chatState.activeGroupName.ifBlank { "جروب الفصل" }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFF0284C7).copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, Color(0xFF0284C7).copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onSelectTargetRoom(
+                                    ActiveChatRoom.GroupRoom(
+                                        groupId = chatState.activeGroupId,
+                                        groupName = gTitle
+                                    )
+                                )
+                            }
+                            .testTag("forward_target_group")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            GroupChatAvatarCircle(
+                                groupId = chatState.activeGroupId,
+                                groupName = gTitle,
+                                avatarBase64 = chatState.activeGroupAvatarBase64,
+                                avatarHash = chatState.activeGroupAvatarHash,
+                                size = 38.dp
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = gTitle,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                Text(
+                                    text = "جروب الخدام المشترك",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Target 2: Fellow Servants / Existing DMs
+                val candidateTargets = remember(chatState.fellowServants, chatState.dmConversations, memberProfiles, chatState.servantAliases, currentUserId) {
+                    val map = LinkedHashMap<String, Pair<String, ServantMemberProfile?>>()
+                    chatState.fellowServants.forEach { fs ->
+                        map[fs.uid] = fs.displayName to fs.memberProfile
+                    }
+                    chatState.dmConversations.forEach { dm ->
+                        val pUid = dm.peerUid(currentUserId)
+                        if (pUid.isNotBlank() && pUid != currentUserId && !map.containsKey(pUid)) {
+                            val prof = memberProfiles.firstOrNull { it.effectiveUid == pUid }
+                            val pName = dm.peerDisplayName(currentUserId, memberProfiles, chatState.servantAliases)
+                            map[pUid] = pName to prof
+                        }
+                    }
+                    map.entries.toList()
+                }
+
+                if (candidateTargets.isNotEmpty()) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 240.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(
+                            items = candidateTargets,
+                            key = { it.key }
+                        ) { (peerUid, nameAndProf) ->
+                            val (peerName, peerProf) = nameAndProf
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val chatId = DmChatMeta.buildDmChatId(currentUserId, peerUid)
+                                        onSelectTargetRoom(
+                                            ActiveChatRoom.DirectRoom(
+                                                chatId = chatId,
+                                                groupId = chatState.activeGroupId,
+                                                peerUid = peerUid,
+                                                peerName = peerName
+                                            )
+                                        )
+                                    }
+                                    .testTag("forward_target_dm_$peerUid")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    ServantAvatarCircle(
+                                        servantUid = peerUid,
+                                        servantName = peerName,
+                                        groupId = chatState.activeGroupId,
+                                        memberProfile = peerProf,
+                                        accentColor = senderDeterministicColor(peerUid),
+                                        size = 38.dp
+                                    )
+                                    Text(
+                                        text = peerName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إلغاء")
+            }
+        }
+    )
 }
 
 @Composable
@@ -1703,13 +2341,181 @@ private fun parseAttendanceSystemMessage(
 private fun SystemMessageCenteredPill(
     message: ChatMessage,
     students: List<Student>,
-    onInspectStudentPhoto: (Student, String) -> Unit
+    onInspectStudentPhoto: (Student, String) -> Unit,
+    onRequestForward: () -> Unit = {}
 ) {
     val parsedReport = remember(message.displayText, students) {
         if (message.isDeleted) null else parseAttendanceSystemMessage(message.displayText, students)
     }
 
     if (parsedReport == null) {
+        val category = remember(message.notificationCategory, message.displayText) {
+            NotificationCategory.fromId(message.notificationCategory) ?: when {
+                message.displayText.contains("مرتين") || message.displayText.contains("تضارب") -> NotificationCategory.CARD_CONFLICT
+                message.displayText.contains("غياب") || message.displayText.contains("غائب") || message.displayText.contains("مشكلة") -> NotificationCategory.ABSENT_ISSUE
+                message.displayText.contains("افتقاد") -> NotificationCategory.VISITATION
+                message.displayText.contains("تسميع") || message.displayText.contains("محفوظات") -> NotificationCategory.MEMORIZATION
+                message.displayText.contains("تعليق") -> NotificationCategory.CHILD_COMMENT
+                else -> NotificationCategory.GENERAL_SYSTEM
+            }
+        }
+        val accentColor = KamSemanticColors.notificationColor(category)
+        val hasChildMetadata = message.childId.isNotBlank() || message.childName.isNotBlank()
+
+        if (hasChildMetadata && !message.isDeleted) {
+            val matchedStudent = remember(message.childId, message.childName, students) {
+                students.firstOrNull { message.childId.isNotBlank() && it.id == message.childId }
+                    ?: students.firstOrNull { message.childName.isNotBlank() && it.name.trim() == message.childName.trim() }
+                    ?: Student(
+                        id = message.childId.ifBlank { "notify_${message.id}" },
+                        name = message.childName.ifBlank { "طفل" },
+                        avatarInitials = ArabicInitialsHelper.extractInitials(message.childName.ifBlank { "طفل" })
+                    )
+            }
+            val effectiveChildName = message.childName.ifBlank { matchedStudent.name.ifBlank { "طفل" } }
+            val effectiveBlockName = message.childBlockName.ifBlank { "بدون بلوك" }
+
+            // Rule 3 & Rule 4: Triple-Rule Child Notification Card with Fixed Category Color
+            Surface(
+                color = accentColor.copy(alpha = 0.14f),
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.5.dp, accentColor.copy(alpha = 0.65f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp, horizontal = 4.dp)
+                    .testTag("child_notification_card_${message.id}")
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (message.forwardedFromName.isNotBlank()) {
+                        Text(
+                            text = "↪ محوّلة من ${message.forwardedFromName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = accentColor,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Header Row: Category Chip + Block Badge + Forward Icon
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(
+                                color = accentColor,
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = "${category.badgeEmoji} ${category.arabicLabel}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                            Surface(
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f))
+                            ) {
+                                Text(
+                                    text = effectiveBlockName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        IconButton(
+                            onClick = onRequestForward,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .testTag("forward_message_${message.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "إعادة توجيه الإشعار",
+                                tint = accentColor,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                    }
+
+                    // Mandatory Triple Row: Child Avatar + Child Name + Details
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        StudentAvatarCircle(
+                            student = matchedStudent,
+                            blockAccent = accentColor,
+                            size = 50.dp,
+                            onClick = { onInspectStudentPhoto(matchedStudent, message.displayText) },
+                            testTag = "notify_child_avatar_${message.id}"
+                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text(
+                                text = if (matchedStudent.studentNumber > 0L) {
+                                    "#${matchedStudent.studentNumber} — $effectiveChildName"
+                                } else {
+                                    effectiveChildName
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = message.displayText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (message.senderName.isNotBlank()) {
+                            Text(
+                                text = "بواسطة: ${message.senderName}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.width(1.dp))
+                        }
+                        Text(
+                            text = ChatFormatHelper.formatMessageTime(message.effectiveTimeMillis),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            return
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1718,9 +2524,9 @@ private fun SystemMessageCenteredPill(
             contentAlignment = Alignment.Center
         ) {
             Surface(
-                color = Color(0xFFF59E0B).copy(alpha = 0.16f),
+                color = accentColor.copy(alpha = 0.16f),
                 shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f))
+                border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f))
             ) {
                 Text(
                     text = message.displayText,
@@ -2049,18 +2855,19 @@ private fun AttendanceReportedChildPhotoDialog(
 }
 
 @Composable
-private fun WhatsAppStyleMessageBubble(
+private fun TelegramStyleMessageBubble(
     message: ChatMessage,
+    resolvedSenderName: String,
     isOwnMessage: Boolean,
     showSenderName: Boolean,
     mediaStorage: ChatMediaStorageProvider,
     audioPlayer: ChatAudioPlayerController,
     onOpenFullscreenImage: (Bitmap) -> Unit,
+    onRequestForward: () -> Unit,
     onRequestDelete: () -> Unit
 ) {
-    val context = LocalContext.current
     val bubbleBgColor = if (isOwnMessage) {
-        Color(0xFF065F46) // WhatsApp dark emerald outgoing bubble
+        Color(0xFF0284C7) // Telegram vibrant ocean blue outgoing bubble
     } else {
         MaterialTheme.colorScheme.surfaceVariant
     }
@@ -2070,14 +2877,14 @@ private fun WhatsAppStyleMessageBubble(
         MaterialTheme.colorScheme.onSurface
     }
     val bubbleSubtleColor = if (isOwnMessage) {
-        Color.White.copy(alpha = 0.72f)
+        Color.White.copy(alpha = 0.78f)
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
     val bubbleShape = if (isOwnMessage) {
-        RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
+        RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 4.dp, bottomEnd = 18.dp)
     } else {
-        RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
+        RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 4.dp)
     }
 
     Row(
@@ -2090,18 +2897,29 @@ private fun WhatsAppStyleMessageBubble(
             color = bubbleBgColor,
             shape = bubbleShape,
             tonalElevation = 2.dp,
-            modifier = Modifier.widthIn(min = 96.dp, max = 310.dp)
+            modifier = Modifier.widthIn(min = 104.dp, max = 315.dp)
         ) {
             Column(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                if (showSenderName && message.senderName.isNotBlank()) {
+                if (showSenderName && resolvedSenderName.isNotBlank()) {
                     Text(
-                        text = message.senderName,
+                        text = resolvedSenderName,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.ExtraBold,
                         color = senderDeterministicColor(message.senderUid),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (message.forwardedFromName.isNotBlank() && !message.isDeleted) {
+                    Text(
+                        text = "↪ محوّلة من ${message.forwardedFromName}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isOwnMessage) Color(0xFFE0F2FE) else Color(0xFF38BDF8),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -2148,9 +2966,21 @@ private fun WhatsAppStyleMessageBubble(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.align(Alignment.End)
                 ) {
+                    if (!message.isDeleted) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "إعادة توجيه الرسالة",
+                            tint = bubbleSubtleColor,
+                            modifier = Modifier
+                                .size(15.dp)
+                                .clickable(onClick = onRequestForward)
+                                .testTag("forward_message_${message.id}")
+                        )
+                    }
+
                     if (isOwnMessage && !message.isDeleted) {
                         Icon(
                             imageVector = Icons.Default.Delete,
@@ -2171,7 +3001,7 @@ private fun WhatsAppStyleMessageBubble(
 
                     if (isOwnMessage) {
                         Text(
-                            text = if (message.isPendingOffline) "⏱" else "✓",
+                            text = if (message.isPendingOffline) "⏱" else "✓✓",
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                             color = bubbleSubtleColor
                         )

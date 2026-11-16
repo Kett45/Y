@@ -57,6 +57,10 @@
           "type": "boolean",
           "description": "Whether the floating (+ إضافة / استيراد) button is shown on the Home screen for this user."
         },
+        "servantAliases": {
+          "type": "object",
+          "description": "Optional per-user private nickname map keyed by fellow servant UID so each user sees custom names locally without affecting others."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -142,6 +146,14 @@
         "inviteCodeUpdatedAtMillis": {
           "type": "integer",
           "description": "Optional epoch milliseconds when dailyInviteToken was last generated/rotated (valid for 24 hours)."
+        },
+        "avatarBase64": {
+          "type": "string",
+          "description": "Optional group avatar thumbnail compressed JPEG/WebP Base64 (<= 50,000 chars)."
+        },
+        "avatarHash": {
+          "type": "string",
+          "description": "Optional fingerprint hash of the group avatar for local cache invalidation."
         },
         "createdAt": {
           "type": "string",
@@ -333,6 +345,18 @@
         "memberUids": {
           "type": "array",
           "description": "Optional bounded list of group member UIDs."
+        },
+        "lastMemorizedText": {
+          "type": "string",
+          "description": "Optional summary of the latest memorized lesson/verse/hymn recorded for this child."
+        },
+        "lastMemorizedBy": {
+          "type": "string",
+          "description": "Optional display name of the servant who recorded the latest memorization note."
+        },
+        "lastMemorizedAtMillis": {
+          "type": "integer",
+          "description": "Optional epoch millis when the latest memorization note was added."
         },
         "createdAt": {
           "type": "string",
@@ -696,6 +720,11 @@
         "isDeleted": { "type": "boolean" },
         "memberUids": { "type": "array" },
         "participants": { "type": "array" },
+        "notificationCategory": { "type": "string", "description": "Optional fixed category token for styled Group Chat notifications." },
+        "childId": { "type": "string", "description": "Optional referenced child ID for structured Group Chat child notifications." },
+        "childName": { "type": "string", "description": "Optional child name snapshot." },
+        "childBlockName": { "type": "string", "description": "Optional child block label snapshot." },
+        "forwardedFromName": { "type": "string", "description": "Optional original sender label when forwarded." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -733,12 +762,48 @@
         "createdAt",
         "memberUids"
       ]
+    },
+    "ChildNote": {
+      "title": "ChildNote",
+      "description": "Shared child comment, memorization progress note, or visitation log entry under /groups/{groupId}/childNotes/{noteId}.",
+      "type": "object",
+      "properties": {
+        "groupId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "type": { "type": "string", "enum": ["COMMENT", "MEMORIZATION", "VISITATION"] },
+        "text": { "type": "string" },
+        "status": { "type": "string" },
+        "authorUid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "clientCreatedAtMillis": { "type": "integer" },
+        "memberUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["groupId", "studentId", "studentName", "type", "text", "authorUid", "authorName", "createdAt", "updatedAt"]
+    },
+    "EmailDirectoryEntry": {
+      "title": "EmailDirectoryEntry",
+      "description": "Exact-match lookup directory mapping SHA-256 normalized Gmail key -> UID and display name for cross-group DM lookup.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "uid", "displayName", "updatedAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
       "description": "Owner-isolated user profile and personal theme, UI scale, card, and block visibility preferences."
+    },
+    "/emailDirectory/{emailKey}": {
+      "schema": { "$ref": "#/entities/EmailDirectoryEntry" },
+      "description": "Exact-get lookup mapping normalized Gmail SHA-256 key to Firebase UID and display name (list disabled)."
     },
     "/groups/{groupId}": {
       "schema": { "$ref": "#/entities/Group" },
@@ -750,7 +815,7 @@
     },
     "/groups/{groupId}/blocks/{blockId}": {
       "schema": { "$ref": "#/entities/ServantBlock" },
-      "description": "Shared colored servant blocks within a group."
+      "description": "Shared colored servant blocks within a group (Admin create/delete)."
     },
     "/groups/{groupId}/students/{studentId}": {
       "schema": { "$ref": "#/entities/Student" },
@@ -768,9 +833,13 @@
       "schema": { "$ref": "#/entities/MonthlyBalance" },
       "description": "Shared per-month points balance summaries per student."
     },
+    "/groups/{groupId}/childNotes/{noteId}": {
+      "schema": { "$ref": "#/entities/ChildNote" },
+      "description": "Shared child comments, memorization logs, and visitation notes."
+    },
     "/groups/{groupId}/members/{memberUid}": {
       "schema": { "$ref": "#/entities/ServantMemberProfile" },
-      "description": "Group-scoped servant public profiles (photo, name, WhatsApp/phone numbers, phoneHidden, lastSeenAt) readable only by group members and writable only by the servant who owns memberUid."
+      "description": "Group-scoped servant public profiles readable by group members and writable by the owner."
     },
     "/groups/{groupId}/chatMeta/{metaId}": {
       "schema": { "$ref": "#/entities/GroupChatMeta" },

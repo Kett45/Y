@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
@@ -103,6 +104,7 @@ import com.example.ui.screens.GroupOnboardingScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.MessagesScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.VisitationSwipeScreen
 import com.example.ui.theme.KamLiteTheme
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalAppAppearanceController
@@ -125,6 +127,7 @@ import kotlinx.coroutines.flow.callbackFlow
 
 enum class KamBottomTab(val routeId: String, val labelRes: Int) {
     HOME("home", R.string.tab_home),
+    VISITATION("visitation", R.string.tab_visitation),
     MESSAGES("messages", R.string.tab_messages),
     GROUP("group", R.string.tab_group),
     SETTINGS("settings", R.string.tab_settings)
@@ -306,7 +309,8 @@ fun AuthenticatedKamApp(
     val sharedKamRepository = remember(sessionKey) {
         val app = context.applicationContext as android.app.Application
         val databaseId = runCatching { app.getString(R.string.firestore_database_id) }.getOrDefault("")
-        val db = if (databaseId.isNotBlank()) FirebaseFirestore.getInstance(databaseId) else FirebaseFirestore.getInstance()
+        require(databaseId.isNotBlank()) { "firestore_database_id must not be blank" }
+        val db = FirebaseFirestore.getInstance(databaseId)
         KamRepository(db) to db
     }
 
@@ -322,7 +326,8 @@ fun AuthenticatedKamApp(
                     currentUserId = user.uid,
                     initialDisplayName = user.displayName ?: "خادم الفصل",
                     initialEmail = user.email ?: "${user.uid}@kamlite.app",
-                    isOnlineFlow = KamViewModel.observeNetworkConnectivity(app)
+                    isOnlineFlow = KamViewModel.observeNetworkConnectivity(app),
+                    chatRepository = ChatRepository(sharedKamRepository.second)
                 )
             }
         }
@@ -366,12 +371,13 @@ fun AuthenticatedKamApp(
             ?: "خادم الفصل"
     }
 
-    LaunchedEffect(state.group, state.memberProfiles, state.blocks, ownServantName) {
+    LaunchedEffect(state.group, state.memberProfiles, state.blocks, ownServantName, state.servantAliases) {
         chatViewModel.syncWithClassroomState(
             group = state.group,
             memberProfiles = state.memberProfiles,
             blocks = state.blocks,
-            ownDisplayName = ownServantName
+            ownDisplayName = ownServantName,
+            servantAliases = state.servantAliases
         )
         if (state.group != null) {
             chatViewModel.touchOwnLastSeenThrottled()
@@ -585,6 +591,19 @@ fun AuthenticatedKamApp(
                         modifier = Modifier.testTag("nav_tab_home")
                     )
                     NavigationBarItem(
+                        selected = currentTab == KamBottomTab.VISITATION,
+                        onClick = { selectTab(KamBottomTab.VISITATION) },
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = stringResource(R.string.tab_visitation)
+                            )
+                        },
+                        label = null,
+                        alwaysShowLabel = false,
+                        modifier = Modifier.testTag("nav_tab_visitation")
+                    )
+                    NavigationBarItem(
                         selected = currentTab == KamBottomTab.MESSAGES,
                         onClick = { selectTab(KamBottomTab.MESSAGES) },
                         icon = {
@@ -686,7 +705,20 @@ fun AuthenticatedKamApp(
                             onMergeDuplicateStudents = viewModel::mergeDuplicateStudentRecords,
                             onKeepBothDuplicateStudents = viewModel::keepBothDuplicateStudents,
                             onUpdateOwnServantAvatar = viewModel::updateOwnServantAvatar,
-                            onOpenPhoneWizard = onOpenPhoneWizardRemembered
+                            onOpenPhoneWizard = onOpenPhoneWizardRemembered,
+                            onAddMemorizationNote = viewModel::addMemorizationNote,
+                            onAddChildComment = viewModel::addChildComment,
+                            onDeleteChildNote = viewModel::deleteChildNote,
+                            onPostChildGroupNotification = viewModel::postChildGroupNotification
+                        )
+                    }
+
+                    KamBottomTab.VISITATION -> {
+                        VisitationSwipeScreen(
+                            state = tabState,
+                            currentUserId = user.uid,
+                            onRecordVisitation = viewModel::recordVisitationNote,
+                            onDeleteNote = viewModel::deleteChildNote
                         )
                     }
 
@@ -701,12 +733,18 @@ fun AuthenticatedKamApp(
                             mediaStorage = chatViewModel.mediaStorage,
                             onOpenGroupChat = chatViewModel::openGroupChat,
                             onOpenDirectChat = chatViewModel::openDirectChat,
+                            onOpenDirectChatByEmail = chatViewModel::openDirectChatByEmail,
+                            onClearEmailLookupError = chatViewModel::clearEmailLookupError,
                             onCloseActiveChat = chatViewModel::closeActiveChat,
                             onSendMessage = onSendTextMessageRemembered,
                             onSendImageMessage = onSendImageMessageRemembered,
                             onSendAudioMessage = onSendAudioMessageRemembered,
                             onClearMediaError = chatViewModel::clearMediaError,
                             onDeleteOwnMessage = chatViewModel::deleteOwnMessage,
+                            onForwardMessage = chatViewModel::forwardMessage,
+                            onClearForwardStatus = chatViewModel::clearForwardStatus,
+                            onUpdateGroupAvatar = viewModel::updateGroupAvatar,
+                            onSavePersonalAlias = viewModel::savePersonalServantAlias,
                             onLoadOlderMessages = chatViewModel::loadOlderMessages
                         )
                     }
@@ -725,7 +763,14 @@ fun AuthenticatedKamApp(
                             onToggleBlockHidden = viewModel::toggleBlockHidden,
                             onRefreshDailyInviteCode = viewModel::refreshDailyInviteCode,
                             onRemoveAndBanServant = viewModel::removeAndBanServantFromBlock,
-                            onUnbanServant = viewModel::unbanServant
+                            onUnbanServant = viewModel::unbanServant,
+                            currentUserId = user.uid,
+                            onCreateBlock = viewModel::createServantBlock,
+                            onUpdateBlock = viewModel::updateServantBlock,
+                            onDeleteBlockKeepingChildren = viewModel::deleteBlockKeepingChildren,
+                            onDeleteBlockWithChildren = viewModel::deleteBlockWithChildren,
+                            onSavePersonalServantAlias = viewModel::savePersonalServantAlias,
+                            onEditOwnDisplayName = viewModel::editOwnDisplayName
                         )
                     }
 
@@ -741,10 +786,11 @@ fun AuthenticatedKamApp(
                             onCreateNewGroup = viewModel::createGroup,
                             onToggleBlockHidden = viewModel::toggleBlockHidden,
                             currentUserId = user.uid,
+                            currentUserEmail = user.email.orEmpty(),
                             onOpenPhoneWizard = onOpenPhoneWizardRemembered,
                             onUpdateOwnServantAvatar = viewModel::updateOwnServantAvatar,
-                            onToggleHideOwnPhone = viewModel::toggleHideOwnPhoneNumber,
-                            onDeleteOwnPhones = viewModel::deleteOwnPhoneNumbers
+                            onDeleteOwnPhones = viewModel::deleteOwnPhoneNumbers,
+                            onEditOwnDisplayName = viewModel::editOwnDisplayName
                         )
                     }
                 }
@@ -784,8 +830,7 @@ fun AuthenticatedKamApp(
                         onSavePhones = { primary, secondary ->
                             viewModel.saveOwnPhoneNumbers(
                                 primaryPhone = primary,
-                                secondaryPhone = secondary,
-                                phoneHidden = state.ownPhoneHidden
+                                secondaryPhone = secondary
                             )
                         },
                         onSkipOrDismiss = {

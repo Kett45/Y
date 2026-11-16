@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.unit.LayoutDirection
 import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardType
+import com.example.data.model.NotificationCategory
 
 object KamSemanticColors {
     val onlineIndicator: Color = KamOnlineGreen
@@ -46,6 +47,26 @@ object KamSemanticColors {
             CardType.GOLD -> CardGoldColor
             CardType.MEMORIZATION -> CardMemorizationColor
             CardType.CONFESSION -> CardConfessionColor
+        }
+    }
+
+    val NotificationCardConflict: Color = NotifyConflictOrange
+    val NotificationAbsentIssue: Color = NotifyAbsentRed
+    val NotificationChildComment: Color = NotifyCommentSky
+    val NotificationVisitation: Color = NotifyVisitationPurple
+    val NotificationMemorization: Color = NotifyMemorizationTeal
+    val NotificationCardPositive: Color = NotifyCardGreen
+    val NotificationGeneralSystem: Color = NotifySystemIndigo
+
+    fun notificationColor(category: NotificationCategory): Color {
+        return when (category) {
+            NotificationCategory.CARD_CONFLICT -> NotifyConflictOrange
+            NotificationCategory.ABSENT_ISSUE -> NotifyAbsentRed
+            NotificationCategory.CHILD_COMMENT -> NotifyCommentSky
+            NotificationCategory.VISITATION -> NotifyVisitationPurple
+            NotificationCategory.MEMORIZATION -> NotifyMemorizationTeal
+            NotificationCategory.CARD_POSITIVE -> NotifyCardGreen
+            NotificationCategory.GENERAL_SYSTEM -> NotifySystemIndigo
         }
     }
 }
