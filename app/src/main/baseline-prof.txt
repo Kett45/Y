@@ -22,8 +22,13 @@ HSPLcom/example/ui/screens/HomeScreenKt;->**(**)**
 HSPLcom/example/ui/screens/HomeDialogsAndSectionsKt;->**(**)**
 HSPLcom/example/ui/screens/FullClassLeaderboardScreenKt;->**(**)**
 HSPLcom/example/ui/screens/GroupAndSettingsScreensKt;->**(**)**
+HSPLcom/example/ui/screens/MessagesScreenKt;->**(**)**
+HSPLcom/example/ui/viewmodel/ChatViewModel;->**(**)**
+HSPLcom/example/data/repository/ChatRepository;->**(**)**
 HSPLcom/example/ui/components/CompactCardButtonsRowKt;->**(**)**
 HSPLcom/example/ui/components/StudentAvatarComponentsKt;->**(**)**
 HSPLcom/example/ui/components/StudentAvatarImageHelper;->**(**)**
+HSPLcom/example/ui/components/ServantPhoneAndProfileComponentsKt;->**(**)**
+HSPLcom/example/ui/theme/AdaptiveUiScaleKt;->**(**)**
 HSPLcom/example/util/KamPerformanceTracker;->**(**)**
 Lcom/example/**

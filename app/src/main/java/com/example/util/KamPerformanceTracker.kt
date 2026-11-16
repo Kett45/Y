@@ -187,6 +187,31 @@ object KamPerformanceTracker {
     @Volatile
     var isStrictModeActive: Boolean = false
 
+    /**
+     * Live `Window.OnFrameMetricsAvailableListener` + detailed per-frame `Log.w`/lock logging is
+     * **OFF** by default in normal app usage so scrolling and tab transitions incur zero listener/thread overhead.
+     * Can be enabled on-demand from Settings or diagnostic runs.
+     */
+    @Volatile
+    var isLiveDiagnosticsEnabled: Boolean = false
+        private set
+
+    private val _liveDiagnosticsEnabled = MutableStateFlow(false)
+    val liveDiagnosticsEnabled: StateFlow<Boolean> = _liveDiagnosticsEnabled.asStateFlow()
+
+    @Volatile
+    var onDiagnosticsModeChanged: ((Boolean) -> Unit)? = null
+
+    fun setLiveDiagnosticsEnabled(enabled: Boolean) {
+        if (isLiveDiagnosticsEnabled == enabled) return
+        isLiveDiagnosticsEnabled = enabled
+        _liveDiagnosticsEnabled.value = enabled
+        onDiagnosticsModeChanged?.invoke(enabled)
+        if (!enabled) {
+            publishFrameMetricsToState()
+        }
+    }
+
     private val totalFrames = AtomicLong(0L)
     private val jankFrames = AtomicLong(0L)
     private val totalDurationNanosSum = AtomicLong(0L)
@@ -262,8 +287,8 @@ object KamPerformanceTracker {
         currentInteractionContext = contextLabel
         val wasScrolling = isHomeScrollingActive
         isHomeScrollingActive = scrolling
-        // When scrolling finishes, publish the accumulated scroll frame metrics once
-        if (wasScrolling && !scrolling) {
+        // When scrolling finishes, publish the accumulated scroll frame metrics ONLY if diagnostics are enabled
+        if (wasScrolling && !scrolling && isLiveDiagnosticsEnabled) {
             publishFrameMetricsToState()
         }
     }
@@ -363,13 +388,17 @@ object KamPerformanceTracker {
     }
 
     fun recordAvatarMemoryCacheHit() {
-        avatarMemHits.incrementAndGet()
+        if (isLiveDiagnosticsEnabled) {
+            avatarMemHits.incrementAndGet()
+        }
     }
 
     fun recordAvatarDiskOrLazyLoad(studentId: String, elapsedMs: Double) {
-        val roundedMs = (elapsedMs * 10.0).toInt() / 10.0
-        Log.d(TAG, "[AVATAR_LAZY_LOAD] Loaded avatar for $studentId on background thread in ${roundedMs}ms")
-        avatarLazyLoads.incrementAndGet()
+        if (isLiveDiagnosticsEnabled) {
+            val roundedMs = (elapsedMs * 10.0).toInt() / 10.0
+            Log.d(TAG, "[AVATAR_LAZY_LOAD] Loaded avatar for $studentId on background thread in ${roundedMs}ms")
+            avatarLazyLoads.incrementAndGet()
+        }
     }
 
     fun recordStudentRowRecomposition() {
@@ -405,17 +434,18 @@ object KamPerformanceTracker {
         if (isJank) {
             val jankNum = jankFrames.incrementAndGet()
             lastJankContextLabel = ctx
-            val roundedMs = (durationMs * 10.0).toInt() / 10.0
-            // Log severe jank (>32ms) or sampled jank to Logcat without flooding the ring buffer
-            if (durationMs >= 28.0 || jankNum <= 15L || jankNum % 10L == 0L) {
-                val msg = String.format(
-                    Locale.US,
-                    "إطار بطيء (Jank): %.1fms في [%s] (> 16.6ms)",
-                    roundedMs,
-                    ctx
-                )
-                Log.w(TAG, "[JANK_FRAME] $msg")
-                appendLogInternal(msg)
+            if (isLiveDiagnosticsEnabled) {
+                val roundedMs = (durationMs * 10.0).toInt() / 10.0
+                if (durationMs >= 28.0 || jankNum <= 15L || jankNum % 10L == 0L) {
+                    val msg = String.format(
+                        Locale.US,
+                        "إطار بطيء (Jank): %.1fms في [%s] (> 16.6ms)",
+                        roundedMs,
+                        ctx
+                    )
+                    Log.w(TAG, "[JANK_FRAME] $msg")
+                    appendLogInternal(msg)
+                }
             }
         }
 

@@ -53,8 +53,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
-      isShrinkResources = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
@@ -64,6 +64,15 @@ android {
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")
+    }
+    create("optimized") {
+      initWith(getByName("release"))
+      isDebuggable = false
+      isMinifyEnabled = true
+      isShrinkResources = true
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+      signingConfig = signingConfigs.getByName("debugConfig")
+      matchingFallbacks += listOf("release")
     }
   }
   compileOptions {
@@ -96,11 +105,11 @@ tasks.withType<Test> {
 
 val hasReleaseKeystore = file(System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks").exists()
 tasks.register<Copy>("syncReleaseApk") {
-  dependsOn(if (hasReleaseKeystore) "assembleRelease" else "assembleDebug")
+  dependsOn(if (hasReleaseKeystore) "assembleRelease" else "assembleOptimized")
   from(
     layout.buildDirectory.file(
       if (hasReleaseKeystore) "outputs/apk/release/app-release.apk"
-      else "outputs/apk/debug/app-debug.apk"
+      else "outputs/apk/optimized/app-optimized.apk"
     )
   )
   into(rootProject.layout.projectDirectory.dir("releases"))
@@ -217,6 +226,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.profileinstaller)
   // implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)

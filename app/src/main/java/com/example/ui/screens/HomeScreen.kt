@@ -70,18 +70,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -108,7 +109,6 @@ import com.example.ui.theme.LocalAppAppearanceController
 import androidx.compose.runtime.LaunchedEffect
 import com.example.ui.viewmodel.BulkImportLinePreview
 import com.example.ui.viewmodel.KamScreenState
-import com.example.ui.viewmodel.KamViewModel
 import com.example.util.KamPerformanceTracker
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -197,18 +197,25 @@ fun HomeScreen(
         return localCollapsedOverrides[blockId] ?: (blockId in state.collapsedBlockIds)
     }
 
-    fun toggleBlockCollapse(blockId: String) {
-        val next = !isBlockCollapsed(blockId)
-        localCollapsedOverrides[blockId] = next
-        onToggleBlockCollapsed(blockId)
-    }
-
-    val context = LocalContext.current
     val listState = rememberLazyListState()
     val elevatedRowSurfaceColor = KamSemanticColors.elevatedSurface
     val onOpenMoveSheetRemembered: (Student) -> Unit = remember { { studentForMoveSheet = it } }
     val onOpenDetailsSheetRemembered: (Student) -> Unit = remember { { studentForDetailsSheet = it } }
     val onOpenPhotoSheetRemembered: (Student) -> Unit = remember { { studentForPhotoDialog = it } }
+    val onOpenOwnServantPhotoRemembered: () -> Unit = remember { { showOwnServantPhotoDialog = true } }
+    val currentCollapsedBlockIds by rememberUpdatedState(state.collapsedBlockIds)
+    val currentOnToggleBlockCollapsed by rememberUpdatedState(onToggleBlockCollapsed)
+    val onToggleCollapseByIdRemembered: (String) -> Unit = remember {
+        { blockId ->
+            val next = !(localCollapsedOverrides[blockId] ?: (blockId in currentCollapsedBlockIds))
+            localCollapsedOverrides[blockId] = next
+            currentOnToggleBlockCollapsed(blockId)
+        }
+    }
+    val onToggleUnassignedCollapseRemembered: () -> Unit = remember {
+        { onToggleCollapseByIdRemembered("UNASSIGNED") }
+    }
+    val immutableBlocksHolder = remember(state.blocks) { ImmutableBlocksHolder(state.blocks) }
 
     LaunchedEffect(state.students.isNotEmpty()) {
         if (state.students.isNotEmpty()) {
@@ -216,18 +223,14 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(state.students.size) {
-        if (state.students.isNotEmpty()) {
-            StudentAvatarImageHelper.prewarmVisibleAvatarsAsync(context, state.students)
-        }
-    }
-
     LaunchedEffect(listState.isScrollInProgress) {
         StudentAvatarImageHelper.setScrollActive(listState.isScrollInProgress)
-        if (listState.isScrollInProgress) {
-            KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_HOME_SCROLL, scrolling = true)
-        } else {
-            KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_HOME_IDLE, scrolling = false)
+        if (KamPerformanceTracker.isLiveDiagnosticsEnabled) {
+            if (listState.isScrollInProgress) {
+                KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_HOME_SCROLL, scrolling = true)
+            } else {
+                KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_HOME_IDLE, scrolling = false)
+            }
         }
     }
 
@@ -370,8 +373,8 @@ fun HomeScreen(
                             isCollapsed = isCollapsed,
                             servantProfile = servantProfile,
                             isOwnBlock = isOwnBlock,
-                            onToggleCollapse = { toggleBlockCollapse(block.id) },
-                            onAvatarClick = if (isOwnBlock) ({ showOwnServantPhotoDialog = true }) else null,
+                            onToggleCollapseById = onToggleCollapseByIdRemembered,
+                            onAvatarClick = if (isOwnBlock) onOpenOwnServantPhotoRemembered else null,
                             onAddOwnPhoneClick = onOpenPhoneWizard
                         )
                     }
@@ -422,7 +425,7 @@ fun HomeScreen(
                     UnassignedStudentsHeaderCard(
                         studentsCount = unassignedStudents.size,
                         isCollapsed = isUnassignedCollapsed,
-                        onToggleCollapse = { toggleBlockCollapse("UNASSIGNED") }
+                        onToggleCollapse = onToggleUnassignedCollapseRemembered
                     )
                 }
 
@@ -442,7 +445,7 @@ fun HomeScreen(
                         ) { idx, student ->
                             UnassignedStudentLazyRow(
                                 student = student,
-                                blocks = state.blocks,
+                                blocksHolder = immutableBlocksHolder,
                                 rowSurfaceColor = elevatedRowSurfaceColor,
                                 enabledCardsMask = state.enabledCardsMask,
                                 monthPoints = state.pointsForStudentInDisplayedScope(student.id),
@@ -1071,10 +1074,14 @@ private fun ServantBlockHeaderCard(
     isCollapsed: Boolean,
     servantProfile: ServantMemberProfile? = null,
     isOwnBlock: Boolean = false,
-    onToggleCollapse: () -> Unit,
+    onToggleCollapseById: (String) -> Unit,
     onAvatarClick: (() -> Unit)? = null,
     onAddOwnPhoneClick: () -> Unit = {}
 ) {
+    val currentBlockId by rememberUpdatedState(block.id)
+    val currentOnToggle by rememberUpdatedState(onToggleCollapseById)
+    val onRowClick = remember { { currentOnToggle(currentBlockId) } }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1092,7 +1099,7 @@ private fun ServantBlockHeaderCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(blockAccent.copy(alpha = 0.22f))
-                    .clickable(onClick = onToggleCollapse)
+                    .clickable(onClick = onRowClick)
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -1309,11 +1316,14 @@ private fun HomeAutoShrinkingFab(
     }
 }
 
+@Immutable
+private data class ImmutableBlocksHolder(val blocks: List<ServantBlock>)
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UnassignedStudentLazyRow(
     student: Student,
-    blocks: List<ServantBlock>,
+    blocksHolder: ImmutableBlocksHolder,
     rowSurfaceColor: Color,
     enabledCardsMask: Int,
     monthPoints: Long,
@@ -1327,6 +1337,10 @@ private fun UnassignedStudentLazyRow(
     onOpenPhotoDialog: (Student) -> Unit,
     onReorder: (Student, Boolean) -> Unit
 ) {
+    val blocks = blocksHolder.blocks
+    val currentStudent by rememberUpdatedState(student)
+    val currentOnMoveToBlock by rememberUpdatedState(onMoveStudentToBlock)
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1370,11 +1384,12 @@ private fun UnassignedStudentLazyRow(
             ) {
                 blocks.forEach { blk ->
                     val blkColor = KamSemanticColors.blockColor(blk.colorHex)
+                    val chipClick = remember(blk.id) { { currentOnMoveToBlock(currentStudent, blk.id) } }
                     Box(
                         modifier = Modifier
                             .background(blkColor.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
                             .border(1.dp, blkColor, RoundedCornerShape(10.dp))
-                            .clickable { onMoveStudentToBlock(student, blk.id) }
+                            .clickable(onClick = chipClick)
                             .testTag("quick_move_${student.id}_to_${blk.id}")
                     ) {
                         Text(
@@ -1397,8 +1412,8 @@ private val PointsPillCornerShape = RoundedCornerShape(8.dp)
  * 100% Compose-skippable student row:
  * - Every parameter is `@Immutable` (`Student`, `Color`) or primitive (`Long`, `Int`, `Boolean`, `String`),
  *   so tapping a card for 1 student skips recomposing the other 57 student rows completely.
- * - Accepts hoisted `(Student, ...)` callbacks directly to avoid per-item `remember { ... }` allocations
- *   inside `LazyColumn.itemsIndexed`.
+ * - Uses `rememberUpdatedState` + `remember` for all 7 row/button actions so zero new closures are allocated
+ *   across recompositions or card taps.
  * - Avoids hardware `.clip(...)` layers on row containers, points pill, and icon buttons.
  */
 @Composable
@@ -1422,6 +1437,20 @@ private fun StudentFastCardRow(
     KamPerformanceTracker.recordStudentRowRecomposition()
     val colorScheme = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
+
+    val currentStudent by rememberUpdatedState(student)
+    val currentOnAwardCard by rememberUpdatedState(onAwardCard)
+    val currentOnOpenMoveDialog by rememberUpdatedState(onOpenMoveDialog)
+    val currentOnOpenDetailsDialog by rememberUpdatedState(onOpenDetailsDialog)
+    val currentOnOpenPhotoDialog by rememberUpdatedState(onOpenPhotoDialog)
+    val currentOnReorder by rememberUpdatedState(onReorder)
+
+    val clickPhotoDialog = remember { { currentOnOpenPhotoDialog(currentStudent) } }
+    val clickDetailsDialog = remember { { currentOnOpenDetailsDialog(currentStudent) } }
+    val clickMoveDialog = remember { { currentOnOpenMoveDialog(currentStudent) } }
+    val clickMoveUp = remember { { currentOnReorder(currentStudent, true) } }
+    val clickMoveDown = remember { { currentOnReorder(currentStudent, false) } }
+    val clickAwardCard = remember { { cardType: CardType -> currentOnAwardCard(currentStudent, cardType) } }
 
     val rowModifier = if (outerBorderColor != null) {
         Modifier
@@ -1451,7 +1480,7 @@ private fun StudentFastCardRow(
                 student = student,
                 blockAccent = blockAccent,
                 size = 38.dp,
-                onClick = { onOpenPhotoDialog(student) },
+                onClick = clickPhotoDialog,
                 testTag = "student_avatar_${student.id}",
                 blockLabel = blockLabel
             )
@@ -1467,7 +1496,7 @@ private fun StudentFastCardRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { onOpenDetailsDialog(student) }
+                    .clickable(onClick = clickDetailsDialog)
             )
         }
 
@@ -1515,7 +1544,7 @@ private fun StudentFastCardRow(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .size(32.dp)
-                            .clickable { onReorder(student, true) }
+                            .clickable(onClick = clickMoveUp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.ArrowUpward,
@@ -1530,7 +1559,7 @@ private fun StudentFastCardRow(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .size(32.dp)
-                            .clickable { onReorder(student, false) }
+                            .clickable(onClick = clickMoveDown)
                     ) {
                         Icon(
                             imageVector = Icons.Default.ArrowDownward,
@@ -1544,7 +1573,7 @@ private fun StudentFastCardRow(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(32.dp)
-                        .clickable { onOpenMoveDialog(student) }
+                        .clickable(onClick = clickMoveDialog)
                         .testTag("move_student_button_${student.id}")
                 ) {
                     Icon(
@@ -1558,7 +1587,7 @@ private fun StudentFastCardRow(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(32.dp)
-                        .clickable { onOpenDetailsDialog(student) }
+                        .clickable(onClick = clickDetailsDialog)
                         .testTag("details_student_button_${student.id}")
                 ) {
                     Icon(
@@ -1577,7 +1606,7 @@ private fun StudentFastCardRow(
             enabledCardsMask = enabledCardsMask,
             packedCardCounts = packedCardCounts,
             tagPrefix = "card_btn",
-            onCardClick = { cardType -> onAwardCard(student, cardType) }
+            onCardClick = clickAwardCard
         )
     }
 }

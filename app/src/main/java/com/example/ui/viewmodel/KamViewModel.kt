@@ -95,7 +95,8 @@ class PrecomputedClassroomIndices(
     val monthlyBalances: List<MonthlyBalance>,
     val selectedWeekKey: String?,
     val dismissedDuplicateNames: Set<String>,
-    val memberProfiles: List<ServantMemberProfile> = emptyList()
+    val memberProfiles: List<ServantMemberProfile> = emptyList(),
+    private val reusedDuplicatesByName: List<DuplicateStudentNameGroup>? = null
 ) {
     val membersByUid: Map<String, ServantMemberProfile> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         if (memberProfiles.isEmpty()) {
@@ -194,7 +195,9 @@ class PrecomputedClassroomIndices(
     }
 
     val duplicateStudentsByName: List<DuplicateStudentNameGroup> by lazy(LazyThreadSafetyMode.PUBLICATION) {
-        if (students.size < 2) {
+        if (reusedDuplicatesByName != null) {
+            reusedDuplicatesByName
+        } else if (students.size < 2) {
             emptyList()
         } else {
             students
@@ -272,18 +275,22 @@ class PrecomputedClassroomIndices(
             memberProfiles === members
     }
 
-    fun prewarmAll() {
+    fun prewarmHomeEssential() {
         membersByUid
         enabledCardTypes
         enabledCardsMask
         collapsedBlockIds
         hiddenBlockIds
-        displayedCardEvents
-        monthlyPointsByStudentId
         displayedPointsByStudentId
-        displayedCardCountsByStudentAndType
         packedCardCountsByStudentId
         duplicateStudentsByName
+    }
+
+    fun prewarmAll() {
+        prewarmHomeEssential()
+        displayedCardEvents
+        monthlyPointsByStudentId
+        displayedCardCountsByStudentAndType
         duplicateAlerts
     }
 }
@@ -639,6 +646,12 @@ class KamViewModel(
     private var lastEjectedBannedGroupId: String = ""
     private var hasSeededPrefsFromCloud: Boolean = false
     private var bannerJob: Job? = null
+    @Volatile
+    private var lastDupCheckStudents: List<Student>? = null
+    @Volatile
+    private var lastDupCheckDismissed: Set<String>? = null
+    @Volatile
+    private var cachedDuplicatesByName: List<DuplicateStudentNameGroup>? = null
 
     /**
      * Emits the first value immediately (0ms delay for cold start cache) and debounces
@@ -837,8 +850,9 @@ class KamViewModel(
         } else {
             repository.observeHasPendingWrites(groupId, currentUserId)
                 .onStart { emit(false) }
+                .distinctUntilChanged()
         }
-    }
+    }.distinctUntilChanged()
 
     private val allMonthlyBalancesFlow: Flow<List<MonthlyBalance>> = activeGroupIdFlow.flatMapLatest { groupId ->
         if (groupId.isBlank()) {
@@ -1157,6 +1171,15 @@ class KamViewModel(
         val effectiveAllBalances = if (activeGroup == null) emptyList() else allBalances
         val effectiveInvitations = if (activeGroup == null) emptyList() else invitations
 
+        val reusableDuplicates = if (
+            lastDupCheckStudents === effectiveStudents &&
+            lastDupCheckDismissed === dismissedDuplicates
+        ) {
+            cachedDuplicatesByName
+        } else {
+            null
+        }
+
         val precomputed = PrecomputedClassroomIndices(
             userProfile = profile,
             students = effectiveStudents,
@@ -1164,8 +1187,14 @@ class KamViewModel(
             monthlyBalances = effectiveBalances,
             selectedWeekKey = selectedWeek,
             dismissedDuplicateNames = dismissedDuplicates,
-            memberProfiles = effectiveMembers
-        ).also { it.prewarmAll() }
+            memberProfiles = effectiveMembers,
+            reusedDuplicatesByName = reusableDuplicates
+        ).also { indices ->
+            indices.prewarmHomeEssential()
+            lastDupCheckStudents = effectiveStudents
+            lastDupCheckDismissed = dismissedDuplicates
+            cachedDuplicatesByName = indices.duplicateStudentsByName
+        }
 
         val effectiveOwnPrimary = effectiveLocalPrefs?.primaryPhone?.takeIf { it.isNotBlank() }
             ?: ownCloudMember?.effectivePrimaryPhone.orEmpty()
@@ -1178,7 +1207,7 @@ class KamViewModel(
             effectiveOwnPrimary.isNotBlank() ||
             effectiveOwnSecondary.isNotBlank()
 
-        val builtState = KamScreenState(
+        KamScreenState(
             isLoading = profile == null,
             userProfile = profile,
             group = activeGroup,
@@ -1204,12 +1233,6 @@ class KamViewModel(
             ownAvatarHash = effectiveOwnAvatarHash,
             precomputedIndices = precomputed
         )
-        // Prewarm the default current-month selection leaderboard on Dispatchers.Default so opening the Leaderboard screen is 0ms
-        if (effectiveStudents.isNotEmpty() && selectedMonth.isNotBlank()) {
-            val clampedMonth = SaturdayCalendarHelper.clampMonthKey(selectedMonth)
-            builtState.computeClassLeaderboardEntriesForSelection(selectedMonthKeys = setOf(clampedMonth), selectedWeekKeys = emptySet())
-        }
-        builtState
     }.flowOn(Dispatchers.Default)
 
     val uiState: StateFlow<KamScreenState> = combine(

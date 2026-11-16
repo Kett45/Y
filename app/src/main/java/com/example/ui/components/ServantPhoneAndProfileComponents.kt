@@ -904,8 +904,7 @@ fun ServantAvatarCircle(
             Box(
                 modifier = Modifier
                     .size(18.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary)
+                    .background(MaterialTheme.colorScheme.primary, CircleShape)
                     .border(1.dp, MaterialTheme.colorScheme.surface, CircleShape)
                     .clickable(onClick = onClick),
                 contentAlignment = Alignment.Center

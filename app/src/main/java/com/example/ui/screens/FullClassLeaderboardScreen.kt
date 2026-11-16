@@ -108,7 +108,10 @@ fun FullClassLeaderboardScreen(
     onBackToHome: () -> Unit,
     onOpenStudentDetails: (Student) -> Unit
 ) {
-    BackHandler(onBack = onBackToHome)
+    BackHandler(
+        enabled = com.example.ui.theme.LocalIsTabActive.current,
+        onBack = onBackToHome
+    )
 
     LaunchedEffect(Unit) {
         KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_LEADERBOARD, scrolling = false)

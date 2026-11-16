@@ -521,7 +521,7 @@ fun SmartAttendanceScreen(
         }
     }
 
-    BackHandler {
+    BackHandler(enabled = com.example.ui.theme.LocalIsTabActive.current) {
         flushPendingSystemChatNow()
         onClose()
     }

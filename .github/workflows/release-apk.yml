@@ -34,8 +34,14 @@ jobs:
           FORCE_FULL: ${{ github.event.inputs.requires_full_install || 'true' }}
         run: |
           mkdir -p releases
-          if [ ! -f "releases/kAM-Lite.apk" ] && [ -f ".build-outputs/app-debug.apk" ]; then
-            cp -f .build-outputs/app-debug.apk releases/kAM-Lite.apk
+          if [ ! -f "releases/kAM-Lite.apk" ]; then
+            if [ -f ".build-outputs/app-optimized.apk" ]; then
+              cp -f .build-outputs/app-optimized.apk releases/kAM-Lite.apk
+            elif [ -f ".build-outputs/app-release.apk" ]; then
+              cp -f .build-outputs/app-release.apk releases/kAM-Lite.apk
+            elif [ -f ".build-outputs/app-debug.apk" ]; then
+              cp -f .build-outputs/app-debug.apk releases/kAM-Lite.apk
+            fi
           fi
 
           VERSION_NAME=$(grep -oP 'propVersionName\s*=.*"\K[^"]+' app/build.gradle.kts || echo "1.11")

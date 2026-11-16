@@ -187,6 +187,8 @@ val LocalUiScaleController = staticCompositionLocalOf<UiScaleController> {
     )
 }
 
+val LocalIsTabActive = androidx.compose.runtime.compositionLocalOf { true }
+
 @Composable
 fun rememberUiScaleController(): Pair<UiScaleController, Density> {
     val context = LocalContext.current
@@ -212,10 +214,13 @@ fun rememberUiScaleController(): Pair<UiScaleController, Density> {
         controller.applyLoadedPrefsFromDisk(diskMode, diskScale)
     }
 
-    val effectiveDensity = Density(
-        density = (systemDensity * controller.effectiveScaleFactor).coerceAtLeast(1f),
-        fontScale = 1.0f
-    )
+    val scaleFactor = controller.effectiveScaleFactor
+    val effectiveDensity = remember(systemDensity, scaleFactor) {
+        Density(
+            density = (systemDensity * scaleFactor).coerceAtLeast(1f),
+            fontScale = 1.0f
+        )
+    }
 
     return controller to effectiveDensity
 }

@@ -812,7 +812,7 @@ private fun ChatConversationView(
         }
     }
 
-    BackHandler {
+    BackHandler(enabled = com.example.ui.theme.LocalIsTabActive.current) {
         if (isRecordingAudio) {
             voiceRecorder.cancelRecording()
             isRecordingAudio = false

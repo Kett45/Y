@@ -2,9 +2,14 @@
 -keepattributes Signature,InnerClasses,EnclosingMethod,Annotation,*Annotation*
 -keepattributes SourceFile,LineNumberTable
 
-# Keep all application classes and data models to prevent reflection/serialization crashes
--keep class com.example.** { *; }
--keepclassmembers class com.example.** { *; }
+# Keep only serialized Firestore/JSON models, local cache DTOs, GitHub sync DTOs, and BuildConfig
+# so R8 can optimize, shrink, and inline Compose UI, ViewModel, and Repository hot paths.
+-keep class com.example.data.model.** { *; }
+-keepclassmembers class com.example.data.model.** { *; }
+-keep class com.example.data.cache.CachedClassroomSnapshot { *; }
+-keep class com.example.data.cache.LocalUserPreferences { *; }
+-keep class com.example.data.sync.** { *; }
+-keep class com.example.BuildConfig { *; }
 
 # Keep Firebase, Firestore, Auth, Protobuf, and gRPC reflection targets
 -keep @androidx.annotation.Keep class * { *; }

@@ -62,10 +62,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -104,8 +107,11 @@ import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.KamLiteTheme
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalAppAppearanceController
+import com.example.ui.theme.LocalIsTabActive
 import com.example.ui.theme.LocalUiScaleController
+import com.example.ui.viewmodel.ChatUiState
 import com.example.ui.viewmodel.ChatViewModel
+import com.example.ui.viewmodel.KamScreenState
 import com.example.ui.viewmodel.KamViewModel
 import com.example.util.KamPerformanceTracker
 import com.google.firebase.Firebase
@@ -159,7 +165,15 @@ class MainActivity : ComponentActivity() {
             }
         }
         window.decorView.post {
-            setupFrameMetricsListener()
+            KamPerformanceTracker.onDiagnosticsModeChanged = { enabled ->
+                runOnUiThread {
+                    if (enabled) setupFrameMetricsListener() else teardownFrameMetricsListener()
+                }
+            }
+            if (BuildConfig.ENABLE_STRICT_MODE_BY_DEFAULT || KamPerformanceTracker.isLiveDiagnosticsEnabled) {
+                KamPerformanceTracker.setLiveDiagnosticsEnabled(true)
+                setupFrameMetricsListener()
+            }
             runCatching {
                 Firebase.auth.currentUser?.uid?.let { uid ->
                     LocalClassroomCache.preloadForUser(applicationContext, uid)
@@ -193,6 +207,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun setupFrameMetricsListener() {
+        if (frameMetricsListener != null) return
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
             runCatching {
                 val thread = android.os.HandlerThread("KamFrameMetricsThread").apply { start() }
@@ -208,14 +223,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
+    private fun teardownFrameMetricsListener() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
             frameMetricsListener?.let { listener ->
                 runCatching { window.removeOnFrameMetricsAvailableListener(listener) }
             }
         }
+        frameMetricsListener = null
         runCatching { frameMetricsHandlerThread?.quitSafely() }
+        frameMetricsHandlerThread = null
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        KamPerformanceTracker.onDiagnosticsModeChanged = null
+        teardownFrameMetricsListener()
     }
 }
 
@@ -282,6 +304,13 @@ fun AuthenticatedKamApp(
     val appearanceController = LocalAppAppearanceController.current
     val uiScaleController = LocalUiScaleController.current
 
+    val sharedKamRepository = remember(sessionKey) {
+        val app = context.applicationContext as android.app.Application
+        val databaseId = runCatching { app.getString(R.string.firestore_database_id) }.getOrDefault("")
+        val db = if (databaseId.isNotBlank()) FirebaseFirestore.getInstance(databaseId) else FirebaseFirestore.getInstance()
+        KamRepository(db) to db
+    }
+
     val viewModel: KamViewModel = viewModel(
         key = sessionKey,
         factory = viewModelFactory {
@@ -289,11 +318,8 @@ fun AuthenticatedKamApp(
                 val app = checkNotNull(this[APPLICATION_KEY])
                 LocalClassroomCache.init(app)
                 LocalClassroomCache.preloadForUser(app, user.uid)
-                val databaseId = runCatching { app.getString(R.string.firestore_database_id) }.getOrDefault("")
-                val db = if (databaseId.isNotBlank()) FirebaseFirestore.getInstance(databaseId) else FirebaseFirestore.getInstance()
-                Log.d("Auth", "[Step 4] Creating fresh KamViewModel for sessionKey=$sessionKey, uid=${user.uid}")
                 KamViewModel(
-                    repository = KamRepository(db),
+                    repository = sharedKamRepository.first,
                     currentUserId = user.uid,
                     initialDisplayName = user.displayName ?: "خادم الفصل",
                     initialEmail = user.email ?: "${user.uid}@kamlite.app",
@@ -307,14 +333,11 @@ fun AuthenticatedKamApp(
         key = "chat_$sessionKey",
         factory = viewModelFactory {
             initializer {
-                val app = checkNotNull(this[APPLICATION_KEY])
-                val databaseId = runCatching { app.getString(R.string.firestore_database_id) }.getOrDefault("")
-                val db = if (databaseId.isNotBlank()) FirebaseFirestore.getInstance(databaseId) else FirebaseFirestore.getInstance()
                 ChatViewModel(
                     currentUserId = user.uid,
                     initialDisplayName = user.displayName ?: "خادم الفصل",
-                    chatRepository = ChatRepository(db),
-                    kamRepository = KamRepository(db)
+                    chatRepository = ChatRepository(sharedKamRepository.second),
+                    kamRepository = sharedKamRepository.first
                 )
             }
         }
@@ -325,6 +348,20 @@ fun AuthenticatedKamApp(
     val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
     val githubSyncState by GitHubSmartSyncEngine.syncState.collectAsStateWithLifecycle()
     var currentTab by rememberSaveable(sessionKey) { mutableStateOf(KamBottomTab.HOME) }
+    var visitedTabNames by rememberSaveable(sessionKey) {
+        mutableStateOf(listOf(KamBottomTab.HOME.name))
+    }
+    val selectTab: (KamBottomTab) -> Unit = remember(chatViewModel) {
+        { targetTab ->
+            if (targetTab != KamBottomTab.MESSAGES && chatViewModel.chatState.value.activeRoom != null) {
+                chatViewModel.closeActiveChat()
+            }
+            if (targetTab.name !in visitedTabNames) {
+                visitedTabNames = visitedTabNames + targetTab.name
+            }
+            currentTab = targetTab
+        }
+    }
 
     val ownServantName = remember(state.blocks, state.userProfile, user.uid, user.displayName) {
         state.blocks.firstOrNull { it.servantId == user.uid }?.servantName?.takeIf { it.isNotBlank() }
@@ -345,12 +382,7 @@ fun AuthenticatedKamApp(
         }
     }
 
-    val studentsAvatarSyncKey = remember(state.group?.inviteCode, state.students) {
-        val gid = state.group?.inviteCode.orEmpty()
-        val sig = state.students.joinToString("|") { "${it.id}:${it.effectiveAvatarKey}:${it.effectiveHasAvatar}" }
-        "$gid#$sig"
-    }
-    LaunchedEffect(studentsAvatarSyncKey) {
+    LaunchedEffect(state.group?.inviteCode, state.students) {
         if (state.group != null && state.students.isNotEmpty()) {
             StudentAvatarImageHelper.syncAllStudentPhotosToLocalDisk(context, state.students)
         }
@@ -458,14 +490,16 @@ fun AuthenticatedKamApp(
         }
     }
 
-    val handleSignOut: () -> Unit = {
-        viewModel.clearSession()
-        signOut(
-            context = context,
-            credentialManager = credentialManager,
-            onSignOutComplete = onSignedOut,
-            scope = authScope
-        )
+    val handleSignOut: () -> Unit = remember(viewModel, context, credentialManager, onSignedOut, authScope) {
+        {
+            viewModel.clearSession()
+            signOut(
+                context = context,
+                credentialManager = credentialManager,
+                onSignOutComplete = onSignedOut,
+                scope = authScope
+            )
+        }
     }
 
     if (state.isLoading) {
@@ -530,10 +564,7 @@ fun AuthenticatedKamApp(
                 ) {
                     NavigationBarItem(
                         selected = currentTab == KamBottomTab.HOME,
-                        onClick = {
-                            chatViewModel.closeActiveChat()
-                            currentTab = KamBottomTab.HOME
-                        },
+                        onClick = { selectTab(KamBottomTab.HOME) },
                         icon = {
                             Icon(
                                 imageVector = Icons.Default.Home,
@@ -552,7 +583,7 @@ fun AuthenticatedKamApp(
                     )
                     NavigationBarItem(
                         selected = currentTab == KamBottomTab.MESSAGES,
-                        onClick = { currentTab = KamBottomTab.MESSAGES },
+                        onClick = { selectTab(KamBottomTab.MESSAGES) },
                         icon = {
                             val badgeText = ChatFormatHelper.formatUnreadBadge(chatState.totalUnreadCount)
                             BadgedBox(
@@ -589,10 +620,7 @@ fun AuthenticatedKamApp(
                     )
                     NavigationBarItem(
                         selected = currentTab == KamBottomTab.GROUP,
-                        onClick = {
-                            chatViewModel.closeActiveChat()
-                            currentTab = KamBottomTab.GROUP
-                        },
+                        onClick = { selectTab(KamBottomTab.GROUP) },
                         icon = {
                             Icon(
                                 imageVector = Icons.Default.Groups,
@@ -611,10 +639,7 @@ fun AuthenticatedKamApp(
                     )
                     NavigationBarItem(
                         selected = currentTab == KamBottomTab.SETTINGS,
-                        onClick = {
-                            chatViewModel.closeActiveChat()
-                            currentTab = KamBottomTab.SETTINGS
-                        },
+                        onClick = { selectTab(KamBottomTab.SETTINGS) },
                         icon = {
                             Icon(
                                 imageVector = Icons.Default.Settings,
@@ -634,15 +659,32 @@ fun AuthenticatedKamApp(
                 }
             }
         ) { innerPadding ->
-            Box(
+            val onOpenPhoneWizardRemembered = remember { { showPhoneWizardModal = true } }
+            val onSendTextMessageRemembered: (String) -> Unit = remember(chatViewModel) {
+                { text -> chatViewModel.sendMessage(text) }
+            }
+            val onSendImageMessageRemembered: (android.net.Uri, String) -> Unit = remember(chatViewModel, context) {
+                { uri, caption -> chatViewModel.sendImageMessage(context, uri, caption) }
+            }
+            val onSendAudioMessageRemembered: (java.io.File, Int) -> Unit = remember(chatViewModel, context) {
+                { file, durationSec -> chatViewModel.sendAudioMessage(context, file, durationSec) }
+            }
+            val onSendInvitationRemembered: (String) -> Unit = remember(viewModel) {
+                { name -> viewModel.sendServantInvitation(name) }
+            }
+
+            RetainedBottomTabContainer(
+                activeTab = currentTab,
+                visitedTabNames = visitedTabNames,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-            ) {
-                when (currentTab) {
+            ) { tab, isTabActive ->
+                val tabState = rememberFrozenWhileInactive(state, isTabActive)
+                when (tab) {
                     KamBottomTab.HOME -> {
                         HomeScreen(
-                            state = state,
+                            state = tabState,
                             currentUserId = user.uid,
                             onSearchQueryChange = viewModel::updateSearchQuery,
                             onMonthOffset = viewModel::selectMonthOffset,
@@ -662,27 +704,24 @@ fun AuthenticatedKamApp(
                             onMergeDuplicateStudents = viewModel::mergeDuplicateStudentRecords,
                             onKeepBothDuplicateStudents = viewModel::keepBothDuplicateStudents,
                             onUpdateOwnServantAvatar = viewModel::updateOwnServantAvatar,
-                            onOpenPhoneWizard = { showPhoneWizardModal = true }
+                            onOpenPhoneWizard = onOpenPhoneWizardRemembered
                         )
                     }
 
                     KamBottomTab.MESSAGES -> {
+                        val tabChatState = rememberFrozenWhileInactive(chatState, isTabActive)
                         MessagesScreen(
-                            chatState = chatState,
-                            memberProfiles = state.memberProfiles,
-                            students = state.students,
+                            chatState = tabChatState,
+                            memberProfiles = tabState.memberProfiles,
+                            students = tabState.students,
                             currentUserId = user.uid,
                             mediaStorage = chatViewModel.mediaStorage,
                             onOpenGroupChat = chatViewModel::openGroupChat,
                             onOpenDirectChat = chatViewModel::openDirectChat,
                             onCloseActiveChat = chatViewModel::closeActiveChat,
-                            onSendMessage = { text -> chatViewModel.sendMessage(text) },
-                            onSendImageMessage = { uri, caption ->
-                                chatViewModel.sendImageMessage(context, uri, caption)
-                            },
-                            onSendAudioMessage = { file, durationSec ->
-                                chatViewModel.sendAudioMessage(context, file, durationSec)
-                            },
+                            onSendMessage = onSendTextMessageRemembered,
+                            onSendImageMessage = onSendImageMessageRemembered,
+                            onSendAudioMessage = onSendAudioMessageRemembered,
                             onClearMediaError = chatViewModel::clearMediaError,
                             onDeleteOwnMessage = chatViewModel::deleteOwnMessage,
                             onLoadOlderMessages = chatViewModel::loadOlderMessages
@@ -691,8 +730,8 @@ fun AuthenticatedKamApp(
 
                     KamBottomTab.GROUP -> {
                         GroupInvitationsScreen(
-                            state = state,
-                            onSendInvitation = { name -> viewModel.sendServantInvitation(name) },
+                            state = tabState,
+                            onSendInvitation = onSendInvitationRemembered,
                             onRespondToInvitation = viewModel::respondToInvitation,
                             onDeleteInvitation = viewModel::deleteInvitation,
                             onDeleteBlock = viewModel::deleteServantBlock,
@@ -709,7 +748,7 @@ fun AuthenticatedKamApp(
 
                     KamBottomTab.SETTINGS -> {
                         SettingsScreen(
-                            state = state,
+                            state = tabState,
                             onToggleCardVisibility = viewModel::toggleCardVisibility,
                             onSaveGroupPolicies = viewModel::updateGroupPolicySettings,
                             onLeaveGroup = viewModel::leaveCurrentGroup,
@@ -719,7 +758,7 @@ fun AuthenticatedKamApp(
                             onCreateNewGroup = viewModel::createGroup,
                             onToggleBlockHidden = viewModel::toggleBlockHidden,
                             currentUserId = user.uid,
-                            onOpenPhoneWizard = { showPhoneWizardModal = true },
+                            onOpenPhoneWizard = onOpenPhoneWizardRemembered,
                             onUpdateOwnServantAvatar = viewModel::updateOwnServantAvatar,
                             onToggleHideOwnPhone = viewModel::toggleHideOwnPhoneNumber,
                             onDeleteOwnPhones = viewModel::deleteOwnPhoneNumbers
@@ -779,6 +818,60 @@ fun AuthenticatedKamApp(
                         }
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun <T> rememberFrozenWhileInactive(value: T, isActive: Boolean): T {
+    var latest by remember { mutableStateOf(value) }
+    if (isActive) {
+        latest = value
+    }
+    return latest
+}
+
+@Composable
+private fun RetainedBottomTabContainer(
+    activeTab: KamBottomTab,
+    visitedTabNames: List<String>,
+    modifier: Modifier = Modifier,
+    content: @Composable (tab: KamBottomTab, isActive: Boolean) -> Unit
+) {
+    val stateHolder = rememberSaveableStateHolder()
+    val renderedTabs = remember(visitedTabNames, activeTab) {
+        KamBottomTab.entries.filter { it == activeTab || it.name in visitedTabNames }
+    }
+    Layout(
+        modifier = modifier,
+        content = {
+            renderedTabs.forEach { tab ->
+                val isSelected = tab == activeTab
+                key(tab) {
+                    CompositionLocalProvider(LocalIsTabActive provides isSelected) {
+                        stateHolder.SaveableStateProvider(tab.routeId) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                content(tab, isSelected)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ) { measurables, constraints ->
+        val childConstraints = constraints.copy(minWidth = 0, minHeight = 0)
+        val activeIndex = renderedTabs.indexOf(activeTab)
+        val placeables = ArrayList<Placeable>(measurables.size)
+        for (i in measurables.indices) {
+            placeables.add(
+                if (i == activeIndex) measurables[i].measure(constraints)
+                else measurables[i].measure(childConstraints)
+            )
+        }
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            if (activeIndex in placeables.indices) {
+                placeables[activeIndex].placeRelative(0, 0)
             }
         }
     }

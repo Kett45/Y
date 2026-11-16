@@ -366,6 +366,66 @@ class ExampleRobolectricTest {
         assertEquals(true, savedWeeklyLimit)
         assertEquals(true, uiState.group?.enforceWeeklyCardLimit)
     }
+
+    @Test
+    fun `performance optimizations default diagnostics off reuse duplicate check and preclip circular bitmap`() {
+        val prevMode = KamPerformanceTracker.isLiveDiagnosticsEnabled
+        try {
+            KamPerformanceTracker.setLiveDiagnosticsEnabled(false)
+            assertEquals(false, KamPerformanceTracker.isLiveDiagnosticsEnabled)
+
+            var hookCalls = 0
+            KamPerformanceTracker.onDiagnosticsModeChanged = { hookCalls++ }
+            KamPerformanceTracker.setLiveDiagnosticsEnabled(true)
+            assertEquals(true, KamPerformanceTracker.isLiveDiagnosticsEnabled)
+            assertEquals(1, hookCalls)
+            KamPerformanceTracker.setLiveDiagnosticsEnabled(false)
+            assertEquals(2, hookCalls)
+        } finally {
+            KamPerformanceTracker.onDiagnosticsModeChanged = null
+            KamPerformanceTracker.setLiveDiagnosticsEnabled(prevMode)
+        }
+
+        // Verify PrecomputedClassroomIndices reuses duplicate map when students and dismissed set are unchanged
+        val sampleStudents = listOf(
+            Student(id = "s1", name = "مينا سامح", studentNumber = 1L),
+            Student(id = "s2", name = "مينا سامح", studentNumber = 2L)
+        )
+        val first = PrecomputedClassroomIndices(
+            userProfile = null,
+            students = sampleStudents,
+            cardEvents = emptyList(),
+            monthlyBalances = emptyList(),
+            selectedWeekKey = "2026-11-W2",
+            dismissedDuplicateNames = emptySet()
+        )
+        val reused = PrecomputedClassroomIndices(
+            userProfile = null,
+            students = sampleStudents,
+            cardEvents = emptyList(),
+            monthlyBalances = emptyList(),
+            selectedWeekKey = "2026-11-W2",
+            dismissedDuplicateNames = emptySet(),
+            reusedDuplicatesByName = first.duplicateStudentsByName
+        )
+        assertTrue(first.duplicateStudentsByName === reused.duplicateStudentsByName)
+        assertEquals(1, reused.duplicateStudentsByName.size)
+
+        // Verify renderFramedAvatarToBitmap(clipCircle = true) produces 100x100 ARGB_8888 bitmap with alpha channel
+        val src = android.graphics.Bitmap.createBitmap(40, 40, android.graphics.Bitmap.Config.ARGB_8888).apply {
+            eraseColor(android.graphics.Color.RED)
+        }
+        val circular = StudentAvatarImageHelper.renderFramedAvatarToBitmap(
+            source = src,
+            frame = com.example.ui.components.PhotoCropFrame(),
+            targetSizePx = 100,
+            clipCircle = true
+        )
+        assertEquals(100, circular.width)
+        assertEquals(100, circular.height)
+        assertEquals(android.graphics.Bitmap.Config.ARGB_8888, circular.config)
+        assertTrue(circular.hasAlpha())
+    }
 }
 
 

@@ -13,6 +13,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -102,6 +105,12 @@ fun CompactCardButtonsRow(
     val isCompactMobile = LocalUiScaleController.current.isCompactMobile
     val buttonSize = if (isCompactMobile) 38.dp else 42.dp
     val typographyStyle = MaterialTheme.typography.titleMedium
+    val currentOnCardClick by rememberUpdatedState(onCardClick)
+    val cachedClicks = remember {
+        Array(AllCardTypesArray.size) { idx ->
+            { currentOnCardClick(AllCardTypesArray[idx]) }
+        }
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -132,7 +141,7 @@ fun CompactCardButtonsRow(
                         border = if (isAwarded) PreallocatedAwardedBorder[ordinal] else PreallocatedUnawardedBorder[ordinal],
                         shape = CardButtonCornerShape
                     )
-                    .clickable { onCardClick(card) }
+                    .clickable(onClick = cachedClicks[ordinal])
                     .semantics {
                         contentDescription = if (isAwarded) {
                             "${card.arabicTitle} مسجل $displayedPoints نقطة"

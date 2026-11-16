@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.example.ui.theme.KamAppThemePreset
 import com.example.ui.theme.KamLauncherIconPreset
 import com.example.ui.theme.LocalAppAppearanceController
+import com.example.ui.theme.LocalIsTabActive
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.theme.UiScaleMode
 import kotlin.math.roundToInt
@@ -160,7 +161,7 @@ fun AppearanceFullScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    BackHandler {
+    BackHandler(enabled = LocalIsTabActive.current) {
         onBack()
     }
 

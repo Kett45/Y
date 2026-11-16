@@ -896,10 +896,11 @@ fun SettingsScreen(
     var showOwnServantPhotoDialog by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_SETTINGS, scrolling = false)
-        // Wait until the tab transition settles before publishing snapshot metrics to avoid an entry jank spike
-        delay(360L)
-        KamPerformanceTracker.publishFrameMetricsToState()
+        if (KamPerformanceTracker.isLiveDiagnosticsEnabled) {
+            KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_SETTINGS, scrolling = false)
+            delay(360L)
+            KamPerformanceTracker.publishFrameMetricsToState()
+        }
     }
 
     if (showAppearanceFullScreen) {
@@ -1869,6 +1870,7 @@ private fun PolicySwitchRow(
 @Composable
 private fun PerformanceMetricsSettingsCard() {
     val metrics by KamPerformanceTracker.metrics.collectAsStateWithLifecycle()
+    val diagnosticsEnabled by KamPerformanceTracker.liveDiagnosticsEnabled.collectAsStateWithLifecycle()
     var showRawLogs by rememberSaveable { mutableStateOf(false) }
 
     Card(
@@ -1901,12 +1903,17 @@ private fun PerformanceMetricsSettingsCard() {
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "مقارنة الأرقام الحقيقية (قبل وبعد التحسين) مباشرة على الموبايل",
+                            text = "مراقبة الإطارات مغلقة افتراضياً لتسريع الواجهة (فعّلها للتشخيص فقط)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
+                androidx.compose.material3.Switch(
+                    checked = diagnosticsEnabled,
+                    onCheckedChange = { KamPerformanceTracker.setLiveDiagnosticsEnabled(it) },
+                    modifier = Modifier.testTag("switch_live_perf_diagnostics")
+                )
             }
 
             HorizontalDivider()
