@@ -4,10 +4,10 @@
   "minDeltaBaseVersionCode": 9,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
-  "commitSha": "8df1f2c33f84",
+  "commitSha": "00c63ee0bfef",
   "apkSha256": "8df1f2c33f846727959b84bf951668dfcafa18c3bfe0ed22bf17cfb51a3cfbd9",
-  "updatedAt": "2026-11-16T12:13:22Z",
+  "updatedAt": "2026-11-16T13:23:41Z",
   "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.12 (نجم الكارت v1.12): تسريع جذري للسحب في الرئيسية والإعدادات + تفكيك بطاقات الإعدادات + عزل مزامنة الصور عن التمرير + تحسين الأداء والذاكرة (8df1f2c33f84)."
+  "releaseNotesArabic": "الإصدار 1.12 (نجم الكارت v1.12): تحديث تلقائي مباشر بأحدث بصمة للـ APK (00c63ee0bfef)."
 }
