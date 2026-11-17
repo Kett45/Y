@@ -146,7 +146,6 @@ fun HomeScreen(
     val localCollapsedOverrides = remember { mutableStateMapOf<String, Boolean>() }
     var showLeaderboardExpanded by rememberSaveable { mutableStateOf(false) }
     var showSmartAttendanceScreen by rememberSaveable { mutableStateOf(false) }
-    var showSwipeCardsScreen by rememberSaveable { mutableStateOf(false) }
 
     // Dialog & Sheet states
     var showAddMenuDialog by rememberSaveable { mutableStateOf(false) }
@@ -255,36 +254,12 @@ fun HomeScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (showSwipeCardsScreen) {
-            SwipeCardsScreen(
+        if (showSmartAttendanceScreen) {
+            SmartAttendanceScreen(
                 state = state,
                 currentUserId = currentUserId,
                 onAwardCard = onAwardCard,
                 onUndoCardEvent = onUndoCardEvent,
-                onAddQuickComment = onAddChildComment,
-                onPostNotReceivedReport = { stu, card, note ->
-                    val noteSuffix = if (note.isNotBlank()) " — $note" else ""
-                    onPostChildGroupNotification(
-                        stu,
-                        NotificationCategory.ABSENT_ISSUE,
-                        "لم يستلم كارت ${card.arabicTitle}$noteSuffix"
-                    )
-                },
-                onOpenMemorizationSheet = onOpenMemorizationRemembered,
-                onOpenSmartAttendance = {
-                    showSwipeCardsScreen = false
-                    showSmartAttendanceScreen = true
-                },
-                onClose = { showSwipeCardsScreen = false }
-            )
-        } else if (showSmartAttendanceScreen) {
-            SmartAttendanceScreen(
-                state = state,
-                currentUserId = currentUserId,
-                onOpenSwipeCards = {
-                    showSmartAttendanceScreen = false
-                    showSwipeCardsScreen = true
-                },
                 onClose = { showSmartAttendanceScreen = false }
             )
         } else if (showLeaderboardExpanded) {
@@ -302,14 +277,13 @@ fun HomeScreen(
                 contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 92.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // 1. Compact Header Bar + Attendance & Swipe Cards quick launchers
+                // 1. Compact Header Bar
                 item(key = "header_controls", contentType = "header_controls") {
                     HomeTopControlCard(
                         state = state,
                         showLeaderboardExpanded = showLeaderboardExpanded,
                         onToggleLeaderboard = { showLeaderboardExpanded = true },
                         onOpenSmartAttendance = { showSmartAttendanceScreen = true },
-                        onOpenSwipeCards = { showSwipeCardsScreen = true },
                         onMonthOffset = onMonthOffset,
                         onOpenMonthWeekTree = { showMonthWeekTreeDialog = true },
                         onOpenDuplicateAlerts = { showDuplicateAlertsDialog = true },
@@ -790,7 +764,6 @@ private fun HomeTopControlCard(
     showLeaderboardExpanded: Boolean,
     onToggleLeaderboard: () -> Unit,
     onOpenSmartAttendance: () -> Unit = {},
-    onOpenSwipeCards: () -> Unit = {},
     @Suppress("UNUSED_PARAMETER") onMonthOffset: (Int) -> Unit,
     onOpenMonthWeekTree: () -> Unit,
     onOpenDuplicateAlerts: () -> Unit,
@@ -882,11 +855,38 @@ private fun HomeTopControlCard(
 
                 Spacer(modifier = Modifier.width(4.dp))
 
-                // 3. Action Icons Row: Search Icon + Leaderboard Icon + Bell + Badge
+                // 3. Action Icons Row: Compact Swipe Button ("📋 سحب") + Search Icon + Leaderboard Icon + Bell + Badge
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    // Compact Swipe Launcher ("📋 سحب") — opens unified Smart Swipe page (Attendance + All Cards)
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .height(38.dp)
+                            .clickable(onClick = onOpenSmartAttendance)
+                            .testTag("open_smart_attendance_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Text(text = "📋", style = MaterialTheme.typography.labelMedium)
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = "سحب",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontWeight = FontWeight.ExtraBold,
+                                maxLines = 1
+                            )
+                        }
+                    }
+
                     // Search Icon Button (expands/collapses search bar)
                     Surface(
                         shape = RoundedCornerShape(10.dp),
@@ -993,67 +993,6 @@ private fun HomeTopControlCard(
                                 }
                             }
                         }
-                    }
-                }
-            }
-
-            // Quick Mode Launchers: Smart Attendance ("تحضير") + Swipe Cards ("كروت")
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 40.dp)
-                        .clickable(onClick = onOpenSmartAttendance)
-                        .testTag("open_smart_attendance_button")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(text = "📋", style = MaterialTheme.typography.labelMedium)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "التحضير بالسحب",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f)),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 40.dp)
-                        .clickable(onClick = onOpenSwipeCards)
-                        .testTag("open_swipe_cards_button")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(text = "⭐", style = MaterialTheme.typography.labelMedium)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "الكروت بالسحب",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1
-                        )
                     }
                 }
             }

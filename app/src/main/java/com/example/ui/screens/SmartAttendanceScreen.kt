@@ -84,11 +84,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import com.example.R
 import com.example.data.cache.LocalClassroomCache
 import com.example.data.model.ArabicInitialsHelper
 import com.example.data.model.AttendanceRecord
 import com.example.data.model.AttendanceStatus
+import com.example.data.model.CardEvent
+import com.example.data.model.CardType
 import com.example.data.model.ChatMessage
 import com.example.data.model.ChatMessageType
 import com.example.data.model.SaturdayCalendarHelper
@@ -110,10 +118,13 @@ import kotlin.math.abs
 
 @Immutable
 private data class AttendanceActionHistoryEntry(
+    val modeCardType: CardType?,
     val student: Student,
     val previousRecord: AttendanceRecord?,
     val appliedStatus: AttendanceStatus,
-    val appliedNote: String
+    val appliedNote: String,
+    val didAwardCardOnHome: Boolean = false,
+    val removedCardEventFromHome: CardEvent? = null
 )
 
 @Immutable
@@ -173,7 +184,8 @@ private fun formatMergedAttendanceSystemMessage(
 fun SmartAttendanceScreen(
     state: KamScreenState,
     currentUserId: String,
-    onOpenSwipeCards: (() -> Unit)? = null,
+    onAwardCard: (Student, CardType) -> Unit = { _, _ -> },
+    onUndoCardEvent: (CardEvent) -> Unit = {},
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -189,6 +201,12 @@ fun SmartAttendanceScreen(
         state.blocks.firstOrNull { it.servantId == currentUserId }?.servantName?.takeIf { it.isNotBlank() }
             ?: state.userProfile?.displayName?.takeIf { it.isNotBlank() }
             ?: "خادم"
+    }
+
+    // Selected mode: null = Normal Attendance ("الحضور"), non-null = any of the 7 CardType entries
+    var selectedCardTypeId by rememberSaveable(groupId, activeWeekKey) { mutableStateOf("") }
+    val selectedCardType: CardType? = remember(selectedCardTypeId) {
+        if (selectedCardTypeId.isBlank()) null else CardType.fromId(selectedCardTypeId)
     }
 
     val firestoreDb = remember(context) {
@@ -233,6 +251,80 @@ fun SmartAttendanceScreen(
     }
     val optimisticOverrides = remember(groupId, activeWeekKey) {
         mutableStateMapOf<String, AttendanceRecord?>()
+    }
+
+    // Per-card swipe session records keyed by "${cardType.id}_${studentId}"
+    val cardSessionRecordsByKey = remember(groupId, activeWeekKey) {
+        mutableStateMapOf<String, AttendanceRecord>()
+    }
+
+    // Map of active weekly CardEvents on the Home screen for the currently selected CardType
+    val weeklyCardEventByStudentId = remember(state.cardEvents, selectedCardType, activeWeekKey) {
+        val card = selectedCardType
+        if (card == null) {
+            emptyMap()
+        } else {
+            state.cardEvents
+                .asSequence()
+                .filter { it.cardType == card.id && it.weekKey == activeWeekKey && it.studentId.isNotBlank() }
+                .groupBy { it.studentId }
+                .mapValues { (_, events) -> events.first() }
+        }
+    }
+
+    // Effective records map for the active mode (Attendance mode vs selected CardType mode)
+    val activeRecordsByStudentId: Map<String, AttendanceRecord> = remember(
+        selectedCardType,
+        orderedStudents,
+        recordsByStudentId.toMap(),
+        cardSessionRecordsByKey.toMap(),
+        weeklyCardEventByStudentId
+    ) {
+        val card = selectedCardType
+        if (card == null) {
+            recordsByStudentId.toMap()
+        } else {
+            val result = LinkedHashMap<String, AttendanceRecord>()
+            for (stu in orderedStudents) {
+                val sessionKey = "${card.id}_${stu.id}"
+                val sessionRec = cardSessionRecordsByKey[sessionKey]
+                val liveCardEvent = weeklyCardEventByStudentId[stu.id]
+                if (sessionRec != null) {
+                    // If session marked PRESENT, or ABSENT/ISSUE, reflect it; if awarded outside later, prefer PRESENT
+                    if (sessionRec.attendanceStatus == AttendanceStatus.ABSENT && liveCardEvent != null) {
+                        // Awarded from outside after session mark
+                        result[stu.id] = AttendanceRecord(
+                            id = "${activeWeekKey}_${card.id}_${stu.id}",
+                            groupId = groupId,
+                            studentId = stu.id,
+                            studentName = stu.name,
+                            status = AttendanceStatus.PRESENT.id,
+                            weekKey = activeWeekKey,
+                            servantId = liveCardEvent.servantId.ifBlank { currentUserId },
+                            servantName = liveCardEvent.servantName.ifBlank { servantDisplayName },
+                            note = "",
+                            memberUids = memberUids
+                        )
+                    } else {
+                        result[stu.id] = sessionRec
+                    }
+                } else if (liveCardEvent != null) {
+                    result[stu.id] = AttendanceRecord(
+                        id = "${activeWeekKey}_${card.id}_${stu.id}",
+                        groupId = groupId,
+                        studentId = stu.id,
+                        studentName = stu.name,
+                        status = AttendanceStatus.PRESENT.id,
+                        weekKey = activeWeekKey,
+                        servantId = liveCardEvent.servantId.ifBlank { currentUserId },
+                        servantName = liveCardEvent.servantName.ifBlank { servantDisplayName },
+                        note = "",
+                        memberUids = memberUids
+                    )
+                }
+            }
+            result
+        }
     }
 
     LaunchedEffect(groupId, activeWeekKey) {
@@ -317,31 +409,31 @@ fun SmartAttendanceScreen(
     }
 
     // 4. Navigation & Queue State
-    var currentIndex by rememberSaveable(groupId, activeWeekKey) { mutableIntStateOf(0) }
-    var showSummaryView by rememberSaveable(groupId, activeWeekKey) { mutableStateOf(false) }
-    var isEditingSpecificPreparedStudent by rememberSaveable(groupId, activeWeekKey) { mutableStateOf(false) }
-    var hasInitializedIndex by remember(groupId, activeWeekKey) { mutableStateOf(false) }
+    var currentIndex by rememberSaveable(groupId, activeWeekKey, selectedCardTypeId) { mutableIntStateOf(0) }
+    var showSummaryView by rememberSaveable(groupId, activeWeekKey, selectedCardTypeId) { mutableStateOf(false) }
+    var isEditingSpecificPreparedStudent by rememberSaveable(groupId, activeWeekKey, selectedCardTypeId) { mutableStateOf(false) }
+    var hasInitializedIndex by remember(groupId, activeWeekKey, selectedCardTypeId) { mutableStateOf(false) }
     var permissionErrorMessage by remember { mutableStateOf<String?>(null) }
     var studentPendingIssueNote by remember { mutableStateOf<Student?>(null) }
     val undoStack = remember { mutableStateListOf<AttendanceActionHistoryEntry>() }
 
     // Jump to the first unprepared student initially (or show summary if all are already prepared)
-    LaunchedEffect(orderedStudents.size, recordsByStudentId.size) {
+    LaunchedEffect(orderedStudents.size, activeRecordsByStudentId.size, selectedCardTypeId) {
         if (!hasInitializedIndex && orderedStudents.isNotEmpty()) {
             val firstUnprepared = orderedStudents.indexOfFirst { stu ->
-                !recordsByStudentId.containsKey(stu.id)
+                !activeRecordsByStudentId.containsKey(stu.id)
             }
             if (firstUnprepared >= 0) {
                 currentIndex = firstUnprepared
                 hasInitializedIndex = true
-            } else if (recordsByStudentId.size >= orderedStudents.size) {
+            } else if (activeRecordsByStudentId.size >= orderedStudents.size) {
                 showSummaryView = true
                 hasInitializedIndex = true
             }
         }
     }
 
-    fun advanceToNextUnpreparedFrom(startIndex: Int) {
+    fun advanceToNextUnpreparedFrom(startIndex: Int, updatedStudentId: String? = null) {
         if (orderedStudents.isEmpty()) {
             showSummaryView = true
             return
@@ -350,7 +442,7 @@ fun SmartAttendanceScreen(
         for (offset in 1..orderedStudents.size) {
             val candidateIdx = (startIndex + offset) % orderedStudents.size
             val candidateStu = orderedStudents[candidateIdx]
-            if (!recordsByStudentId.containsKey(candidateStu.id)) {
+            if (candidateStu.id != updatedStudentId && !activeRecordsByStudentId.containsKey(candidateStu.id)) {
                 currentIndex = candidateIdx
                 return
             }
@@ -361,7 +453,7 @@ fun SmartAttendanceScreen(
     }
 
     // 5. Preload the closest 3 upcoming students' large photos in the background (Dispatchers.IO)
-    LaunchedEffect(currentIndex, orderedStudents, recordsByStudentId.size, showSummaryView) {
+    LaunchedEffect(currentIndex, orderedStudents, activeRecordsByStudentId.size, showSummaryView) {
         if (showSummaryView || orderedStudents.isEmpty()) return@LaunchedEffect
         val upcoming = ArrayList<Student>(4)
         val safeStart = currentIndex.coerceIn(0, orderedStudents.lastIndex)
@@ -370,7 +462,7 @@ fun SmartAttendanceScreen(
         while (upcoming.size < 4 && step < orderedStudents.size) {
             val idx = (safeStart + step) % orderedStudents.size
             val candidate = orderedStudents[idx]
-            if (!recordsByStudentId.containsKey(candidate.id) || upcoming.size < 4) {
+            if (!activeRecordsByStudentId.containsKey(candidate.id) || upcoming.size < 4) {
                 upcoming.add(candidate)
             }
             step++
@@ -385,7 +477,7 @@ fun SmartAttendanceScreen(
 
     fun canModifyRecord(existing: AttendanceRecord?): Boolean {
         if (existing == null) return true
-        return state.isAdmin || existing.servantId == currentUserId
+        return state.isAdmin || existing.servantId.isBlank() || existing.servantId == currentUserId
     }
 
     fun recordStudentAttendance(
@@ -393,61 +485,121 @@ fun SmartAttendanceScreen(
         status: AttendanceStatus,
         note: String = ""
     ) {
-        val existing = recordsByStudentId[student.id]
+        val card = selectedCardType
+        val existing = activeRecordsByStudentId[student.id]
         if (!canModifyRecord(existing)) {
             permissionErrorMessage =
-                "هذا الطفل تم تحضيره بواسطة «${existing?.servantName.orEmpty()}» — الأمين فقط يمكنه تعديل أو حذف تسجيل خادم آخر."
+                "هذا الطفل تم تسجيله بواسطة «${existing?.servantName.orEmpty()}» — الأمين فقط يمكنه تعديل أو حذف تسجيل خادم آخر."
             return
         }
         permissionErrorMessage = null
         val cleanNote = note.trim().take(AttendanceRecord.MAX_NOTE_LENGTH)
 
-        // Push to undo stack
-        undoStack.add(
-            AttendanceActionHistoryEntry(
-                student = student,
-                previousRecord = existing,
-                appliedStatus = status,
-                appliedNote = cleanNote
+        if (card == null) {
+            // Normal Attendance Mode
+            undoStack.add(
+                AttendanceActionHistoryEntry(
+                    modeCardType = null,
+                    student = student,
+                    previousRecord = existing,
+                    appliedStatus = status,
+                    appliedNote = cleanNote
+                )
             )
-        )
 
-        val optimisticRec = AttendanceRecord(
-            id = AttendanceRecord.buildDocId(activeWeekKey, student.id),
-            groupId = groupId,
-            studentId = student.id,
-            studentName = student.name,
-            status = status.id,
-            weekKey = activeWeekKey,
-            servantId = currentUserId,
-            servantName = servantDisplayName,
-            note = cleanNote,
-            memberUids = memberUids,
-            createdAt = existing?.createdAt,
-            updatedAt = null
-        )
-        optimisticOverrides[student.id] = optimisticRec
-        recordsByStudentId[student.id] = optimisticRec
-        LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
-
-        // Queue or update 2-minute merged SYSTEM chat message for ABSENT / ISSUE
-        queueOrUpdateSystemChatEvent(student, status, cleanNote)
-
-        attendanceIoScope.launch {
-            kamRepository.upsertAttendanceRecord(
+            val optimisticRec = AttendanceRecord(
+                id = AttendanceRecord.buildDocId(activeWeekKey, student.id),
                 groupId = groupId,
-                student = student,
+                studentId = student.id,
+                studentName = student.name,
+                status = status.id,
                 weekKey = activeWeekKey,
-                status = status,
+                servantId = currentUserId,
                 servantName = servantDisplayName,
                 note = cleanNote,
                 memberUids = memberUids,
-                existingRecord = existing,
-                waitForServerAck = false
+                createdAt = existing?.createdAt,
+                updatedAt = null
+            )
+            optimisticOverrides[student.id] = optimisticRec
+            recordsByStudentId[student.id] = optimisticRec
+            LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
+
+            queueOrUpdateSystemChatEvent(student, status, cleanNote)
+
+            attendanceIoScope.launch {
+                kamRepository.upsertAttendanceRecord(
+                    groupId = groupId,
+                    student = student,
+                    weekKey = activeWeekKey,
+                    status = status,
+                    servantName = servantDisplayName,
+                    note = cleanNote,
+                    memberUids = memberUids,
+                    existingRecord = existing,
+                    waitForServerAck = false
+                )
+            }
+        } else {
+            // Card Swipe Mode (any of the 7 CardType entries) — syncs immediately with Home Screen
+            val sessionKey = "${card.id}_${student.id}"
+            val previousSessionRec = cardSessionRecordsByKey[sessionKey]
+            val matchingHomeEvents = state.cardEvents.filter {
+                it.studentId == student.id && it.cardType == card.id && it.weekKey == activeWeekKey
+            }
+            var didAwardOnHome = false
+            var removedHomeEvent: CardEvent? = null
+
+            when (status) {
+                AttendanceStatus.PRESENT -> {
+                    if (matchingHomeEvents.isEmpty()) {
+                        onAwardCard(student, card)
+                        didAwardOnHome = true
+                    }
+                }
+                AttendanceStatus.ABSENT -> {
+                    if (matchingHomeEvents.isNotEmpty()) {
+                        removedHomeEvent = matchingHomeEvents.first()
+                        matchingHomeEvents.forEach { ev -> onUndoCardEvent(ev) }
+                    }
+                }
+                AttendanceStatus.ISSUE -> {
+                    val issueContextNote = if (cleanNote.isNotBlank()) {
+                        "${card.arabicTitle}: $cleanNote"
+                    } else {
+                        "مشكلة أثناء ${card.arabicTitle}"
+                    }
+                    queueOrUpdateSystemChatEvent(student, AttendanceStatus.ISSUE, issueContextNote)
+                }
+            }
+
+            undoStack.add(
+                AttendanceActionHistoryEntry(
+                    modeCardType = card,
+                    student = student,
+                    previousRecord = previousSessionRec,
+                    appliedStatus = status,
+                    appliedNote = cleanNote,
+                    didAwardCardOnHome = didAwardOnHome,
+                    removedCardEventFromHome = removedHomeEvent
+                )
+            )
+
+            cardSessionRecordsByKey[sessionKey] = AttendanceRecord(
+                id = "${activeWeekKey}_${card.id}_${student.id}",
+                groupId = groupId,
+                studentId = student.id,
+                studentName = student.name,
+                status = status.id,
+                weekKey = activeWeekKey,
+                servantId = currentUserId,
+                servantName = servantDisplayName,
+                note = cleanNote,
+                memberUids = memberUids
             )
         }
 
-        advanceToNextUnpreparedFrom(currentIndex)
+        advanceToNextUnpreparedFrom(currentIndex, updatedStudentId = student.id)
     }
 
     fun undoLastGesture() {
@@ -455,38 +607,70 @@ fun SmartAttendanceScreen(
         val lastEntry = undoStack.removeAt(undoStack.lastIndex)
         val stu = lastEntry.student
         val prev = lastEntry.previousRecord
+        val entryCard = lastEntry.modeCardType
         permissionErrorMessage = null
 
-        if (prev == null) {
-            optimisticOverrides[stu.id] = null
-            recordsByStudentId.remove(stu.id)
-            queueOrUpdateSystemChatEvent(stu, null, "")
-            LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
-            val docId = AttendanceRecord.buildDocId(activeWeekKey, stu.id)
-            attendanceIoScope.launch {
-                kamRepository.deleteAttendanceRecord(
-                    groupId = groupId,
-                    docId = docId,
-                    waitForServerAck = false
-                )
+        if (entryCard == null) {
+            if (prev == null) {
+                optimisticOverrides[stu.id] = null
+                recordsByStudentId.remove(stu.id)
+                queueOrUpdateSystemChatEvent(stu, null, "")
+                LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
+                val docId = AttendanceRecord.buildDocId(activeWeekKey, stu.id)
+                attendanceIoScope.launch {
+                    kamRepository.deleteAttendanceRecord(
+                        groupId = groupId,
+                        docId = docId,
+                        waitForServerAck = false
+                    )
+                }
+            } else {
+                optimisticOverrides[stu.id] = prev
+                recordsByStudentId[stu.id] = prev
+                queueOrUpdateSystemChatEvent(stu, prev.attendanceStatus, prev.note)
+                LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
+                attendanceIoScope.launch {
+                    kamRepository.upsertAttendanceRecord(
+                        groupId = groupId,
+                        student = stu,
+                        weekKey = activeWeekKey,
+                        status = prev.attendanceStatus,
+                        servantName = prev.servantName,
+                        note = prev.note,
+                        memberUids = memberUids,
+                        existingRecord = prev,
+                        waitForServerAck = false
+                    )
+                }
             }
         } else {
-            optimisticOverrides[stu.id] = prev
-            recordsByStudentId[stu.id] = prev
-            queueOrUpdateSystemChatEvent(stu, prev.attendanceStatus, prev.note)
-            LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
-            attendanceIoScope.launch {
-                kamRepository.upsertAttendanceRecord(
-                    groupId = groupId,
-                    student = stu,
-                    weekKey = activeWeekKey,
-                    status = prev.attendanceStatus,
-                    servantName = prev.servantName,
-                    note = prev.note,
-                    memberUids = memberUids,
-                    existingRecord = prev,
-                    waitForServerAck = false
-                )
+            // Switch back to that card mode if needed
+            if (selectedCardTypeId != entryCard.id) {
+                selectedCardTypeId = entryCard.id
+            }
+            val sessionKey = "${entryCard.id}_${stu.id}"
+            if (prev == null) {
+                cardSessionRecordsByKey.remove(sessionKey)
+            } else {
+                cardSessionRecordsByKey[sessionKey] = prev
+            }
+            if (lastEntry.appliedStatus == AttendanceStatus.ISSUE) {
+                queueOrUpdateSystemChatEvent(stu, null, "")
+            }
+            if (lastEntry.didAwardCardOnHome) {
+                val currentEvent = state.cardEvents.firstOrNull {
+                    it.studentId == stu.id && it.cardType == entryCard.id && it.weekKey == activeWeekKey
+                }
+                if (currentEvent != null) {
+                    onUndoCardEvent(currentEvent)
+                }
+            } else if (lastEntry.removedCardEventFromHome != null) {
+                val alreadyHas = state.cardEvents.any {
+                    it.studentId == stu.id && it.cardType == entryCard.id && it.weekKey == activeWeekKey
+                }
+                if (!alreadyHas) {
+                    onAwardCard(stu, entryCard)
+                }
             }
         }
 
@@ -499,21 +683,31 @@ fun SmartAttendanceScreen(
     }
 
     fun adminDeleteRecord(student: Student) {
-        val existing = recordsByStudentId[student.id] ?: return
-        if (!state.isAdmin && existing.servantId != currentUserId) {
+        val existing = activeRecordsByStudentId[student.id] ?: return
+        if (!state.isAdmin && existing.servantId.isNotBlank() && existing.servantId != currentUserId) {
             permissionErrorMessage = "الأمين فقط يمكنه حذف تسجيل خادم آخر."
             return
         }
-        optimisticOverrides[student.id] = null
-        recordsByStudentId.remove(student.id)
-        queueOrUpdateSystemChatEvent(student, null, "")
-        LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
-        attendanceIoScope.launch {
-            kamRepository.deleteAttendanceRecord(
-                groupId = groupId,
-                docId = existing.effectiveId,
-                waitForServerAck = false
-            )
+        val card = selectedCardType
+        if (card == null) {
+            optimisticOverrides[student.id] = null
+            recordsByStudentId.remove(student.id)
+            queueOrUpdateSystemChatEvent(student, null, "")
+            LocalClassroomCache.saveWeeklyAttendance(groupId, activeWeekKey, recordsByStudentId.values.toList())
+            attendanceIoScope.launch {
+                kamRepository.deleteAttendanceRecord(
+                    groupId = groupId,
+                    docId = existing.effectiveId,
+                    waitForServerAck = false
+                )
+            }
+        } else {
+            val sessionKey = "${card.id}_${student.id}"
+            cardSessionRecordsByKey.remove(sessionKey)
+            val matchingHomeEvents = state.cardEvents.filter {
+                it.studentId == student.id && it.cardType == card.id && it.weekKey == activeWeekKey
+            }
+            matchingHomeEvents.forEach { ev -> onUndoCardEvent(ev) }
         }
     }
 
@@ -530,9 +724,9 @@ fun SmartAttendanceScreen(
                 .testTag("smart_attendance_screen")
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Top Bar with Progress ("12 / 58") & Summary Toggle
+                // Top Bar with Progress ("12 / 58") & Summary Toggle + Mode Selector
                 val totalCount = orderedStudents.size
-                val preparedCount = orderedStudents.count { recordsByStudentId.containsKey(it.id) }
+                val preparedCount = orderedStudents.count { activeRecordsByStudentId.containsKey(it.id) }
                 val displayedStepNumber = if (totalCount == 0) {
                     0
                 } else if (showSummaryView) {
@@ -543,6 +737,14 @@ fun SmartAttendanceScreen(
 
                 SmartAttendanceTopHeader(
                     weekKey = activeWeekKey,
+                    selectedCardType = selectedCardType,
+                    onSelectCardType = { newCardType ->
+                        selectedCardTypeId = newCardType?.id.orEmpty()
+                        permissionErrorMessage = null
+                        isEditingSpecificPreparedStudent = false
+                        showSummaryView = false
+                        hasInitializedIndex = false
+                    },
                     currentPosition = displayedStepNumber,
                     preparedCount = preparedCount,
                     totalCount = totalCount,
@@ -555,12 +757,6 @@ fun SmartAttendanceScreen(
                         }
                         showSummaryView = !showSummaryView
                     },
-                    onOpenSwipeCards = if (onOpenSwipeCards != null) {
-                        {
-                            flushPendingSystemChatNow()
-                            onOpenSwipeCards()
-                        }
-                    } else null,
                     onClose = {
                         flushPendingSystemChatNow()
                         onClose()
@@ -612,8 +808,9 @@ fun SmartAttendanceScreen(
                     }
                 } else if (showSummaryView) {
                     SmartAttendanceSummaryView(
+                        selectedCardType = selectedCardType,
                         orderedStudents = orderedStudents,
-                        recordsByStudentId = recordsByStudentId,
+                        recordsByStudentId = activeRecordsByStudentId,
                         blockById = blockById,
                         isAdmin = state.isAdmin,
                         currentUserId = currentUserId,
@@ -624,7 +821,7 @@ fun SmartAttendanceScreen(
                         },
                         onAdminDeleteRecord = ::adminDeleteRecord,
                         onResumeUnprepared = {
-                            val nextIdx = orderedStudents.indexOfFirst { !recordsByStudentId.containsKey(it.id) }
+                            val nextIdx = orderedStudents.indexOfFirst { !activeRecordsByStudentId.containsKey(it.id) }
                             if (nextIdx >= 0) {
                                 currentIndex = nextIdx
                                 isEditingSpecificPreparedStudent = false
@@ -640,12 +837,12 @@ fun SmartAttendanceScreen(
                     val safeIndex = currentIndex.coerceIn(0, orderedStudents.lastIndex)
                     val currentStudent = orderedStudents[safeIndex]
                     val currentBlock = blockById[currentStudent.blockId]
-                    val existingRecord = recordsByStudentId[currentStudent.id]
+                    val existingRecord = activeRecordsByStudentId[currentStudent.id]
 
                     // Automatically skip already-prepared student unless the user explicitly navigated to edit them
-                    LaunchedEffect(currentStudent.id, existingRecord != null, isEditingSpecificPreparedStudent) {
+                    LaunchedEffect(currentStudent.id, existingRecord != null, isEditingSpecificPreparedStudent, selectedCardTypeId) {
                         if (existingRecord != null && !isEditingSpecificPreparedStudent) {
-                            val hasAnyUnprepared = orderedStudents.any { !recordsByStudentId.containsKey(it.id) }
+                            val hasAnyUnprepared = orderedStudents.any { !activeRecordsByStudentId.containsKey(it.id) }
                             if (hasAnyUnprepared) {
                                 advanceToNextUnpreparedFrom(safeIndex)
                             } else {
@@ -655,6 +852,7 @@ fun SmartAttendanceScreen(
                     }
 
                     SmartAttendanceSwipeCardContent(
+                        selectedCardType = selectedCardType,
                         student = currentStudent,
                         block = currentBlock,
                         existingRecord = existingRecord,
@@ -672,7 +870,7 @@ fun SmartAttendanceScreen(
                         onSwipeIssue = {
                             if (!canModifyRecord(existingRecord)) {
                                 permissionErrorMessage =
-                                    "هذا الطفل تم تحضيره بواسطة «${existingRecord?.servantName.orEmpty()}» — الأمين فقط يمكنه تعديل أو حذف تسجيل خادم آخر."
+                                    "هذا الطفل تم تسجيله بواسطة «${existingRecord?.servantName.orEmpty()}» — الأمين فقط يمكنه تعديل أو حذف تسجيل خادم آخر."
                             } else {
                                 studentPendingIssueNote = currentStudent
                             }
@@ -701,7 +899,7 @@ fun SmartAttendanceScreen(
         // Optional Short Note Dialog when swiping down ("عمل مشكلة")
         val issueTarget = studentPendingIssueNote
         if (issueTarget != null) {
-            val existingNote = recordsByStudentId[issueTarget.id]?.note.orEmpty()
+            val existingNote = activeRecordsByStudentId[issueTarget.id]?.note.orEmpty()
             IssueNotePromptDialog(
                 studentName = issueTarget.name,
                 initialNote = existingNote,
@@ -718,6 +916,8 @@ fun SmartAttendanceScreen(
 @Composable
 private fun SmartAttendanceTopHeader(
     weekKey: String,
+    selectedCardType: CardType?,
+    onSelectCardType: (CardType?) -> Unit,
     currentPosition: Int,
     preparedCount: Int,
     totalCount: Int,
@@ -725,9 +925,9 @@ private fun SmartAttendanceTopHeader(
     canUndo: Boolean,
     onUndo: () -> Unit,
     onToggleSummary: () -> Unit,
-    onOpenSwipeCards: (() -> Unit)? = null,
     onClose: () -> Unit
 ) {
+    var showModeDropdown by remember { mutableStateOf(false) }
     val progressFraction = if (totalCount > 0) {
         (preparedCount.toFloat() / totalCount.toFloat()).coerceIn(0f, 1f)
     } else {
@@ -742,8 +942,8 @@ private fun SmartAttendanceTopHeader(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -752,7 +952,7 @@ private fun SmartAttendanceTopHeader(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     IconButton(
@@ -766,15 +966,26 @@ private fun SmartAttendanceTopHeader(
                     }
                     Column {
                         Text(
-                            text = "التحضير الذكي بالسحب",
-                            style = MaterialTheme.typography.titleMedium,
+                            text = if (selectedCardType == null) {
+                                "السحب الذكي — الحضور"
+                            } else {
+                                "سحب ${selectedCardType.badgeSymbol} كارت ${selectedCardType.arabicTitle} (+${selectedCardType.points})"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "الأسبوع: $weekKey (منفصل عن نقاط الكروت)",
+                            text = if (selectedCardType == null) {
+                                "الأسبوع: $weekKey (حضور بدون نقاط)"
+                            } else {
+                                "الأسبوع: $weekKey (يسمع تلقائياً في الرئيسية)"
+                            },
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
                         )
                     }
                 }
@@ -796,18 +1007,62 @@ private fun SmartAttendanceTopHeader(
                         }
                     }
 
-                    if (onOpenSwipeCards != null) {
+                    // Dropdown selector button for choosing Attendance or any of the 7 CardTypes
+                    Box {
                         OutlinedButton(
-                            onClick = onOpenSwipeCards,
+                            onClick = { showModeDropdown = true },
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.testTag("switch_to_swipe_cards_button")
+                            modifier = Modifier.testTag("switch_swipe_mode_button")
                         ) {
                             Text(
-                                text = "⭐ كروت",
+                                text = if (selectedCardType == null) {
+                                    "📋 الحضور"
+                                } else {
+                                    "${selectedCardType.badgeSymbol} كارت ${selectedCardType.arabicTitle}"
+                                },
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Icon(
+                                imageVector = Icons.Default.ExpandMore,
+                                contentDescription = "اختيار نوع السحب",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showModeDropdown,
+                            onDismissRequest = { showModeDropdown = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = "📋 الحضور العادي (بدون نقاط)",
+                                        fontWeight = if (selectedCardType == null) FontWeight.ExtraBold else FontWeight.Normal
+                                    )
+                                },
+                                onClick = {
+                                    showModeDropdown = false
+                                    onSelectCardType(null)
+                                }
+                            )
+                            HorizontalDivider()
+                            CardType.entries.forEach { card ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "${card.badgeSymbol} كارت ${card.arabicTitle} (+${card.points})",
+                                            fontWeight = if (selectedCardType == card) FontWeight.ExtraBold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = {
+                                        showModeDropdown = false
+                                        onSelectCardType(card)
+                                    }
+                                )
+                            }
                         }
                     }
 
@@ -826,6 +1081,56 @@ private fun SmartAttendanceTopHeader(
                 }
             }
 
+            // Horizontal Scrollable Mode Selector Bar: Normal Attendance + All 7 Card Types
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("swipe_mode_selector_row"),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                item(key = "mode_attendance") {
+                    FilterChip(
+                        selected = selectedCardType == null,
+                        onClick = { onSelectCardType(null) },
+                        label = {
+                            Text(
+                                text = "📋 الحضور",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier.testTag("mode_chip_attendance")
+                    )
+                }
+                items(
+                    items = CardType.entries,
+                    key = { "mode_${it.id}" }
+                ) { card ->
+                    val isSelected = selectedCardType == card
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onSelectCardType(card) },
+                        label = {
+                            Text(
+                                text = "${card.badgeSymbol} كارت ${card.arabicTitle} (+${card.points})",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier.testTag("mode_chip_${card.id}")
+                    )
+                }
+            }
+
             // Progress Bar ("12 / 58")
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -840,7 +1145,7 @@ private fun SmartAttendanceTopHeader(
                     modifier = Modifier.testTag("attendance_progress_text")
                 )
                 Text(
-                    text = "تم تحضير: $preparedCount / $totalCount",
+                    text = "تم تسجيل: $preparedCount / $totalCount",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.SemiBold
@@ -861,6 +1166,7 @@ private fun SmartAttendanceTopHeader(
 
 @Composable
 private fun SmartAttendanceSwipeCardContent(
+    selectedCardType: CardType?,
     student: Student,
     block: ServantBlock?,
     existingRecord: AttendanceRecord?,
@@ -899,8 +1205,8 @@ private fun SmartAttendanceSwipeCardContent(
         }
     }
 
-    val offsetX = remember(student.id) { Animatable(0f) }
-    val offsetY = remember(student.id) { Animatable(0f) }
+    val offsetX = remember(student.id, selectedCardType?.id) { Animatable(0f) }
+    val offsetY = remember(student.id, selectedCardType?.id) { Animatable(0f) }
 
     val dragDx = offsetX.value
     val dragDy = offsetY.value
@@ -929,7 +1235,11 @@ private fun SmartAttendanceSwipeCardContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             GestureLegendPill(
-                label = "يمين ← حاضر",
+                label = if (selectedCardType == null) {
+                    "يمين ← حاضر"
+                } else {
+                    "يمين ← حضر وأخذ الكارت (+${selectedCardType.points})"
+                },
                 color = Color(0xFF10B981)
             )
             GestureLegendPill(
@@ -937,7 +1247,11 @@ private fun SmartAttendanceSwipeCardContent(
                 color = Color(0xFFF59E0B)
             )
             GestureLegendPill(
-                label = "يسار → غايب",
+                label = if (selectedCardType == null) {
+                    "يسار → غايب"
+                } else {
+                    "يسار → ما حضرش"
+                },
                 color = Color(0xFFEF4444)
             )
         }
@@ -973,7 +1287,7 @@ private fun SmartAttendanceSwipeCardContent(
                         translationY = offsetY.value.coerceAtLeast(-40f)
                         rotationZ = (offsetX.value / 28f).coerceIn(-12f, 12f)
                     }
-                    .pointerInput(student.id, existingRecord?.id) {
+                    .pointerInput(student.id, existingRecord?.id, selectedCardType?.id) {
                         detectDragGestures(
                             onDragEnd = {
                                 val endX = offsetX.value
@@ -1080,8 +1394,9 @@ private fun SmartAttendanceSwipeCardContent(
                     if (existingRecord != null) {
                         Spacer(modifier = Modifier.height(8.dp))
                         ExistingAttendanceBadgeStrip(
+                            selectedCardType = selectedCardType,
                             record = existingRecord,
-                            canDelete = isAdmin || existingRecord.servantId == currentUserId,
+                            canDelete = isAdmin || existingRecord.servantId.isBlank() || existingRecord.servantId == currentUserId,
                             onDelete = onAdminDeleteRecord
                         )
                     }
@@ -1154,8 +1469,16 @@ private fun SmartAttendanceSwipeCardContent(
                         // Live Swipe Status Overlay Badge
                         if (activeGesturePreview != null) {
                             val (overlayText, overlayColor) = when (activeGesturePreview) {
-                                AttendanceStatus.PRESENT -> "✓ حاضر في الكنيسة" to Color(0xFF10B981)
-                                AttendanceStatus.ABSENT -> "✕ غايب" to Color(0xFFEF4444)
+                                AttendanceStatus.PRESENT -> if (selectedCardType == null) {
+                                    "✓ حاضر في الكنيسة" to Color(0xFF10B981)
+                                } else {
+                                    "✓ حضر وأخذ ${selectedCardType.badgeSymbol} كارت ${selectedCardType.arabicTitle} (+${selectedCardType.points})" to Color(0xFF10B981)
+                                }
+                                AttendanceStatus.ABSENT -> if (selectedCardType == null) {
+                                    "✕ غايب" to Color(0xFFEF4444)
+                                } else {
+                                    "✕ ما حضرش / بدون كارت" to Color(0xFFEF4444)
+                                }
                                 AttendanceStatus.ISSUE -> "⚠ عمل مشكلة" to Color(0xFFF59E0B)
                             }
                             Surface(
@@ -1253,7 +1576,11 @@ private fun SmartAttendanceSwipeCardContent(
             ) {
                 Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("حاضر", fontWeight = FontWeight.ExtraBold)
+                Text(
+                    text = if (selectedCardType == null) "حاضر" else "أخذ الكارت",
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1
+                )
             }
 
             // Issue (Down)
@@ -1289,7 +1616,11 @@ private fun SmartAttendanceSwipeCardContent(
             ) {
                 Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("غايب", fontWeight = FontWeight.ExtraBold)
+                Text(
+                    text = if (selectedCardType == null) "غايب" else "ما حضرش",
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1
+                )
             }
 
             // Undo Last Gesture
@@ -1334,6 +1665,7 @@ private fun GestureLegendPill(
 
 @Composable
 private fun ExistingAttendanceBadgeStrip(
+    selectedCardType: CardType?,
     record: AttendanceRecord,
     canDelete: Boolean,
     onDelete: () -> Unit
@@ -1343,6 +1675,15 @@ private fun ExistingAttendanceBadgeStrip(
         AttendanceStatus.PRESENT -> Color(0xFF10B981)
         AttendanceStatus.ABSENT -> Color(0xFFEF4444)
         AttendanceStatus.ISSUE -> Color(0xFFF59E0B)
+    }
+    val statusText = if (selectedCardType == null) {
+        status.arabicLabel
+    } else {
+        when (status) {
+            AttendanceStatus.PRESENT -> "أخذ ${selectedCardType.badgeSymbol} كارت ${selectedCardType.arabicTitle} (+${selectedCardType.points})"
+            AttendanceStatus.ABSENT -> "ما حضرش / لم يأخذ الكارت"
+            AttendanceStatus.ISSUE -> "مشكلة"
+        }
     }
     Surface(
         color = badgeColor.copy(alpha = 0.16f),
@@ -1359,7 +1700,7 @@ private fun ExistingAttendanceBadgeStrip(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "مسجّل هذا الأسبوع: ${status.arabicLabel} (بواسطة ${record.servantName})",
+                    text = "مسجّل هذا الأسبوع: $statusText (بواسطة ${record.servantName})",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.ExtraBold,
                     color = badgeColor
@@ -1469,6 +1810,7 @@ private fun IssueNotePromptDialog(
 
 @Composable
 private fun SmartAttendanceSummaryView(
+    selectedCardType: CardType?,
     orderedStudents: List<Student>,
     recordsByStudentId: Map<String, AttendanceRecord>,
     blockById: Map<String, ServantBlock>,
@@ -1503,13 +1845,13 @@ private fun SmartAttendanceSummaryView(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SummaryStatCard(
-                title = "الحاضرين",
+                title = if (selectedCardType == null) "الحاضرين" else "أخذوا الكارت",
                 count = presentStudents.size,
                 color = Color(0xFF10B981),
                 modifier = Modifier.weight(1f)
             )
             SummaryStatCard(
-                title = "الغايبين",
+                title = if (selectedCardType == null) "الغايبين" else "ما حضروش",
                 count = absentStudents.size,
                 color = Color(0xFFEF4444),
                 modifier = Modifier.weight(1f)
@@ -1536,7 +1878,7 @@ private fun SmartAttendanceSummaryView(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "يتبقى $unpreparedCount طفل لم يتم تحضيرهم بعد",
+                        text = "يتبقى $unpreparedCount طفل لم يتم تسجيلهم بعد",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -1545,7 +1887,7 @@ private fun SmartAttendanceSummaryView(
                         onClick = onResumeUnprepared,
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("استكمال التحضير", fontWeight = FontWeight.Bold)
+                        Text("استكمال السحب", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1561,7 +1903,11 @@ private fun SmartAttendanceSummaryView(
             // 1. Names of Absent Students (أسماء الغايبين)
             item(key = "header_absent") {
                 Text(
-                    text = "أسماء الغايبين (${absentStudents.size})",
+                    text = if (selectedCardType == null) {
+                        "أسماء الغايبين (${absentStudents.size})"
+                    } else {
+                        "أسماء من لم يأخذوا الكارت (${absentStudents.size})"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.ExtraBold,
                     color = Color(0xFFEF4444),
@@ -1626,12 +1972,16 @@ private fun SmartAttendanceSummaryView(
                 }
             }
 
-            // 3. Present Students (الحاضرين)
+            // 3. Present Students (الحاضرين / أخذوا الكارت)
             if (presentStudents.isNotEmpty()) {
                 item(key = "header_present") {
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "الحاضرين (${presentStudents.size})",
+                        text = if (selectedCardType == null) {
+                            "الحاضرين (${presentStudents.size})"
+                        } else {
+                            "أخذوا ${selectedCardType.arabicTitle} (${presentStudents.size})"
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
                         color = Color(0xFF10B981)
@@ -1648,8 +1998,8 @@ private fun SmartAttendanceSummaryView(
                         block = blockById[stu.blockId],
                         record = rec,
                         badgeColor = Color(0xFF10B981),
-                        canEdit = isAdmin || rec?.servantId == currentUserId,
-                        canDelete = isAdmin || rec?.servantId == currentUserId,
+                        canEdit = isAdmin || rec?.servantId.isNullOrBlank() || rec?.servantId == currentUserId,
+                        canDelete = isAdmin || rec?.servantId.isNullOrBlank() || rec?.servantId == currentUserId,
                         onEdit = { if (idx >= 0) onSelectStudentToEdit(idx) },
                         onDelete = { onAdminDeleteRecord(stu) }
                     )
