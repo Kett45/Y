@@ -4,10 +4,10 @@
   "minDeltaBaseVersionCode": 10,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
-  "commitSha": "bab959d335b8",
-  "apkSha256": "8df1f2c33f846727959b84bf951668dfcafa18c3bfe0ed22bf17cfb51a3cfbd9",
-  "updatedAt": "2026-11-17T01:43:58Z",
+  "commitSha": "14f5eb9140a1",
+  "apkSha256": "14f5eb9140a14e5a665be3f5c2255ecd693f562116c1712b5c3b92b3cb1f6501",
+  "updatedAt": "2026-11-17T01:46:38Z",
   "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.13 (نجم الكارت v1.13): تحديث تلقائي مباشر بأحدث بصمة للـ APK (bab959d335b8)."
+  "releaseNotesArabic": "الإصدار 1.13 (نجم الكارت v1.13): شاشة السحب الموحدة للحضور وجميع أنواع الكروت (الحضور، التسبحة، المشاركة، الهدوء، المحفوظات، الاعتراف، الذهب) مع مزامنة فورية في الشاشة الرئيسية (14f5eb9140a1)."
 }
