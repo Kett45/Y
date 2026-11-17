@@ -20,8 +20,8 @@ android {
     applicationId = "com.aistudio.kamlite.rtyxqp"
     minSdk = 24
     targetSdk = 36
-    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 12
-    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.12"
+    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 13
+    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.13"
     val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
     val propEnableStrictMode = (project.findProperty("ENABLE_STRICT_MODE") as? String)?.toBoolean() ?: false
     versionCode = propVersionCode
@@ -115,8 +115,8 @@ tasks.register<Copy>("syncReleaseApk") {
   into(rootProject.layout.projectDirectory.dir("releases"))
   rename { "kAM-Lite.apk" }
 
-  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 12
-  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.12"
+  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 13
+  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.13"
   val repoSlug = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
   val releasesDir = rootProject.layout.projectDirectory.dir("releases").asFile
   val readmeFile = rootProject.layout.projectDirectory.file("README.md").asFile
@@ -157,7 +157,7 @@ tasks.register<Copy>("syncReleaseApk") {
         "updatedAt": "$nowIsoUtc",
         "apkDirectUrl": "$singleAutoUrl",
         "deltaSyncUrl": "$deltaUrl",
-        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): تسريع جذري للسحب في الرئيسية والإعدادات + تفكيك بطاقات الإعدادات + عزل مزامنة الصور عن التمرير + تحسين الأداء والذاكرة ($shortCommit)."
+        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): شاشة السحب الموحدة للحضور وجميع أنواع الكروت (الحضور، التسبحة، المشاركة، الهدوء، المحفوظات، الاعتراف، الذهب) مع مزامنة فورية في الشاشة الرئيسية ($shortCommit)."
       }
       """.trimIndent() + "\n"
     )
@@ -171,14 +171,12 @@ tasks.register<Copy>("syncReleaseApk") {
         "commitSha": "$shortCommit",
         "apkSha256": "$apkSha256",
         "updatedAt": "$nowIsoUtc",
-        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): تسريع شامل للتمرير في الرئيسية والإعدادات وتخفيف تداخل الصور",
+        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): شاشة السحب الموحدة للحضور وجميع الكروت",
         "latestApkDirectUrl": "$singleAutoUrl",
         "changedModules": [
-          "home_and_settings_scroll_jank_fix",
-          "settings_flattened_cards",
-          "scroll_aware_avatar_memory_budget",
-          "retained_tabs_skip_inactive_measure",
-          "uncompressed_dex_mmap_v112"
+          "unified_smart_swipe_attendance_and_all_cards",
+          "compact_home_swipe_launcher_button",
+          "instant_home_card_sync_on_swipe"
         ],
         "dynamicConfig": {
           "maxStudentsPerGroup": 150,

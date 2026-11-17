@@ -1006,66 +1006,6 @@ private fun SmartAttendanceTopHeader(
                             )
                         }
                     }
-
-                    // Dropdown selector button for choosing Attendance or any of the 7 CardTypes
-                    Box {
-                        OutlinedButton(
-                            onClick = { showModeDropdown = true },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.testTag("switch_swipe_mode_button")
-                        ) {
-                            Text(
-                                text = if (selectedCardType == null) {
-                                    "📋 الحضور"
-                                } else {
-                                    "${selectedCardType.badgeSymbol} كارت ${selectedCardType.arabicTitle}"
-                                },
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Icon(
-                                imageVector = Icons.Default.ExpandMore,
-                                contentDescription = "اختيار نوع السحب",
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-
-                        DropdownMenu(
-                            expanded = showModeDropdown,
-                            onDismissRequest = { showModeDropdown = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = "📋 الحضور العادي (بدون نقاط)",
-                                        fontWeight = if (selectedCardType == null) FontWeight.ExtraBold else FontWeight.Normal
-                                    )
-                                },
-                                onClick = {
-                                    showModeDropdown = false
-                                    onSelectCardType(null)
-                                }
-                            )
-                            HorizontalDivider()
-                            CardType.entries.forEach { card ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = "${card.badgeSymbol} كارت ${card.arabicTitle} (+${card.points})",
-                                            fontWeight = if (selectedCardType == card) FontWeight.ExtraBold else FontWeight.Normal
-                                        )
-                                    },
-                                    onClick = {
-                                        showModeDropdown = false
-                                        onSelectCardType(card)
-                                    }
-                                )
-                            }
-                        }
-                    }
-
                     OutlinedButton(
                         onClick = onToggleSummary,
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -1081,53 +1021,141 @@ private fun SmartAttendanceTopHeader(
                 }
             }
 
-            // Horizontal Scrollable Mode Selector Bar: Normal Attendance + All 7 Card Types
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("swipe_mode_selector_row"),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+            // Prominent Full-Width Mode & Card Selector Banner
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                item(key = "mode_attendance") {
-                    FilterChip(
-                        selected = selectedCardType == null,
-                        onClick = { onSelectCardType(null) },
-                        label = {
-                            Text(
-                                text = "📋 الحضور",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "اختر نوع السحب (الحضور أو أي كارت):",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        Box {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .clickable { showModeDropdown = true }
+                                    .testTag("switch_swipe_mode_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = if (selectedCardType == null) {
+                                            "📋 الحضور العادي ▾"
+                                        } else {
+                                            "${selectedCardType.badgeSymbol} كارت ${selectedCardType.arabicTitle} (+${selectedCardType.points}) ▾"
+                                        },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = showModeDropdown,
+                                onDismissRequest = { showModeDropdown = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "📋 الحضور العادي (بدون نقاط)",
+                                            fontWeight = if (selectedCardType == null) FontWeight.ExtraBold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = {
+                                        showModeDropdown = false
+                                        onSelectCardType(null)
+                                    }
+                                )
+                                HorizontalDivider()
+                                CardType.entries.forEach { card ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = "${card.badgeSymbol} كارت ${card.arabicTitle} (+${card.points})",
+                                                fontWeight = if (selectedCardType == card) FontWeight.ExtraBold else FontWeight.Normal
+                                            )
+                                        },
+                                        onClick = {
+                                            showModeDropdown = false
+                                            onSelectCardType(card)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Horizontal Scrollable Mode Selector Bar: Normal Attendance + All 7 Card Types
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("swipe_mode_selector_row"),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        item(key = "mode_attendance") {
+                            FilterChip(
+                                selected = selectedCardType == null,
+                                onClick = { onSelectCardType(null) },
+                                label = {
+                                    Text(
+                                        text = "📋 الحضور العادي",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier.testTag("mode_chip_attendance")
                             )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier.testTag("mode_chip_attendance")
-                    )
-                }
-                items(
-                    items = CardType.entries,
-                    key = { "mode_${it.id}" }
-                ) { card ->
-                    val isSelected = selectedCardType == card
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = { onSelectCardType(card) },
-                        label = {
-                            Text(
-                                text = "${card.badgeSymbol} كارت ${card.arabicTitle} (+${card.points})",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
+                        }
+                        items(
+                            items = CardType.entries,
+                            key = { "mode_${it.id}" }
+                        ) { card ->
+                            val isSelected = selectedCardType == card
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onSelectCardType(card) },
+                                label = {
+                                    Text(
+                                        text = "${card.badgeSymbol} كارت ${card.arabicTitle} (+${card.points})",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier.testTag("mode_chip_${card.id}")
                             )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier.testTag("mode_chip_${card.id}")
-                    )
+                        }
+                    }
                 }
             }
 
