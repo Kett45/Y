@@ -2,15 +2,17 @@
   "targetVersionCode": 13,
   "targetVersionName": "1.13",
   "minCompatibleBaseVersion": 10,
-  "commitSha": "14f5eb9140a1",
+  "commitSha": "440db9996a95",
   "apkSha256": "14f5eb9140a14e5a665be3f5c2255ecd693f562116c1712b5c3b92b3cb1f6501",
-  "updatedAt": "2026-11-17T01:46:38Z",
-  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.13 (14f5eb9140a1): شاشة السحب الموحدة للحضور وجميع الكروت",
+  "updatedAt": "2026-11-17T09:19:50Z",
+  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.13 (440db9996a95)",
   "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "changedModules": [
-    "unified_smart_swipe_attendance_and_all_cards",
-    "compact_home_swipe_launcher_button",
-    "instant_home_card_sync_on_swipe"
+    "dm_1on1_chat_rules_and_members_fix",
+    "group_servants_limit_expanded_to_50",
+    "visual_attendance_report_with_cached_child_photos",
+    "chat_media_save_to_device_button",
+    "github_auto_update_sha_fix_v111"
   ],
   "dynamicConfig": {
     "maxStudentsPerGroup": 150,
