@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +56,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.ui.theme.LocalKamExtendedColors
 
 @Composable
 fun GroupOnboardingScreen(
@@ -122,18 +125,21 @@ fun GroupOnboardingScreen(
                     }
                 }
 
+                val extColors = LocalKamExtendedColors.current
+
                 Box(
                     modifier = Modifier
                         .size(72.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = if (isCreateMode) Icons.Default.AddModerator else Icons.Default.GroupAdd,
                         contentDescription = "إعداد المجموعة",
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(34.dp)
                     )
                 }
 
@@ -170,6 +176,7 @@ fun GroupOnboardingScreen(
                     FilterChip(
                         selected = isCreateMode,
                         onClick = { isCreateMode = true },
+                        shape = RoundedCornerShape(12.dp),
                         label = {
                             Text(
                                 text = "أنا الأمين (إنشاء مجموعة)",
@@ -187,6 +194,12 @@ fun GroupOnboardingScreen(
                             selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                             selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                         ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = isCreateMode,
+                            borderColor = extColors.hairline,
+                            selectedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                        ),
                         modifier = Modifier
                             .weight(1f)
                             .testTag("mode_create_group_chip")
@@ -195,6 +208,7 @@ fun GroupOnboardingScreen(
                     FilterChip(
                         selected = !isCreateMode,
                         onClick = { isCreateMode = false },
+                        shape = RoundedCornerShape(12.dp),
                         label = {
                             Text(
                                 text = "أنا خادم (لدي رمز)",
@@ -212,6 +226,12 @@ fun GroupOnboardingScreen(
                             selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
                             selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer
                         ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = !isCreateMode,
+                            borderColor = extColors.hairline,
+                            selectedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                        ),
                         modifier = Modifier
                             .weight(1f)
                             .testTag("mode_join_group_chip")
@@ -228,6 +248,7 @@ fun GroupOnboardingScreen(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.errorContainer
                         ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
                         shape = RoundedCornerShape(14.dp)
                     ) {
                         Text(
@@ -241,10 +262,11 @@ fun GroupOnboardingScreen(
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
+                    shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface
-                    )
+                    ),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),

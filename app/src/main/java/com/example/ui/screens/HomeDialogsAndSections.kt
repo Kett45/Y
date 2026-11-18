@@ -70,6 +70,7 @@ import com.example.data.model.Student
 import com.example.ui.components.CompactCardButtonsRow
 import com.example.ui.components.StudentAvatarCircle
 import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.viewmodel.KamScreenState
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -97,16 +98,18 @@ fun SearchResultsWithBlockOwnerSection(
 ) {
     val blockById = remember(blocks) { blocks.associateBy { it.id } }
 
+    val extColors = LocalKamExtendedColors.current
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .border(
-                width = 1.5.dp,
-                color = MaterialTheme.colorScheme.primary,
-                shape = RoundedCornerShape(20.dp)
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(16.dp)
             )
             .testTag("search_results_section"),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -114,7 +117,7 @@ fun SearchResultsWithBlockOwnerSection(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f))
+                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -209,9 +212,9 @@ fun SearchResultsWithBlockOwnerSection(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("search_result_row_${student.id}"),
-                            shape = RoundedCornerShape(16.dp),
+                            shape = RoundedCornerShape(14.dp),
                             color = KamSemanticColors.elevatedSurface,
-                            border = BorderStroke(1.dp, blockAccent.copy(alpha = 0.55f))
+                            border = BorderStroke(1.dp, blockAccent.copy(alpha = 0.42f))
                         ) {
                             Column(
                                 modifier = Modifier
@@ -400,6 +403,7 @@ fun YearMonthWeekTreeDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                val extColors = LocalKamExtendedColors.current
                 availableYears.forEach { year ->
                     val yearTree = remember(year) { SaturdayCalendarHelper.buildYearTree(year) }
                     val isYearExpanded = expandedYear == year
@@ -410,8 +414,9 @@ fun YearMonthWeekTreeDialog(
                             .testTag("tree_year_$year"),
                         shape = RoundedCornerShape(14.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-                        )
+                            containerColor = KamSemanticColors.elevatedSurface
+                        ),
+                        border = BorderStroke(1.dp, extColors.hairline)
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             // Level 1: Year Row
@@ -458,11 +463,11 @@ fun YearMonthWeekTreeDialog(
                                                 else -> MaterialTheme.colorScheme.surface
                                             },
                                             border = BorderStroke(
-                                                width = if (isMonthSelected && !monthNode.isFutureMonth) 1.5.dp else 1.dp,
+                                                width = 1.dp,
                                                 color = when {
-                                                    monthNode.isFutureMonth -> MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                                                    monthNode.isFutureMonth -> extColors.hairline.copy(alpha = 0.45f)
                                                     isMonthSelected -> MaterialTheme.colorScheme.primary
-                                                    else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                                    else -> extColors.hairline
                                                 }
                                             ),
                                             modifier = Modifier
@@ -956,10 +961,11 @@ fun DuplicateStudentComparisonDialog(
                                     val candidateEventsCount = state.eventsForStudent(candidate.id).size
                                     val otherCandidates = group.records.filter { it.id != candidate.id }
 
+                                    val extColors = LocalKamExtendedColors.current
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
                                         color = MaterialTheme.colorScheme.surface,
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+                                        border = BorderStroke(1.dp, extColors.hairline),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Column(

@@ -57,6 +57,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -111,6 +112,7 @@ import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.components.StudentPhotoPickerDialog
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalAppAppearanceController
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.viewmodel.BulkImportLinePreview
 import com.example.ui.viewmodel.KamScreenState
 import com.example.util.KamPerformanceTracker
@@ -385,7 +387,7 @@ fun HomeScreen(
                     val isCollapsed = isBlockCollapsed(block.id)
                     val blockAccent = KamSemanticColors.blockColor(block.colorHex)
                     val resolvedOwnerName = state.resolvedBlockOwnerName(block)
-                    val blockTintSurface = blockAccent.copy(alpha = 0.12f).compositeOver(elevatedRowSurfaceColor)
+                    val blockTintSurface = blockAccent.copy(alpha = 0.06f).compositeOver(elevatedRowSurfaceColor)
 
                     item(
                         key = "block_header_${block.id}",
@@ -428,7 +430,7 @@ fun HomeScreen(
                                 ServantBlockEmptyCard(blockAccent = blockAccent)
                             }
                         } else {
-                            val blockBorderColor = blockAccent.copy(alpha = 0.62f)
+                            val blockBorderColor = blockAccent.copy(alpha = 0.38f)
                             itemsIndexed(
                                 items = blockStudents,
                                 key = { _, student -> "blk_${block.id}_stu_${student.id}" },
@@ -835,10 +837,13 @@ private fun HomeTopControlCard(
         SaturdayCalendarHelper.formatCompactHeaderMonthWeek(state.selectedMonthKey, state.selectedWeekKey)
     }
 
+    val extColors = LocalKamExtendedColors.current
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+            .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
             .padding(horizontal = 10.dp, vertical = 6.dp)
             .testTag("compact_home_header_bar"),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -878,7 +883,7 @@ private fun HomeTopControlCard(
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f)),
                     modifier = Modifier
                         .clickable(onClick = onOpenMonthWeekTree)
                         .testTag("open_month_week_tree_button")
@@ -921,8 +926,8 @@ private fun HomeTopControlCard(
                     // Compact Swipe Launcher ("📋 سحب") — opens unified Smart Swipe page (Attendance + All Cards)
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
                         modifier = Modifier
                             .height(38.dp)
                             .clickable(onClick = onOpenSmartAttendance)
@@ -953,6 +958,10 @@ private fun HomeTopControlCard(
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant
                         },
+                        border = BorderStroke(
+                            1.dp,
+                            if (showSearchField) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f) else extColors.hairline
+                        ),
                         modifier = Modifier
                             .size(38.dp)
                             .clickable {
@@ -987,6 +996,10 @@ private fun HomeTopControlCard(
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant
                         },
+                        border = BorderStroke(
+                            1.dp,
+                            if (showLeaderboardExpanded) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f) else extColors.hairline
+                        ),
                         modifier = Modifier
                             .size(38.dp)
                             .clickable(onClick = onToggleLeaderboard)
@@ -1010,6 +1023,10 @@ private fun HomeTopControlCard(
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant
                         },
+                        border = BorderStroke(
+                            1.dp,
+                            if (duplicateCount > 0) MaterialTheme.colorScheme.error.copy(alpha = 0.45f) else extColors.hairline
+                        ),
                         modifier = Modifier
                             .height(38.dp)
                             .clickable(onClick = onOpenDuplicateAlerts)
@@ -1146,10 +1163,12 @@ private fun EmptyClassroomPromptCard(
     onOpenAddStudent: () -> Unit,
     onOpenAddBlock: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+            .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
             .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1224,17 +1243,17 @@ private fun ServantBlockHeaderCard(
     val currentOnToggle by rememberUpdatedState(onToggleCollapseById)
     val onRowClick = remember { { currentOnToggle(currentBlockId) } }
 
-    val cardShape = RoundedCornerShape(18.dp)
-    val headerAccentShape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
-    val tintedContainerColor = blockAccent.copy(alpha = 0.18f).compositeOver(MaterialTheme.colorScheme.surface)
+    val cardShape = RoundedCornerShape(16.dp)
+    val headerAccentShape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+    val tintedContainerColor = blockAccent.copy(alpha = 0.08f).compositeOver(MaterialTheme.colorScheme.surface)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(tintedContainerColor, cardShape)
             .border(
-                width = 1.8.dp,
-                color = blockAccent.copy(alpha = 0.75f),
+                width = 1.dp,
+                color = blockAccent.copy(alpha = 0.48f),
                 shape = cardShape
             )
             .testTag("servant_block_header_card_${block.id}")
@@ -1242,7 +1261,7 @@ private fun ServantBlockHeaderCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(blockAccent.copy(alpha = 0.28f), headerAccentShape)
+                .background(blockAccent.copy(alpha = 0.16f), headerAccentShape)
                 .clickable(onClick = onRowClick)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1359,14 +1378,14 @@ private fun ServantBlockHeaderCard(
 @Composable
 private fun ServantBlockEmptyCard(blockAccent: Color) {
     val shape = RoundedCornerShape(14.dp)
-    val tintedBg = blockAccent.copy(alpha = 0.12f).compositeOver(MaterialTheme.colorScheme.surface)
+    val tintedBg = blockAccent.copy(alpha = 0.07f).compositeOver(MaterialTheme.colorScheme.surface)
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(tintedBg, shape)
             .border(
-                width = 1.2.dp,
-                color = blockAccent.copy(alpha = 0.55f),
+                width = 1.dp,
+                color = blockAccent.copy(alpha = 0.35f),
                 shape = shape
             )
             .padding(14.dp),
@@ -1387,15 +1406,15 @@ private fun UnassignedStudentsHeaderCard(
     onToggleCollapse: () -> Unit
 ) {
     val unassignedColor = KamSemanticColors.unassignedBlock
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(16.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface, shape)
-            .background(unassignedColor.copy(alpha = 0.28f), shape)
+            .background(unassignedColor.copy(alpha = 0.14f), shape)
             .border(
-                width = 1.5.dp,
-                color = unassignedColor,
+                width = 1.dp,
+                color = unassignedColor.copy(alpha = 0.6f),
                 shape = shape
             )
             .clickable(onClick = onToggleCollapse)
@@ -1427,10 +1446,12 @@ private fun UnassignedStudentsHeaderCard(
 
 @Composable
 private fun UnassignedStudentsEmptyCard() {
+    val extColors = LocalKamExtendedColors.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+            .border(1.dp, extColors.hairline, RoundedCornerShape(14.dp))
             .padding(14.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -1457,8 +1478,14 @@ private fun HomeAutoShrinkingFab(
         onClick = onClick,
         containerColor = MaterialTheme.colorScheme.primary,
         contentColor = MaterialTheme.colorScheme.onPrimary,
-        shape = RoundedCornerShape(16.dp),
-        modifier = modifier.testTag("home_add_fab")
+        shape = RoundedCornerShape(999.dp),
+        elevation = FloatingActionButtonDefaults.elevation(
+            defaultElevation = 2.dp,
+            pressedElevation = 4.dp
+        ),
+        modifier = modifier
+            .border(1.dp, MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f), RoundedCornerShape(999.dp))
+            .testTag("home_add_fab")
     ) {
         Row(
             modifier = Modifier.padding(
@@ -1520,7 +1547,7 @@ private fun UnassignedStudentLazyRow(
             .background(rowSurfaceColor, StudentRowCornerShape)
             .border(
                 width = 1.dp,
-                color = KamSemanticColors.unassignedBlock.copy(alpha = 0.55f),
+                color = LocalKamExtendedColors.current.hairline,
                 shape = StudentRowCornerShape
             )
             .padding(10.dp),
@@ -1626,7 +1653,7 @@ private fun StudentFastCardRow(
         Modifier
             .fillMaxWidth()
             .background(rowSurfaceColor, StudentRowCornerShape)
-            .border(1.2.dp, outerBorderColor, StudentRowCornerShape)
+            .border(1.dp, outerBorderColor, StudentRowCornerShape)
     } else {
         Modifier
             .fillMaxWidth()

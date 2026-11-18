@@ -106,6 +106,7 @@ import com.example.data.repository.ChatRepository
 import com.example.data.repository.KamRepository
 import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.viewmodel.KamScreenState
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CoroutineScope
@@ -934,9 +935,11 @@ private fun SmartAttendanceTopHeader(
         0f
     }
 
+    val extColors = LocalKamExtendedColors.current
+
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp,
+        tonalElevation = 0.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -1184,11 +1187,12 @@ private fun SmartAttendanceTopHeader(
                 progress = { progressFraction },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(7.dp)
-                    .clip(RoundedCornerShape(4.dp))
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(999.dp))
                     .testTag("attendance_progress_bar")
             )
         }
+        HorizontalDivider(thickness = 1.dp, color = extColors.hairline)
     }
 }
 
@@ -1256,6 +1260,7 @@ private fun SmartAttendanceSwipeCardContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
+        val extColors = LocalKamExtendedColors.current
         // Direction Legend Banner
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1268,11 +1273,11 @@ private fun SmartAttendanceSwipeCardContent(
                 } else {
                     "يمين ← حضر وأخذ الكارت (+${selectedCardType.points})"
                 },
-                color = Color(0xFF10B981)
+                color = extColors.onlineGreen
             )
             GestureLegendPill(
                 label = "أسفل ↓ مشكلة",
-                color = Color(0xFFF59E0B)
+                color = extColors.offlineAmber
             )
             GestureLegendPill(
                 label = if (selectedCardType == null) {
@@ -1280,7 +1285,7 @@ private fun SmartAttendanceSwipeCardContent(
                 } else {
                     "يسار → ما حضرش"
                 },
-                color = Color(0xFFEF4444)
+                color = MaterialTheme.colorScheme.error
             )
         }
 
@@ -1294,17 +1299,17 @@ private fun SmartAttendanceSwipeCardContent(
             contentAlignment = Alignment.Center
         ) {
             Card(
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f)
+                    containerColor = MaterialTheme.colorScheme.surface
                 ),
                 border = BorderStroke(
-                    width = 2.5.dp,
+                    width = if (activeGesturePreview != null) 2.dp else 1.5.dp,
                     color = when (activeGesturePreview) {
-                        AttendanceStatus.PRESENT -> Color(0xFF10B981)
-                        AttendanceStatus.ABSENT -> Color(0xFFEF4444)
-                        AttendanceStatus.ISSUE -> Color(0xFFF59E0B)
-                        null -> blockAccent
+                        AttendanceStatus.PRESENT -> extColors.onlineGreen
+                        AttendanceStatus.ABSENT -> MaterialTheme.colorScheme.error
+                        AttendanceStatus.ISSUE -> extColors.offlineAmber
+                        null -> blockAccent.copy(alpha = 0.65f)
                     }
                 ),
                 modifier = Modifier
@@ -1498,16 +1503,16 @@ private fun SmartAttendanceSwipeCardContent(
                         if (activeGesturePreview != null) {
                             val (overlayText, overlayColor) = when (activeGesturePreview) {
                                 AttendanceStatus.PRESENT -> if (selectedCardType == null) {
-                                    "✓ حاضر في الكنيسة" to Color(0xFF10B981)
+                                    "✓ حاضر في الكنيسة" to extColors.onlineGreen
                                 } else {
-                                    "✓ حضر وأخذ ${selectedCardType.badgeSymbol} كارت ${selectedCardType.arabicTitle} (+${selectedCardType.points})" to Color(0xFF10B981)
+                                    "✓ حضر وأخذ ${selectedCardType.badgeSymbol} كارت ${selectedCardType.arabicTitle} (+${selectedCardType.points})" to extColors.onlineGreen
                                 }
                                 AttendanceStatus.ABSENT -> if (selectedCardType == null) {
-                                    "✕ غايب" to Color(0xFFEF4444)
+                                    "✕ غايب" to MaterialTheme.colorScheme.error
                                 } else {
-                                    "✕ ما حضرش / بدون كارت" to Color(0xFFEF4444)
+                                    "✕ ما حضرش / بدون كارت" to MaterialTheme.colorScheme.error
                                 }
-                                AttendanceStatus.ISSUE -> "⚠ عمل مشكلة" to Color(0xFFF59E0B)
+                                AttendanceStatus.ISSUE -> "⚠ عمل مشكلة" to extColors.offlineAmber
                             }
                             Surface(
                                 color = overlayColor.copy(alpha = 0.92f),
@@ -1593,7 +1598,7 @@ private fun SmartAttendanceSwipeCardContent(
             Button(
                 onClick = onSwipePresent,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF10B981),
+                    containerColor = extColors.onlineGreen,
                     contentColor = Color.White
                 ),
                 shape = RoundedCornerShape(14.dp),
@@ -1615,7 +1620,7 @@ private fun SmartAttendanceSwipeCardContent(
             Button(
                 onClick = onSwipeIssue,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFF59E0B),
+                    containerColor = extColors.offlineAmber,
                     contentColor = Color.White
                 ),
                 shape = RoundedCornerShape(14.dp),
@@ -1633,8 +1638,8 @@ private fun SmartAttendanceSwipeCardContent(
             Button(
                 onClick = onSwipeAbsent,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFEF4444),
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
                 ),
                 shape = RoundedCornerShape(14.dp),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 12.dp),
@@ -1698,11 +1703,12 @@ private fun ExistingAttendanceBadgeStrip(
     canDelete: Boolean,
     onDelete: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     val status = record.attendanceStatus
     val badgeColor = when (status) {
-        AttendanceStatus.PRESENT -> Color(0xFF10B981)
-        AttendanceStatus.ABSENT -> Color(0xFFEF4444)
-        AttendanceStatus.ISSUE -> Color(0xFFF59E0B)
+        AttendanceStatus.PRESENT -> extColors.onlineGreen
+        AttendanceStatus.ABSENT -> MaterialTheme.colorScheme.error
+        AttendanceStatus.ISSUE -> extColors.offlineAmber
     }
     val statusText = if (selectedCardType == null) {
         status.arabicLabel
@@ -1767,6 +1773,7 @@ private fun IssueNotePromptDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     var noteText by rememberSaveable { mutableStateOf(initialNote) }
 
     AlertDialog(
@@ -1779,7 +1786,7 @@ private fun IssueNotePromptDialog(
                 Icon(
                     imageVector = Icons.Default.Warning,
                     contentDescription = null,
-                    tint = Color(0xFFF59E0B)
+                    tint = extColors.offlineAmber
                 )
                 Text(
                     text = "تسجيل مشكلة — $studentName",
@@ -1812,7 +1819,7 @@ private fun IssueNotePromptDialog(
             Button(
                 onClick = { onConfirm(noteText.trim()) },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFF59E0B),
+                    containerColor = extColors.offlineAmber,
                     contentColor = Color.White
                 ),
                 modifier = Modifier.testTag("confirm_issue_note_button")
@@ -1849,6 +1856,7 @@ private fun SmartAttendanceSummaryView(
     onResumeUnprepared: () -> Unit,
     onFinishAndClose: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     val presentStudents = remember(orderedStudents, recordsByStudentId) {
         orderedStudents.filter { recordsByStudentId[it.id]?.attendanceStatus == AttendanceStatus.PRESENT }
     }
@@ -1875,19 +1883,19 @@ private fun SmartAttendanceSummaryView(
             SummaryStatCard(
                 title = if (selectedCardType == null) "الحاضرين" else "أخذوا الكارت",
                 count = presentStudents.size,
-                color = Color(0xFF10B981),
+                color = extColors.onlineGreen,
                 modifier = Modifier.weight(1f)
             )
             SummaryStatCard(
                 title = if (selectedCardType == null) "الغايبين" else "ما حضروش",
                 count = absentStudents.size,
-                color = Color(0xFFEF4444),
+                color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.weight(1f)
             )
             SummaryStatCard(
                 title = "المشاكل",
                 count = issueStudents.size,
-                color = Color(0xFFF59E0B),
+                color = extColors.offlineAmber,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -1938,7 +1946,7 @@ private fun SmartAttendanceSummaryView(
                     },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFEF4444),
+                    color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
@@ -1961,7 +1969,7 @@ private fun SmartAttendanceSummaryView(
                         student = stu,
                         block = blockById[stu.blockId],
                         record = rec,
-                        badgeColor = Color(0xFFEF4444),
+                        badgeColor = MaterialTheme.colorScheme.error,
                         canEdit = isAdmin || rec?.servantId == currentUserId,
                         canDelete = isAdmin || rec?.servantId == currentUserId,
                         onEdit = { if (idx >= 0) onSelectStudentToEdit(idx) },
@@ -1978,7 +1986,7 @@ private fun SmartAttendanceSummaryView(
                         text = "عملوا مشكلة (${issueStudents.size})",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFFF59E0B)
+                        color = extColors.offlineAmber
                     )
                 }
                 items(
@@ -1991,7 +1999,7 @@ private fun SmartAttendanceSummaryView(
                         student = stu,
                         block = blockById[stu.blockId],
                         record = rec,
-                        badgeColor = Color(0xFFF59E0B),
+                        badgeColor = extColors.offlineAmber,
                         canEdit = isAdmin || rec?.servantId == currentUserId,
                         canDelete = isAdmin || rec?.servantId == currentUserId,
                         onEdit = { if (idx >= 0) onSelectStudentToEdit(idx) },
@@ -2012,7 +2020,7 @@ private fun SmartAttendanceSummaryView(
                         },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFF10B981)
+                        color = extColors.onlineGreen
                     )
                 }
                 items(
@@ -2025,7 +2033,7 @@ private fun SmartAttendanceSummaryView(
                         student = stu,
                         block = blockById[stu.blockId],
                         record = rec,
-                        badgeColor = Color(0xFF10B981),
+                        badgeColor = extColors.onlineGreen,
                         canEdit = isAdmin || rec?.servantId.isNullOrBlank() || rec?.servantId == currentUserId,
                         canDelete = isAdmin || rec?.servantId.isNullOrBlank() || rec?.servantId == currentUserId,
                         onEdit = { if (idx >= 0) onSelectStudentToEdit(idx) },
@@ -2060,9 +2068,9 @@ private fun SummaryStatCard(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        color = color.copy(alpha = 0.14f),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.5.dp, color.copy(alpha = 0.55f)),
+        color = color.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.45f)),
         modifier = modifier
     ) {
         Column(
@@ -2098,9 +2106,9 @@ private fun SummaryStudentRow(
     onDelete: () -> Unit
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.4f)),
+        border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.38f)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(

@@ -3,6 +3,7 @@ package com.example
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -40,14 +41,20 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -109,6 +116,7 @@ import com.example.ui.theme.KamLiteTheme
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalAppAppearanceController
 import com.example.ui.theme.LocalIsTabActive
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.viewmodel.ChatUiState
 import com.example.ui.viewmodel.ChatViewModel
@@ -248,6 +256,25 @@ fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
     var currentUser by remember { mutableStateOf(auth.currentUser) }
     var authSessionId by rememberSaveable { mutableIntStateOf(0) }
     val navScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val isDarkTheme = LocalKamExtendedColors.current.isDark
+
+    DisposableEffect(context, isDarkTheme) {
+        val activity = context as? ComponentActivity
+        activity?.enableEdgeToEdge(
+            statusBarStyle = if (isDarkTheme) {
+                SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            } else {
+                SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+            },
+            navigationBarStyle = if (isDarkTheme) {
+                SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            } else {
+                SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+            }
+        )
+        onDispose {}
+    }
 
     LaunchedEffect(Unit) {
         KamPerformanceTracker.markFirstUiFrameRendered()
@@ -564,99 +591,141 @@ fun AuthenticatedKamApp(
     }
     CompositionLocalProvider(LocalStudentQuickPeekController provides quickPeekController) {
         Box(modifier = Modifier.fillMaxSize()) {
+            val extColors = LocalKamExtendedColors.current
+            val navIndicatorColor = if (extColors.isDark) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+            } else {
+                MaterialTheme.colorScheme.primaryContainer
+            }
+            val navItemColors = NavigationBarItemDefaults.colors(
+                selectedIconColor = MaterialTheme.colorScheme.primary,
+                selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                indicatorColor = navIndicatorColor,
+                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                unselectedTextColor = extColors.mutedText
+            )
+
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
+                containerColor = MaterialTheme.colorScheme.background,
                 contentWindowInsets = WindowInsets.safeDrawing,
             bottomBar = {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ) {
-                    NavigationBarItem(
-                        selected = currentTab == KamBottomTab.HOME,
-                        onClick = { selectTab(KamBottomTab.HOME) },
-                        icon = {
-                            Icon(
-                                imageVector = Icons.Default.Home,
-                                contentDescription = stringResource(R.string.tab_home)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = stringResource(R.string.tab_home),
-                                maxLines = 1,
-                                softWrap = false,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        },
-                        modifier = Modifier.testTag("nav_tab_home")
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    HorizontalDivider(
+                        thickness = 1.dp,
+                        color = extColors.hairline
                     )
-                    NavigationBarItem(
-                        selected = currentTab == KamBottomTab.VISITATION,
-                        onClick = { selectTab(KamBottomTab.VISITATION) },
-                        icon = {
-                            Icon(
-                                imageVector = Icons.Default.Favorite,
-                                contentDescription = stringResource(R.string.tab_visitation)
-                            )
-                        },
-                        label = null,
-                        alwaysShowLabel = false,
-                        modifier = Modifier.testTag("nav_tab_visitation")
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == KamBottomTab.MESSAGES,
-                        onClick = { selectTab(KamBottomTab.MESSAGES) },
-                        icon = {
-                            MessagesNavTabIcon(chatViewModel = chatViewModel)
-                        },
-                        label = {
-                            Text(
-                                text = stringResource(R.string.tab_messages),
-                                maxLines = 1,
-                                softWrap = false,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        },
-                        modifier = Modifier.testTag("nav_tab_messages")
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == KamBottomTab.GROUP,
-                        onClick = { selectTab(KamBottomTab.GROUP) },
-                        icon = {
-                            Icon(
-                                imageVector = Icons.Default.Groups,
-                                contentDescription = stringResource(R.string.tab_group)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = stringResource(R.string.tab_group),
-                                maxLines = 1,
-                                softWrap = false,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        },
-                        modifier = Modifier.testTag("nav_tab_group")
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == KamBottomTab.SETTINGS,
-                        onClick = { selectTab(KamBottomTab.SETTINGS) },
-                        icon = {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = stringResource(R.string.tab_settings)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = stringResource(R.string.tab_settings),
-                                maxLines = 1,
-                                softWrap = false,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        },
-                        modifier = Modifier.testTag("nav_tab_settings")
-                    )
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        tonalElevation = 0.dp
+                    ) {
+                        NavigationBarItem(
+                            selected = currentTab == KamBottomTab.HOME,
+                            onClick = { selectTab(KamBottomTab.HOME) },
+                            colors = navItemColors,
+                            icon = {
+                                Icon(
+                                    imageVector = if (currentTab == KamBottomTab.HOME) Icons.Filled.Home else Icons.Outlined.Home,
+                                    contentDescription = stringResource(R.string.tab_home)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(R.string.tab_home),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (currentTab == KamBottomTab.HOME) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_tab_home")
+                        )
+                        NavigationBarItem(
+                            selected = currentTab == KamBottomTab.VISITATION,
+                            onClick = { selectTab(KamBottomTab.VISITATION) },
+                            colors = navItemColors,
+                            icon = {
+                                Icon(
+                                    imageVector = if (currentTab == KamBottomTab.VISITATION) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                    contentDescription = stringResource(R.string.tab_visitation)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(R.string.tab_visitation),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (currentTab == KamBottomTab.VISITATION) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_tab_visitation")
+                        )
+                        NavigationBarItem(
+                            selected = currentTab == KamBottomTab.MESSAGES,
+                            onClick = { selectTab(KamBottomTab.MESSAGES) },
+                            colors = navItemColors,
+                            icon = {
+                                MessagesNavTabIcon(
+                                    chatViewModel = chatViewModel,
+                                    selected = currentTab == KamBottomTab.MESSAGES
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(R.string.tab_messages),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (currentTab == KamBottomTab.MESSAGES) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_tab_messages")
+                        )
+                        NavigationBarItem(
+                            selected = currentTab == KamBottomTab.GROUP,
+                            onClick = { selectTab(KamBottomTab.GROUP) },
+                            colors = navItemColors,
+                            icon = {
+                                Icon(
+                                    imageVector = Icons.Filled.Groups,
+                                    contentDescription = stringResource(R.string.tab_group)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(R.string.tab_group),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (currentTab == KamBottomTab.GROUP) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_tab_group")
+                        )
+                        NavigationBarItem(
+                            selected = currentTab == KamBottomTab.SETTINGS,
+                            onClick = { selectTab(KamBottomTab.SETTINGS) },
+                            colors = navItemColors,
+                            icon = {
+                                Icon(
+                                    imageVector = if (currentTab == KamBottomTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
+                                    contentDescription = stringResource(R.string.tab_settings)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(R.string.tab_settings),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (currentTab == KamBottomTab.SETTINGS) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_tab_settings")
+                        )
+                    }
                 }
             }
         ) { innerPadding ->
@@ -896,27 +965,30 @@ private fun RetainedBottomTabContainer(
 }
 
 @Composable
-private fun MessagesNavTabIcon(chatViewModel: ChatViewModel) {
+private fun MessagesNavTabIcon(
+    chatViewModel: ChatViewModel,
+    selected: Boolean
+) {
     val chatState by chatViewModel.chatState.collectAsStateWithLifecycle()
     val badgeText = ChatFormatHelper.formatUnreadBadge(chatState.totalUnreadCount)
     BadgedBox(
         badge = {
             if (badgeText.isNotBlank()) {
                 Badge(
-                    containerColor = Color(0xFFEF4444),
-                    contentColor = Color.White,
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
                     modifier = Modifier.testTag("nav_messages_unread_badge")
                 ) {
                     Text(
                         text = badgeText,
-                        fontWeight = FontWeight.ExtraBold
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
         }
     ) {
         Icon(
-            imageVector = Icons.Default.Email,
+            imageVector = if (selected) Icons.Filled.Email else Icons.Outlined.Email,
             contentDescription = stringResource(R.string.tab_messages)
         )
     }
@@ -974,12 +1046,13 @@ private fun FloatingNotificationsOverlay(
             exit = fadeOut() + slideOutVertically { -it }
         ) {
             val prompt = majorUpdatePrompt
+            val extOverlayColors = LocalKamExtendedColors.current
             if (prompt != null || isDownloadingApk) {
                 Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.98f),
-                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
-                    shadowElevation = 8.dp,
+                    shape = RoundedCornerShape(16.dp),
+                    color = extOverlayColors.elevatedSurface.copy(alpha = 0.97f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                    shadowElevation = if (extOverlayColors.isDark) 0.dp else 4.dp,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("github_major_update_pill")
@@ -1072,11 +1145,12 @@ private fun FloatingNotificationsOverlay(
                 else -> stringResource(R.string.status_online)
             }
 
+            val extOverlayColors = LocalKamExtendedColors.current
             Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                border = BorderStroke(1.5.dp, dotColor),
-                shadowElevation = 8.dp,
+                shape = RoundedCornerShape(999.dp),
+                color = extOverlayColors.elevatedSurface.copy(alpha = 0.96f),
+                border = BorderStroke(1.dp, dotColor.copy(alpha = 0.55f)),
+                shadowElevation = if (extOverlayColors.isDark) 0.dp else 4.dp,
                 modifier = Modifier
                     .clickable(onClick = onDismissConnectivityToast)
                     .testTag("connectivity_status_strip")
@@ -1118,11 +1192,12 @@ private fun FloatingNotificationsOverlay(
             enter = fadeIn() + slideInVertically { -it },
             exit = fadeOut() + slideOutVertically { -it }
         ) {
+            val extOverlayColors = LocalKamExtendedColors.current
             Surface(
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(999.dp),
                 color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.97f),
-                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
-                shadowElevation = 8.dp,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)),
+                shadowElevation = if (extOverlayColors.isDark) 0.dp else 4.dp,
                 modifier = Modifier.testTag("floating_action_banner")
             ) {
                 Row(
@@ -1141,7 +1216,7 @@ private fun FloatingNotificationsOverlay(
                         text = actionBannerMessage.orEmpty(),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1155,11 +1230,12 @@ private fun FloatingNotificationsOverlay(
             enter = fadeIn() + slideInVertically { -it },
             exit = fadeOut() + slideOutVertically { -it }
         ) {
+            val extOverlayColors = LocalKamExtendedColors.current
             Surface(
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.98f),
-                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.error),
-                shadowElevation = 8.dp,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
+                shadowElevation = if (extOverlayColors.isDark) 0.dp else 4.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(

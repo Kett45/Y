@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -70,6 +71,7 @@ import androidx.credentials.exceptions.NoCredentialException
 import com.example.R
 import com.example.data.model.CardType
 import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.LocalKamExtendedColors
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -416,23 +418,25 @@ fun AuthScreen(
                     .padding(vertical = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                val extColors = LocalKamExtendedColors.current
+
                 // App Hero Badge
                 Box(
                     modifier = Modifier
-                        .size(88.dp)
-                        .clip(RoundedCornerShape(26.dp))
+                        .size(84.dp)
+                        .clip(RoundedCornerShape(22.dp))
                         .background(
                             Brush.linearGradient(
                                 listOf(
                                     MaterialTheme.colorScheme.primaryContainer,
-                                    MaterialTheme.colorScheme.secondaryContainer
+                                    MaterialTheme.colorScheme.surfaceVariant
                                 )
                             )
                         )
                         .border(
-                            width = 2.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                            shape = RoundedCornerShape(26.dp)
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(22.dp)
                         ),
                     contentAlignment = Alignment.Center
                 ) {
@@ -440,7 +444,7 @@ fun AuthScreen(
                         imageVector = Icons.Default.Star,
                         contentDescription = "شعار نجم الكارت v1.6",
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(46.dp)
+                        modifier = Modifier.size(42.dp)
                     )
                 }
 
@@ -463,10 +467,11 @@ fun AuthScreen(
                 // Highlights Card
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
+                    shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface
-                    )
+                    ),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
@@ -559,9 +564,9 @@ fun AuthScreen(
                     enabled = !isLoading,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp)
+                        .height(54.dp)
                         .testTag("google_sign_in_button"),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
@@ -640,8 +645,9 @@ private fun MiniCardPreviewPill(
     val cardColor = KamSemanticColors.cardColor(card)
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, cardColor.copy(alpha = 0.35f))
     ) {
         Column(
             modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),

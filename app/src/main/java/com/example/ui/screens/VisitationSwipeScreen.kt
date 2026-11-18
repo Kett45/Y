@@ -83,7 +83,11 @@ import com.example.data.model.ChildNoteType
 import com.example.data.model.Student
 import com.example.data.model.VisitationStatus
 import com.example.ui.components.StudentAvatarImageHelper
+import com.example.ui.theme.KamBackgroundDark
+import com.example.ui.theme.KamPrimaryContainerDark
 import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.KamSurfaceDark
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.viewmodel.KamScreenState
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -196,6 +200,9 @@ fun VisitationSwipeScreen(
         currentIndex = (currentIndex + 1).coerceAtMost(blockStudents.size)
     }
 
+    val extColors = LocalKamExtendedColors.current
+    val visitationAccent = KamSemanticColors.NotificationVisitation
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -214,7 +221,8 @@ fun VisitationSwipeScreen(
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 2.dp,
+                border = BorderStroke(1.dp, extColors.hairline),
+                tonalElevation = 0.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -237,13 +245,13 @@ fun VisitationSwipeScreen(
                                 modifier = Modifier
                                     .size(32.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF8B5CF6).copy(alpha = 0.16f)),
+                                    .background(visitationAccent.copy(alpha = 0.16f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Favorite,
                                     contentDescription = null,
-                                    tint = Color(0xFF8B5CF6),
+                                    tint = visitationAccent,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -271,12 +279,12 @@ fun VisitationSwipeScreen(
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(999.dp),
-                                color = Color(0xFF8B5CF6).copy(alpha = 0.12f)
+                                color = visitationAccent.copy(alpha = 0.12f)
                             ) {
                                 Text(
                                     text = "${blockStudents.size} طفل",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF8B5CF6),
+                                    color = visitationAccent,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
@@ -342,7 +350,7 @@ fun VisitationSwipeScreen(
                                 val isOwnSelected = selectedAdminBlockFilter == "OWN"
                                 Surface(
                                     shape = RoundedCornerShape(999.dp),
-                                    color = if (isOwnSelected) Color(0xFF8B5CF6) else Color(0xFF8B5CF6).copy(alpha = 0.10f),
+                                    color = if (isOwnSelected) visitationAccent else visitationAccent.copy(alpha = 0.10f),
                                     modifier = Modifier.clickable {
                                         selectedAdminBlockFilter = "OWN"
                                         currentIndex = 0
@@ -351,7 +359,7 @@ fun VisitationSwipeScreen(
                                     Text(
                                         text = "بلوكي",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = if (isOwnSelected) Color.White else Color(0xFF8B5CF6),
+                                        color = if (isOwnSelected) Color.White else visitationAccent,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                                     )
@@ -360,7 +368,7 @@ fun VisitationSwipeScreen(
                             val isAllSelected = selectedAdminBlockFilter == "ALL" || (selectedAdminBlockFilter == "OWN" && ownBlocks.isEmpty())
                             Surface(
                                 shape = RoundedCornerShape(999.dp),
-                                color = if (isAllSelected) Color(0xFF8B5CF6) else Color(0xFF8B5CF6).copy(alpha = 0.10f),
+                                color = if (isAllSelected) visitationAccent else visitationAccent.copy(alpha = 0.10f),
                                 modifier = Modifier.clickable {
                                     selectedAdminBlockFilter = "ALL"
                                     currentIndex = 0
@@ -369,7 +377,7 @@ fun VisitationSwipeScreen(
                                 Text(
                                     text = "كل البلوكات",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (isAllSelected) Color.White else Color(0xFF8B5CF6),
+                                    color = if (isAllSelected) Color.White else visitationAccent,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                                 )
@@ -406,10 +414,11 @@ fun VisitationSwipeScreen(
                         .fillMaxWidth()
                         .weight(1f)
                         .testTag("visitation_empty_no_block"),
-                    shape = RoundedCornerShape(22.dp),
+                    shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                    )
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Column(
                         modifier = Modifier
@@ -421,7 +430,7 @@ fun VisitationSwipeScreen(
                         Icon(
                             imageVector = Icons.Default.Favorite,
                             contentDescription = null,
-                            tint = Color(0xFF8B5CF6),
+                            tint = visitationAccent,
                             modifier = Modifier.size(56.dp)
                         )
                         Spacer(modifier = Modifier.height(12.dp))
@@ -447,10 +456,11 @@ fun VisitationSwipeScreen(
                         .fillMaxWidth()
                         .weight(1f)
                         .testTag("visitation_empty_no_students"),
-                    shape = RoundedCornerShape(22.dp),
+                    shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                    )
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Column(
                         modifier = Modifier
@@ -462,7 +472,7 @@ fun VisitationSwipeScreen(
                         Icon(
                             imageVector = Icons.Default.Favorite,
                             contentDescription = null,
-                            tint = Color(0xFF8B5CF6),
+                            tint = visitationAccent,
                             modifier = Modifier.size(56.dp)
                         )
                         Spacer(modifier = Modifier.height(12.dp))
@@ -500,16 +510,16 @@ fun VisitationSwipeScreen(
                     progress = { progress },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(4.dp)
+                        .height(3.dp)
                         .clip(RoundedCornerShape(999.dp)),
-                    color = Color(0xFF8B5CF6)
+                    color = visitationAccent
                 )
 
                 val tintOverlay by animateColorAsState(
                     targetValue = when {
                         offsetX.value > 90f -> KamSemanticColors.onlineIndicator.copy(alpha = 0.28f)
                         offsetX.value < -90f -> KamSemanticColors.offlineIndicator.copy(alpha = 0.28f)
-                        offsetY.value > 90f -> Color(0xFF8B5CF6).copy(alpha = 0.28f)
+                        offsetY.value > 90f -> visitationAccent.copy(alpha = 0.28f)
                         else -> Color.Transparent
                     },
                     animationSpec = tween(120),
@@ -587,11 +597,12 @@ fun VisitationSwipeScreen(
                             )
                         }
                         .testTag("visitation_active_student_card"),
-                    shape = RoundedCornerShape(26.dp),
+                    shape = RoundedCornerShape(22.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF14121E)
+                        containerColor = KamSurfaceDark
                     ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+                    border = BorderStroke(1.dp, extColors.hairline),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         // 1. Full-screen edge-to-edge child photo filling 100% of the card
@@ -612,8 +623,8 @@ fun VisitationSwipeScreen(
                                         Brush.verticalGradient(
                                             colors = listOf(
                                                 studentBlockColor.copy(alpha = 0.85f),
-                                                Color(0xFF2D1B4E),
-                                                Color(0xFF12101B)
+                                                KamPrimaryContainerDark,
+                                                KamBackgroundDark
                                             )
                                         )
                                     ),
@@ -681,7 +692,7 @@ fun VisitationSwipeScreen(
                         val swipeStamp = when {
                             offsetX.value > 95f -> Triple("تم افتقاده ✓", KamSemanticColors.onlineIndicator, true)
                             offsetX.value < -95f -> Triple("محتاج متابعة 🔔", KamSemanticColors.offlineIndicator, true)
-                            offsetY.value > 95f -> Triple("ملاحظة افتقاد 📝", Color(0xFF8B5CF6), true)
+                            offsetY.value > 95f -> Triple("ملاحظة افتقاد 📝", visitationAccent, true)
                             else -> Triple("", Color.Transparent, false)
                         }
                         if (swipeStamp.third) {
@@ -792,7 +803,7 @@ fun VisitationSwipeScreen(
                                         Text(
                                             text = "آخر افتقاد مسجل:",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = Color(0xFFD8B4FE),
+                                            color = extColors.notifyVisitation,
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
@@ -905,10 +916,11 @@ fun VisitationSwipeScreen(
                         .fillMaxWidth()
                         .weight(1f)
                         .testTag("visitation_session_summary_card"),
-                    shape = RoundedCornerShape(22.dp),
+                    shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface
-                    )
+                    ),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Column(
                         modifier = Modifier

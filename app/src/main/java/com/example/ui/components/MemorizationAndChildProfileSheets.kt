@@ -67,6 +67,7 @@ import com.example.data.model.ChildNoteType
 import com.example.data.model.ServantBlock
 import com.example.data.model.Student
 import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.LocalKamExtendedColors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -89,15 +90,17 @@ fun MemorizationNotesSheet(
     var awardCardChecked by rememberSaveable(student.id) { mutableStateOf(!alreadyHasMemorizationCardThisWeek) }
     val timeFormatter = remember { SimpleDateFormat("dd/MM hh:mm a", Locale.getDefault()) }
     val memColor = KamSemanticColors.NotificationMemorization
+    val extColors = LocalKamExtendedColors.current
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(22.dp),
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
+            border = BorderStroke(1.dp, extColors.hairline),
+            tonalElevation = 0.dp,
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.88f)
@@ -108,7 +111,7 @@ fun MemorizationNotesSheet(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(memColor.copy(alpha = 0.16f))
+                        .background(memColor.copy(alpha = 0.12f))
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -156,9 +159,9 @@ fun MemorizationNotesSheet(
                     // Highlight Card: "آخر حاجة سمّعها الطفل"
                     item(key = "last_memorized_highlight") {
                         Surface(
-                            color = memColor.copy(alpha = 0.14f),
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(1.5.dp, memColor),
+                            color = memColor.copy(alpha = 0.11f),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, memColor.copy(alpha = 0.55f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(
@@ -422,15 +425,17 @@ fun ChildProfileFullSheet(
         KamSemanticColors.unassignedBlock
     }
     val blockLabel = ownerBlock?.let { "بلوك ${resolvedServantName(it)}" } ?: "بدون بلوك"
+    val extColors = LocalKamExtendedColors.current
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(22.dp),
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
+            border = BorderStroke(1.dp, extColors.hairline),
+            tonalElevation = 0.dp,
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.92f)
@@ -441,7 +446,7 @@ fun ChildProfileFullSheet(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(blockAccent.copy(alpha = 0.2f))
+                        .background(blockAccent.copy(alpha = 0.14f))
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically

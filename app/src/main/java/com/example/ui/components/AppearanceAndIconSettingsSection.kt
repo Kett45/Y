@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,8 +54,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.KamAppThemePreset
 import com.example.ui.theme.KamLauncherIconPreset
+import com.example.ui.theme.KamTextPrimaryDark
+import com.example.ui.theme.KamTextPrimaryLight
 import com.example.ui.theme.LocalAppAppearanceController
 import com.example.ui.theme.LocalIsTabActive
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.theme.UiScaleMode
 import kotlin.math.roundToInt
@@ -72,10 +76,13 @@ fun AppearanceSettingsEntryCard(
     val currentTheme = appearanceController.selectedTheme
     val currentPercent = uiScaleController.effectiveScalePercent
 
+    val extColors = LocalKamExtendedColors.current
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+            .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onOpenAppearanceScreen)
             .padding(16.dp)
             .testTag("appearance_settings_entry_card"),
@@ -229,11 +236,13 @@ fun AppearanceFullScreen(
 
         // Section 1: Themes (السمات — داكن وفاتح للشمس فقط)
         item(key = "appearance_themes_card") {
+            val extColors = LocalKamExtendedColors.current
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("theme_settings_card"),
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, extColors.hairline),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(
@@ -276,11 +285,13 @@ fun AppearanceFullScreen(
 
         // Section 2: UI & Font Scale + Floating Add Button
         item(key = "appearance_ui_scale_card") {
+            val extColors = LocalKamExtendedColors.current
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("ui_scale_settings_card"),
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, extColors.hairline),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(
@@ -460,11 +471,13 @@ fun AppearanceFullScreen(
         // Section 3: App Icon (أيقونة النجمة الوحيدة المعتمدة)
         item(key = "appearance_star_icon_card") {
             val starPreset = KamLauncherIconPreset.BETHLEHEM_STAR
+            val extColors = LocalKamExtendedColors.current
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("launcher_icon_settings_card"),
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, extColors.hairline),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(
@@ -492,12 +505,12 @@ fun AppearanceFullScreen(
                         }
                     }
 
-                    HorizontalDivider()
+                    HorizontalDivider(color = extColors.hairline)
 
                     Surface(
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(14.dp),
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
-                        border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary),
+                        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("icon_preset_${starPreset.id}")
@@ -549,22 +562,23 @@ private fun ThemeOptionRowCard(
     selected: Boolean,
     onClick: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     val bgColor = Color(preset.previewBackgroundHex)
     val surfaceColor = Color(preset.previewSurfaceHex)
     val primaryColor = Color(preset.previewPrimaryHex)
     val secondaryColor = Color(preset.previewSecondaryHex)
-    val previewTextColor = if (preset.isDark) Color(0xFFF8FAFC) else Color(0xFF090D16)
+    val previewTextColor = if (preset.isDark) KamTextPrimaryDark else KamTextPrimaryLight
 
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         color = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.70f)
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)
         } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.60f)
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
         },
         border = BorderStroke(
-            width = if (selected) 2.dp else 1.dp,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+            width = if (selected) 1.5.dp else 1.dp,
+            color = if (selected) MaterialTheme.colorScheme.primary else extColors.hairline
         ),
         modifier = Modifier
             .fillMaxWidth()

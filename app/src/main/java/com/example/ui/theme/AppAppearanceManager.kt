@@ -5,6 +5,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -17,11 +18,9 @@ import kotlinx.coroutines.launch
 
 /**
  * Modular, extensible theme definition (`KamThemePaletteSpec`).
- * To add any new theme in the future, simply add a new entry to [KamAppThemePreset] with its palette colors.
- * Currently provides the 2 approved themes requested by the user:
- * 1. DARK (داكن): The signature Royal Dark Navy + Gold/Teal palette.
- * 2. LIGHT (فاتح - للشمس والإضاءة القوية): Pure white background (#FFFFFF), pitch-black text (#090D16),
- *    and deep Navy & Gold high-contrast buttons for effortless outdoor/sunlight readability.
+ * Unified Mercury × Linear identity across Dark (default) and Light (high-contrast daylight):
+ * 1. DARK (داكن): Nocturnal obsidian-indigo surface ladder (#07080D -> #1D202E) with indigo primary (#5E6AD2).
+ * 2. LIGHT (فاتح - للشمس والإضاءة القوية): Architectural white (#FBFCFD) + lavender tint (#F3F4FC) + deep indigo ink (#1C1A30).
  */
 enum class KamAppThemePreset(
     val id: String,
@@ -36,23 +35,23 @@ enum class KamAppThemePreset(
 ) {
     DARK(
         id = "DARK",
-        titleArabic = "داكن (الافتراضي)",
-        subtitleArabic = "خلفية كحلية داكنة مع لمسات ذهبية مريحة للعين",
+        titleArabic = "ليلي أنيق (الافتراضي)",
+        subtitleArabic = "سطوح داكنة متدرجة بهوية نيلية هادئة وحدود دقيقة",
         isDark = true,
-        previewBackgroundHex = 0xFF0B1120,
-        previewSurfaceHex = 0xFF111827,
-        previewPrimaryHex = 0xFFF59E0B,
-        previewSecondaryHex = 0xFF14B8A6
+        previewBackgroundHex = 0xFF07080D,
+        previewSurfaceHex = 0xFF0F1017,
+        previewPrimaryHex = 0xFF5E6AD2,
+        previewSecondaryHex = 0xFF9CB4E8
     ),
     LIGHT(
         id = "LIGHT",
-        titleArabic = "فاتح (للشمس والإضاءة القوية)",
-        subtitleArabic = "خلفية بيضاء نقية ونصوص سوداء وأزرار كحلية وذهبية عالية التباين",
+        titleArabic = "نهاري ناصع (للإضاءة القوية)",
+        subtitleArabic = "خلفية بيضاء معمارية بمسحة لافندر وحبر داكن عالي التباين",
         isDark = false,
-        previewBackgroundHex = 0xFFFFFFFF,
-        previewSurfaceHex = 0xFFF8FAFC,
-        previewPrimaryHex = 0xFF0F2942,
-        previewSecondaryHex = 0xFFB45309
+        previewBackgroundHex = 0xFFFBFCFD,
+        previewSurfaceHex = 0xFFFFFFFF,
+        previewPrimaryHex = 0xFF4B5CE5,
+        previewSecondaryHex = 0xFF554E7B
     );
 
     companion object {
@@ -84,12 +83,12 @@ enum class KamLauncherIconPreset(
     BETHLEHEM_STAR(
         id = "BETHLEHEM_STAR",
         aliasClassName = "com.example.MainActivity",
-        titleArabic = "نجمة الكارت الذهبية",
-        subtitleArabic = "أيقونة النجمة الثمانية الذهبية المعتمدة للتطبيق",
+        titleArabic = "نجمة الكارت",
+        subtitleArabic = "أيقونة النجمة الثمانية المعتمدة للتطبيق",
         isLiveIcon = false,
-        previewBgStartHex = 0xFF0B1528,
-        previewBgEndHex = 0xFF1D3557,
-        previewAccentHex = 0xFFFBBF24
+        previewBgStartHex = 0xFF07080D,
+        previewBgEndHex = 0xFF1E2347,
+        previewAccentHex = 0xFFEAB34B
     );
 
     companion object {
@@ -99,9 +98,46 @@ enum class KamLauncherIconPreset(
     }
 }
 
+@Immutable
+data class KamExtendedColors(
+    val isDark: Boolean,
+    val elevatedSurface: Color,
+    val hairline: Color,
+    val hairlineStrong: Color,
+    val mutedText: Color,
+    val onlineGreen: Color,
+    val offlineAmber: Color,
+    val rankGold: Color,
+    val rankSilver: Color,
+    val rankBronze: Color,
+    val unassignedBlock: Color,
+    val blockBlue: Color,
+    val blockEmerald: Color,
+    val blockViolet: Color,
+    val blockAmber: Color,
+    val blockRose: Color,
+    val blockCyan: Color,
+    val blockOrange: Color,
+    val cardAttendance: Color,
+    val cardQuiet: Color,
+    val cardParticipation: Color,
+    val cardPraise: Color,
+    val cardGold: Color,
+    val cardMemorization: Color,
+    val cardConfession: Color,
+    val notifyConflict: Color,
+    val notifyAbsent: Color,
+    val notifyComment: Color,
+    val notifyVisitation: Color,
+    val notifyMemorization: Color,
+    val notifyCardPositive: Color,
+    val notifyGeneralSystem: Color
+)
+
 data class ResolvedKamAppearance(
     val colorScheme: ColorScheme,
-    val elevatedSurfaceColor: Color
+    val elevatedSurfaceColor: Color,
+    val extendedColors: KamExtendedColors
 )
 
 @Composable
@@ -111,61 +147,144 @@ fun rememberResolvedKamAppearance(preset: KamAppThemePreset): ResolvedKamAppeara
     }
 }
 
+internal fun buildDarkExtendedColors(): KamExtendedColors = KamExtendedColors(
+    isDark = true,
+    elevatedSurface = KamSurfaceElevatedDark,
+    hairline = KamBorderDark,
+    hairlineStrong = KamBorderStrongDark,
+    mutedText = KamTextMutedDark,
+    onlineGreen = KamOnlineGreenDark,
+    offlineAmber = KamOfflineAmberDark,
+    rankGold = KamRankGoldDark,
+    rankSilver = KamRankSilverDark,
+    rankBronze = KamRankBronzeDark,
+    unassignedBlock = BlockUnassignedDark,
+    blockBlue = BlockBlueDark,
+    blockEmerald = BlockEmeraldDark,
+    blockViolet = BlockVioletDark,
+    blockAmber = BlockAmberDark,
+    blockRose = BlockRoseDark,
+    blockCyan = BlockCyanDark,
+    blockOrange = BlockOrangeDark,
+    cardAttendance = CardAttendanceDark,
+    cardQuiet = CardQuietDark,
+    cardParticipation = CardParticipationDark,
+    cardPraise = CardPraiseDark,
+    cardGold = CardGoldDark,
+    cardMemorization = CardMemorizationDark,
+    cardConfession = CardConfessionDark,
+    notifyConflict = NotifyConflictOrange,
+    notifyAbsent = NotifyAbsentRed,
+    notifyComment = NotifyCommentSky,
+    notifyVisitation = NotifyVisitationPurple,
+    notifyMemorization = NotifyMemorizationTeal,
+    notifyCardPositive = NotifyCardGreen,
+    notifyGeneralSystem = NotifySystemIndigo
+)
+
+internal fun buildLightExtendedColors(): KamExtendedColors = KamExtendedColors(
+    isDark = false,
+    elevatedSurface = KamSurfaceElevatedLight,
+    hairline = KamBorderLight,
+    hairlineStrong = KamBorderStrongLight,
+    mutedText = KamTextMutedLight,
+    onlineGreen = KamOnlineGreenLight,
+    offlineAmber = KamOfflineAmberLight,
+    rankGold = KamRankGoldLight,
+    rankSilver = KamRankSilverLight,
+    rankBronze = KamRankBronzeLight,
+    unassignedBlock = BlockUnassignedLight,
+    blockBlue = BlockBlueLight,
+    blockEmerald = BlockEmeraldLight,
+    blockViolet = BlockVioletLight,
+    blockAmber = BlockAmberLight,
+    blockRose = BlockRoseLight,
+    blockCyan = BlockCyanLight,
+    blockOrange = BlockOrangeLight,
+    cardAttendance = CardAttendanceLight,
+    cardQuiet = CardQuietLight,
+    cardParticipation = CardParticipationLight,
+    cardPraise = CardPraiseLight,
+    cardGold = CardGoldLight,
+    cardMemorization = CardMemorizationLight,
+    cardConfession = CardConfessionLight,
+    notifyConflict = NotifyConflictOrangeLight,
+    notifyAbsent = NotifyAbsentRedLight,
+    notifyComment = NotifyCommentSkyLight,
+    notifyVisitation = NotifyVisitationPurpleLight,
+    notifyMemorization = NotifyMemorizationTealLight,
+    notifyCardPositive = NotifyCardGreenLight,
+    notifyGeneralSystem = NotifySystemIndigoLight
+)
+
 internal fun buildPaletteForPreset(preset: KamAppThemePreset): ResolvedKamAppearance {
     return when (preset) {
         KamAppThemePreset.DARK -> ResolvedKamAppearance(
             colorScheme = darkColorScheme(
-                primary = KamPrimaryGold,
+                primary = KamPrimaryIndigoDark,
                 onPrimary = KamOnPrimaryDark,
                 primaryContainer = KamPrimaryContainerDark,
-                onPrimaryContainer = KamOnPrimaryContainerGold,
-                secondary = KamSecondaryTeal,
+                onPrimaryContainer = KamOnPrimaryContainerDark,
+                secondary = KamSecondaryPeriwinkleDark,
                 onSecondary = KamOnSecondaryDark,
                 secondaryContainer = KamSecondaryContainerDark,
-                onSecondaryContainer = KamOnSecondaryContainerTeal,
-                tertiary = KamTertiarySky,
+                onSecondaryContainer = KamOnSecondaryContainerDark,
+                tertiary = KamTertiarySkyDark,
+                onTertiary = KamOnPrimaryDark,
                 background = KamBackgroundDark,
-                onBackground = KamTextPrimary,
+                onBackground = KamTextPrimaryDark,
                 surface = KamSurfaceDark,
-                onSurface = KamTextPrimary,
+                onSurface = KamTextPrimaryDark,
                 surfaceVariant = KamSurfaceVariantDark,
-                onSurfaceVariant = KamTextSecondary,
+                onSurfaceVariant = KamTextSecondaryDark,
+                surfaceContainerLowest = KamBackgroundDark,
+                surfaceContainerLow = KamSurfaceDark,
+                surfaceContainer = KamSurfaceDark,
+                surfaceContainerHigh = KamSurfaceVariantDark,
+                surfaceContainerHighest = KamSurfaceElevatedDark,
                 outline = KamBorderDark,
-                error = KamErrorRed,
+                outlineVariant = KamBorderDark,
+                error = KamErrorRedDark,
                 onError = Color.White,
                 errorContainer = KamErrorContainerDark,
-                onErrorContainer = KamOnErrorContainer
+                onErrorContainer = KamOnErrorContainerDark
             ),
-            elevatedSurfaceColor = KamSurfaceElevatedDark
+            elevatedSurfaceColor = KamSurfaceElevatedDark,
+            extendedColors = buildDarkExtendedColors()
         )
 
         KamAppThemePreset.LIGHT -> ResolvedKamAppearance(
-            // High-Contrast Sunlight Palette:
-            // Pure White (#FFFFFF) background, crisp slate cards (#F8FAFC) with visible borders (#94A3B8),
-            // Pitch-black text (#090D16), Deep Royal Navy primary buttons (#0F2942) & Rich Gold accents (#B45309)
             colorScheme = lightColorScheme(
-                primary = Color(0xFF0F2942),
-                onPrimary = Color(0xFFFFFFFF),
-                primaryContainer = Color(0xFFFEF3C7),
-                onPrimaryContainer = Color(0xFF090D16),
-                secondary = Color(0xFFB45309),
-                onSecondary = Color(0xFFFFFFFF),
-                secondaryContainer = Color(0xFFE0F2FE),
-                onSecondaryContainer = Color(0xFF082F49),
-                tertiary = Color(0xFF0369A1),
-                background = Color(0xFFFFFFFF),
-                onBackground = Color(0xFF090D16),
-                surface = Color(0xFFF8FAFC),
-                onSurface = Color(0xFF090D16),
-                surfaceVariant = Color(0xFFE2E8F0),
-                onSurfaceVariant = Color(0xFF1E293B),
-                outline = Color(0xFF64748B),
-                error = Color(0xFFB91C1C),
-                onError = Color(0xFFFFFFFF),
-                errorContainer = Color(0xFFFEE2E2),
-                onErrorContainer = Color(0xFF7F1D1D)
+                primary = KamPrimaryIndigoLight,
+                onPrimary = KamOnPrimaryLight,
+                primaryContainer = KamPrimaryContainerLight,
+                onPrimaryContainer = KamOnPrimaryContainerLight,
+                secondary = KamSecondaryInkLight,
+                onSecondary = KamOnSecondaryLight,
+                secondaryContainer = KamSecondaryContainerLight,
+                onSecondaryContainer = KamOnSecondaryContainerLight,
+                tertiary = KamTertiarySkyLight,
+                onTertiary = Color.White,
+                background = KamBackgroundLight,
+                onBackground = KamTextPrimaryLight,
+                surface = KamSurfaceLight,
+                onSurface = KamTextPrimaryLight,
+                surfaceVariant = KamSurfaceVariantLight,
+                onSurfaceVariant = KamTextSecondaryLight,
+                surfaceContainerLowest = KamSurfaceLight,
+                surfaceContainerLow = KamBackgroundLight,
+                surfaceContainer = KamSurfaceLight,
+                surfaceContainerHigh = KamSurfaceVariantLight,
+                surfaceContainerHighest = KamSurfaceElevatedLight,
+                outline = KamBorderLight,
+                outlineVariant = KamBorderLight,
+                error = KamErrorRedLight,
+                onError = Color.White,
+                errorContainer = KamErrorContainerLight,
+                onErrorContainer = KamOnErrorContainerLight
             ),
-            elevatedSurfaceColor = Color(0xFFE2E8F0)
+            elevatedSurfaceColor = KamSurfaceElevatedLight,
+            extendedColors = buildLightExtendedColors()
         )
     }
 }

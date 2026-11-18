@@ -78,6 +78,7 @@ import com.example.data.model.ServantBlock
 import com.example.data.model.Student
 import com.example.ui.components.StudentAvatarCircle
 import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.viewmodel.KamScreenState
 import com.example.ui.viewmodel.KamViewModel
 import com.example.ui.viewmodel.StudentCardTypeBreakdown
@@ -266,6 +267,8 @@ fun FullClassLeaderboardScreen(
         )
     }
 
+    val extColors = LocalKamExtendedColors.current
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -275,7 +278,7 @@ fun FullClassLeaderboardScreen(
         // --- 1. Compact Top Header Bar (Title + Calendar Tree Button + Small Reset Button) ---
         Surface(
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 2.dp,
+            tonalElevation = 0.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -308,7 +311,7 @@ fun FullClassLeaderboardScreen(
                     Icon(
                         imageVector = Icons.Default.EmojiEvents,
                         contentDescription = null,
-                        tint = Color(0xFFF59E0B),
+                        tint = extColors.rankGold,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(5.dp))
@@ -390,6 +393,7 @@ fun FullClassLeaderboardScreen(
                 }
             }
         }
+        HorizontalDivider(thickness = 1.dp, color = extColors.hairline)
 
         if (isFetchingHistoricalRange) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
@@ -509,10 +513,11 @@ private fun CompactLeaderboardSearchBar(
     query: String,
     onQueryChange: (String) -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     Surface(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+        border = BorderStroke(1.dp, extColors.hairline),
         modifier = Modifier
             .fillMaxWidth()
             .height(38.dp)
@@ -576,12 +581,13 @@ private fun BlockFilterChip(
     accentColor: Color,
     onClick: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = if (selected) accentColor.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surface,
+        color = if (selected) accentColor.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface,
         border = BorderStroke(
             width = if (selected) 1.5.dp else 1.dp,
-            color = if (selected) accentColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+            color = if (selected) accentColor else extColors.hairline
         ),
         modifier = Modifier.clickable(onClick = onClick)
     ) {
@@ -605,6 +611,7 @@ private fun ClassroomHealthSummaryCard(
     activeSortFilter: LeaderboardSortFilter,
     onSelectSortFilter: (LeaderboardSortFilter) -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -621,7 +628,7 @@ private fun ClassroomHealthSummaryCard(
         SummaryStatPill(
             title = "متفاعلين",
             value = "$activeStudents",
-            accentColor = Color(0xFF10B981),
+            accentColor = extColors.onlineGreen,
             isSelected = activeSortFilter == LeaderboardSortFilter.ACTIVE_ONLY,
             onClick = { onSelectSortFilter(LeaderboardSortFilter.ACTIVE_ONLY) },
             testTag = "leaderboard_filter_ACTIVE_ONLY",
@@ -630,7 +637,7 @@ private fun ClassroomHealthSummaryCard(
         SummaryStatPill(
             title = "غائبين",
             value = "$absentStudents",
-            accentColor = Color(0xFFEF4444),
+            accentColor = MaterialTheme.colorScheme.error,
             isSelected = activeSortFilter == LeaderboardSortFilter.ABSENT_ZERO_ATTENDANCE,
             onClick = { onSelectSortFilter(LeaderboardSortFilter.ABSENT_ZERO_ATTENDANCE) },
             testTag = "leaderboard_filter_ABSENT_ZERO_ATTENDANCE",
@@ -639,7 +646,7 @@ private fun ClassroomHealthSummaryCard(
         SummaryStatPill(
             title = "ضعفاء",
             value = "$zeroPointStudents",
-            accentColor = Color(0xFFF59E0B),
+            accentColor = extColors.offlineAmber,
             isSelected = activeSortFilter == LeaderboardSortFilter.WEAKEST_FIRST,
             onClick = { onSelectSortFilter(LeaderboardSortFilter.WEAKEST_FIRST) },
             testTag = "leaderboard_filter_WEAKEST_FIRST",
@@ -703,6 +710,7 @@ private fun StudentDetailedRankCard(
     ownerBlock: ServantBlock?,
     onClick: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     val student = entry.student
     val blockAccent = if (ownerBlock != null) {
         KamSemanticColors.blockColor(ownerBlock.colorHex)
@@ -714,10 +722,10 @@ private fun StudentDetailedRankCard(
     val isZeroPoints = entry.totalPoints == 0L
 
     val rankColor = when (entry.rank) {
-        1 -> Color(0xFFF59E0B) // Gold
-        2 -> Color(0xFF94A3B8) // Silver
-        3 -> Color(0xFFD97706) // Bronze
-        else -> if (isZeroPoints) Color(0xFFEF4444) else MaterialTheme.colorScheme.primary
+        1 -> extColors.rankGold
+        2 -> extColors.rankSilver
+        3 -> extColors.rankBronze
+        else -> if (isZeroPoints) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     }
 
     val rankBadgeText = when (entry.rank) {
@@ -737,8 +745,8 @@ private fun StudentDetailedRankCard(
         border = BorderStroke(
             width = if (entry.rank <= 3 && entry.totalPoints > 0L) 1.5.dp else 1.dp,
             color = when {
-                entry.rank == 1 && entry.totalPoints > 0L -> Color(0xFFF59E0B).copy(alpha = 0.75f)
-                isAbsent -> Color(0xFFEF4444).copy(alpha = 0.45f)
+                entry.rank == 1 && entry.totalPoints > 0L -> extColors.rankGold.copy(alpha = 0.72f)
+                isAbsent -> MaterialTheme.colorScheme.error.copy(alpha = 0.45f)
                 else -> blockAccent.copy(alpha = 0.35f)
             }
         )
@@ -828,13 +836,13 @@ private fun StudentDetailedRankCard(
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = if (isZeroPoints) {
-                        Color(0xFFEF4444).copy(alpha = 0.16f)
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.14f)
                     } else {
-                        Color(0xFFF59E0B).copy(alpha = 0.20f)
+                        extColors.rankGold.copy(alpha = 0.16f)
                     },
                     border = BorderStroke(
                         width = 1.dp,
-                        color = if (isZeroPoints) Color(0xFFEF4444) else Color(0xFFF59E0B)
+                        color = if (isZeroPoints) MaterialTheme.colorScheme.error else extColors.rankGold
                     )
                 ) {
                     Column(
@@ -844,7 +852,7 @@ private fun StudentDetailedRankCard(
                         Text(
                             text = "${entry.totalPoints} نقطة",
                             style = MaterialTheme.typography.labelLarge,
-                            color = if (isZeroPoints) Color(0xFFEF4444) else Color(0xFFF59E0B),
+                            color = if (isZeroPoints) MaterialTheme.colorScheme.error else extColors.rankGold,
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
@@ -856,7 +864,7 @@ private fun StudentDetailedRankCard(
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            HorizontalDivider(color = extColors.hairline)
 
             // Bottom Section: Detailed Points & Count for Every Card Type
             FlowRow(
@@ -874,22 +882,23 @@ private fun StudentDetailedRankCard(
 
 @Composable
 private fun CardBreakdownChip(item: StudentCardTypeBreakdown) {
+    val extColors = LocalKamExtendedColors.current
     val cardColor = KamSemanticColors.cardColor(item.cardType)
     val isAttendanceZero = item.cardType == CardType.ATTENDANCE && item.count == 0
     val hasPoints = item.points > 0L
 
     val containerColor = when {
-        isAttendanceZero -> Color(0xFFEF4444).copy(alpha = 0.14f)
+        isAttendanceZero -> MaterialTheme.colorScheme.error.copy(alpha = 0.14f)
         hasPoints -> cardColor.copy(alpha = 0.16f)
         else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
     }
     val borderColor = when {
-        isAttendanceZero -> Color(0xFFEF4444).copy(alpha = 0.65f)
-        hasPoints -> cardColor.copy(alpha = 0.65f)
-        else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+        isAttendanceZero -> MaterialTheme.colorScheme.error.copy(alpha = 0.6f)
+        hasPoints -> cardColor.copy(alpha = 0.6f)
+        else -> extColors.hairline
     }
     val textColor = when {
-        isAttendanceZero -> Color(0xFFEF4444)
+        isAttendanceZero -> MaterialTheme.colorScheme.error
         hasPoints -> cardColor
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -1063,6 +1072,7 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
 
                 HorizontalDivider()
 
+                val extColors = LocalKamExtendedColors.current
                 // Year and Month Cards
                 availableYears.forEach { year ->
                     val yearTree = yearTrees[year] ?: return@forEach
@@ -1072,8 +1082,9 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        )
+                            containerColor = extColors.elevatedSurface
+                        ),
+                        border = BorderStroke(1.dp, extColors.hairline)
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             // Year Header Row
@@ -1124,7 +1135,7 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
                                                 color = when {
                                                     isFullySelected -> MaterialTheme.colorScheme.primary
                                                     isPartiallySelected -> MaterialTheme.colorScheme.secondary
-                                                    else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                                                    else -> extColors.hairline
                                                 }
                                             ),
                                             modifier = Modifier.fillMaxWidth()

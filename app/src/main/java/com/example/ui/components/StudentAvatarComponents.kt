@@ -131,6 +131,18 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.example.data.model.Student
+import com.example.ui.theme.KamBackgroundDark
+import com.example.ui.theme.KamBorderDark
+import com.example.ui.theme.KamCropCanvasDark
+import com.example.ui.theme.KamCropPanelDark
+import com.example.ui.theme.KamOnlineGreenDark
+import com.example.ui.theme.KamPrimaryIndigoDark
+import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.KamSurfaceVariantDark
+import com.example.ui.theme.KamTertiarySkyDark
+import com.example.ui.theme.KamTextPrimaryDark
+import com.example.ui.theme.KamTextSecondaryDark
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.util.KamPerformanceTracker
 import android.os.SystemClock
 import kotlinx.coroutines.Dispatchers
@@ -1718,9 +1730,9 @@ private fun StudentHoldQuickPeekOverlayContent(
                 ),
             shape = RoundedCornerShape(22.dp),
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 10.dp,
-            shadowElevation = 20.dp,
-            border = BorderStroke(1.5.dp, blockAccent)
+            tonalElevation = 0.dp,
+            shadowElevation = if (KamSemanticColors.isDark) 0.dp else 12.dp,
+            border = BorderStroke(1.dp, blockAccent.copy(alpha = 0.7f))
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -1732,7 +1744,7 @@ private fun StudentHoldQuickPeekOverlayContent(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
-                            .background(Color(0xFF0B1120)),
+                            .background(KamBackgroundDark),
                         contentAlignment = Alignment.Center
                     ) {
                         Image(
@@ -2169,13 +2181,14 @@ fun StudentPhotoPickerDialog(
                 statusBannerMessage?.let { msg ->
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF065F46),
+                        color = KamSemanticColors.onlineIndicator.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, KamSemanticColors.onlineIndicator.copy(alpha = 0.45f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             text = msg,
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White,
+                            color = KamSemanticColors.onlineIndicator,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
                         )
@@ -2354,10 +2367,10 @@ fun FacebookStyleProfilePhotoEditorDialog(
         Surface(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF060911))
+                .background(KamCropCanvasDark)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .testTag("interactive_photo_cropper_section"),
-            color = Color(0xFF060911)
+            color = KamCropCanvasDark
         ) {
             Column(
                 modifier = Modifier.fillMaxSize(),
@@ -2367,7 +2380,7 @@ fun FacebookStyleProfilePhotoEditorDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFF0F172A))
+                        .background(KamCropPanelDark)
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -2383,7 +2396,7 @@ fun FacebookStyleProfilePhotoEditorDialog(
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "إغلاق",
-                                tint = Color.White
+                                tint = KamTextPrimaryDark
                             )
                         }
                         Spacer(modifier = Modifier.width(6.dp))
@@ -2391,13 +2404,13 @@ fun FacebookStyleProfilePhotoEditorDialog(
                             Text(
                                 text = "ضبط صورة البروفايل: $studentName",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
+                                color = KamTextPrimaryDark,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = "اسحب الصورة بإصبعك على الوجه • الصورة تُحفظ كاملة بدون قص",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF94A3B8)
+                                color = KamTextSecondaryDark
                             )
                         }
                     }
@@ -2408,7 +2421,7 @@ fun FacebookStyleProfilePhotoEditorDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .background(Color(0xFF060911))
+                        .background(KamCropCanvasDark)
                         .onSizeChanged { canvasSize = it }
                         .pointerInput(rotatedBitmap) {
                             detectTransformGestures { _, pan, gestureZoom, _ ->
@@ -2476,7 +2489,7 @@ fun FacebookStyleProfilePhotoEditorDialog(
                         }
                         drawPath(
                             path = maskPath,
-                            color = Color(0xFF060911).copy(alpha = 0.68f)
+                            color = KamCropCanvasDark.copy(alpha = 0.72f)
                         )
 
                         // Rule-of-thirds alignment lines inside the circle
@@ -2515,7 +2528,7 @@ fun FacebookStyleProfilePhotoEditorDialog(
                             style = Stroke(width = 2.5.dp.toPx())
                         )
                         drawCircle(
-                            color = Color(0xFFF59E0B),
+                            color = KamPrimaryIndigoDark,
                             radius = radius + 3.dp.toPx(),
                             center = Offset(centerX, centerY),
                             style = Stroke(
@@ -2527,9 +2540,9 @@ fun FacebookStyleProfilePhotoEditorDialog(
 
                     // Helper badge at top of canvas
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = Color(0xFF0F172A).copy(alpha = 0.85f),
-                        border = BorderStroke(1.dp, Color(0xFF334155)),
+                        shape = RoundedCornerShape(999.dp),
+                        color = KamCropPanelDark.copy(alpha = 0.90f),
+                        border = BorderStroke(1.dp, KamBorderDark),
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .padding(top = 12.dp)
@@ -2537,7 +2550,7 @@ fun FacebookStyleProfilePhotoEditorDialog(
                         Text(
                             text = "ما داخل الدائرة يظهر في البروفايل • الصورة كاملة تُحفظ في الألبوم",
                             style = MaterialTheme.typography.labelMedium,
-                            color = Color(0xFFF8FAFC),
+                            color = KamTextPrimaryDark,
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                         )
                     }
@@ -2547,7 +2560,7 @@ fun FacebookStyleProfilePhotoEditorDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFF0F172A))
+                        .background(KamCropPanelDark)
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -2561,12 +2574,12 @@ fun FacebookStyleProfilePhotoEditorDialog(
                         Text(
                             text = "حجم الصورة داخل الدائرة (تكبير / تصغير):",
                             style = MaterialTheme.typography.labelMedium,
-                            color = Color(0xFFE2E8F0)
+                            color = KamTextSecondaryDark
                         )
                         Text(
                             text = "$zoomPercent%",
                             style = MaterialTheme.typography.labelLarge,
-                            color = Color(0xFFF59E0B),
+                            color = KamPrimaryIndigoDark,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -2581,13 +2594,13 @@ fun FacebookStyleProfilePhotoEditorDialog(
                             modifier = Modifier
                                 .size(38.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF1E293B))
+                                .background(KamSurfaceVariantDark)
                                 .testTag("photo_crop_zoom_out_button")
                         ) {
                             Text(
                                 text = "−",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
+                                color = KamTextPrimaryDark,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -2599,9 +2612,9 @@ fun FacebookStyleProfilePhotoEditorDialog(
                             },
                             valueRange = 0.35f..4.0f,
                             colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFFF59E0B),
-                                activeTrackColor = Color(0xFFF59E0B),
-                                inactiveTrackColor = Color(0xFF334155)
+                                thumbColor = KamPrimaryIndigoDark,
+                                activeTrackColor = KamPrimaryIndigoDark,
+                                inactiveTrackColor = KamBorderDark
                             ),
                             modifier = Modifier
                                 .weight(1f)
@@ -2613,13 +2626,13 @@ fun FacebookStyleProfilePhotoEditorDialog(
                             modifier = Modifier
                                 .size(38.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF1E293B))
+                                .background(KamSurfaceVariantDark)
                                 .testTag("photo_crop_zoom_in_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Add,
                                 contentDescription = "تكبير",
-                                tint = Color.White,
+                                tint = KamTextPrimaryDark,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -2636,8 +2649,8 @@ fun FacebookStyleProfilePhotoEditorDialog(
                                 panXFraction = 0f
                                 panYFraction = 0f
                             },
-                            border = BorderStroke(1.dp, Color(0xFF38BDF8)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8)),
+                            border = BorderStroke(1.dp, KamTertiarySkyDark),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = KamTertiarySkyDark),
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                             modifier = Modifier
@@ -2655,8 +2668,8 @@ fun FacebookStyleProfilePhotoEditorDialog(
                                 panXFraction = 0f
                                 panYFraction = 0f
                             },
-                            border = BorderStroke(1.dp, Color(0xFFF59E0B)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFF59E0B)),
+                            border = BorderStroke(1.dp, KamPrimaryIndigoDark),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = KamPrimaryIndigoDark),
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                             modifier = Modifier
@@ -2672,8 +2685,8 @@ fun FacebookStyleProfilePhotoEditorDialog(
                             onClick = {
                                 rotationDegrees = (rotationDegrees + 90) % 360
                             },
-                            border = BorderStroke(1.dp, Color(0xFF94A3B8)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                            border = BorderStroke(1.dp, KamBorderDark),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = KamTextPrimaryDark),
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                             modifier = Modifier
@@ -2704,7 +2717,7 @@ fun FacebookStyleProfilePhotoEditorDialog(
                             },
                             enabled = !isSaving,
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF10B981),
+                                containerColor = KamOnlineGreenDark,
                                 contentColor = Color.White
                             ),
                             shape = RoundedCornerShape(12.dp),
@@ -2732,8 +2745,8 @@ fun FacebookStyleProfilePhotoEditorDialog(
 
                         OutlinedButton(
                             onClick = onDismiss,
-                            border = BorderStroke(1.dp, Color(0xFF475569)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE2E8F0)),
+                            border = BorderStroke(1.dp, KamBorderDark),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = KamTextSecondaryDark),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.height(48.dp)
                         ) {
@@ -2895,11 +2908,12 @@ fun StudentPhotoAlbumSection(
         )
     }
 
-    // White / Warm Ivory Page Card at the bottom of the student profile
+    // Harmonized Album Card at the bottom of the student profile
+    val albumExtColors = LocalKamExtendedColors.current
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = Color(0xFFFFFBEB),
-        border = BorderStroke(1.5.dp, Color(0xFFF59E0B).copy(alpha = 0.65f)),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (albumExtColors.isDark) 0.72f else 0.85f),
+        border = BorderStroke(1.dp, albumExtColors.hairline),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("student_photo_album_white_card")
@@ -2919,7 +2933,7 @@ fun StudentPhotoAlbumSection(
                     Text(
                         text = "ألبوم صور الطفل (${albumPhotos.size})",
                         style = MaterialTheme.typography.titleSmall,
-                        color = Color(0xFF0F172A),
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -2928,13 +2942,14 @@ fun StudentPhotoAlbumSection(
             downloadStatusMessage?.let { msg ->
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = Color(0xFF065F46),
+                    color = albumExtColors.onlineGreen.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, albumExtColors.onlineGreen.copy(alpha = 0.45f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         text = msg,
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White,
+                        color = albumExtColors.onlineGreen,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
@@ -2957,8 +2972,8 @@ fun StudentPhotoAlbumSection(
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFD97706),
-                        contentColor = Color.White
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     ),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
@@ -2981,7 +2996,7 @@ fun StudentPhotoAlbumSection(
                         }
                     },
                     shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(1.dp, Color(0xFFB45309)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                     modifier = Modifier
                         .height(38.dp)
@@ -2990,14 +3005,14 @@ fun StudentPhotoAlbumSection(
                     Icon(
                         imageVector = Icons.Default.CameraAlt,
                         contentDescription = null,
-                        tint = Color(0xFFB45309),
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "كاميرا",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFFB45309),
+                        color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -3013,7 +3028,7 @@ fun StudentPhotoAlbumSection(
                     Text(
                         text = "لا توجد صور محفوظة في ألبوم الطفل حتى الآن.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF64748B)
+                        color = albumExtColors.mutedText
                     )
                 }
             } else {
@@ -3143,14 +3158,15 @@ private fun AlbumPhotoThumbnailItem(
         }
     }
 
+    val thumbExtColors = LocalKamExtendedColors.current
     Box(
         modifier = Modifier
             .size(86.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF0F172A))
+            .background(KamBackgroundDark)
             .border(
-                width = if (isMain) 2.5.dp else 1.dp,
-                color = if (isMain) Color(0xFFD97706) else Color(0xFF94A3B8),
+                width = if (isMain) 2.dp else 1.dp,
+                color = if (isMain) MaterialTheme.colorScheme.primary else thumbExtColors.hairlineStrong,
                 shape = RoundedCornerShape(12.dp)
             )
             .clickable(onClick = onClick)
@@ -3169,7 +3185,7 @@ private fun AlbumPhotoThumbnailItem(
         if (isMain) {
             Surface(
                 shape = RoundedCornerShape(bottomEnd = 8.dp),
-                color = Color(0xFFD97706),
+                color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.align(Alignment.TopStart)
             ) {
                 Row(
@@ -3196,7 +3212,7 @@ private fun AlbumPhotoThumbnailItem(
         // One-tap Download Badge on the bottom-end corner of each album photo
         Surface(
             shape = CircleShape,
-            color = Color(0xFF065F46).copy(alpha = 0.92f),
+            color = thumbExtColors.onlineGreen.copy(alpha = 0.92f),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(4.dp)
@@ -3282,7 +3298,7 @@ private fun StudentAlbumPhotoViewerDialog(
                         modifier = Modifier
                             .size(38.dp)
                             .clip(CircleShape)
-                            .border(1.5.dp, Color(0xFFF59E0B), CircleShape)
+                            .border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
                     )
                 }
             }
@@ -3296,13 +3312,14 @@ private fun StudentAlbumPhotoViewerDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // Full Uncropped Photo Display (ContentScale.Fit so 100% of the original photo is shown)
+                val viewerExtColors = LocalKamExtendedColors.current
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 220.dp, max = 320.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF090D16))
-                        .border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(16.dp)),
+                        .background(KamBackgroundDark)
+                        .border(1.dp, viewerExtColors.hairlineStrong, RoundedCornerShape(16.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     fullBitmap?.let { bmp ->
@@ -3320,13 +3337,14 @@ private fun StudentAlbumPhotoViewerDialog(
                 if (downloadConfirmed) {
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF065F46),
+                        color = viewerExtColors.onlineGreen.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, viewerExtColors.onlineGreen.copy(alpha = 0.45f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             text = "تم حفظ الصورة الكاملة في معرض الهاتف (مجلد Pictures/kAM_Lite) ✓",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White,
+                            color = viewerExtColors.onlineGreen,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
                         )
@@ -3340,7 +3358,7 @@ private fun StudentAlbumPhotoViewerDialog(
                         onDownloadFullPhoto()
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF059669),
+                        containerColor = viewerExtColors.onlineGreen,
                         contentColor = Color.White
                     ),
                     modifier = Modifier

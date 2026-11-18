@@ -114,7 +114,9 @@ import com.example.ui.components.ServantAvatarCircle
 import com.example.ui.components.StudentAvatarCircle
 import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.components.StudentPhotoPickerDialog
+import com.example.ui.theme.KamBackgroundDark
 import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.viewmodel.ChatUiState
 import com.example.ui.viewmodel.GroupFellowServantItem
 import androidx.compose.material.icons.filled.CameraAlt
@@ -130,13 +132,13 @@ import java.io.File
 import kotlin.math.abs
 
 private val ServantSenderPalette = listOf(
-    Color(0xFF38BDF8), // Sky Blue
-    Color(0xFFF59E0B), // Amber
-    Color(0xFFA855F7), // Purple
-    Color(0xFFEC4899), // Pink
-    Color(0xFF10B981), // Emerald
-    Color(0xFFF97316), // Orange
-    Color(0xFF06B6D4)  // Cyan
+    Color(0xFF7B87EB), // Periwinkle Indigo
+    Color(0xFFE5A436), // Warm Amber
+    Color(0xFF9F7AEA), // Soft Violet
+    Color(0xFFDF5C9B), // Rose
+    Color(0xFF2CB578), // Emerald
+    Color(0xFFE0753D), // Terracotta Orange
+    Color(0xFF2EA9C4)  // Cyan
 )
 
 private fun senderDeterministicColor(senderUid: String): Color {
@@ -270,7 +272,7 @@ private fun GroupChatAvatarCircle(
         if (hasCustomAvatar) {
             StudentAvatarCircle(
                 student = syntheticGroupStudent,
-                blockAccent = Color(0xFF0284C7),
+                blockAccent = MaterialTheme.colorScheme.primary,
                 size = size,
                 onClick = onClick ?: {},
                 testTag = "group_avatar_${groupId.ifBlank { "main" }}",
@@ -279,7 +281,7 @@ private fun GroupChatAvatarCircle(
         } else {
             Surface(
                 shape = CircleShape,
-                color = Color(0xFF0284C7),
+                color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
                     .size(size)
                     .clip(CircleShape)
@@ -292,7 +294,7 @@ private fun GroupChatAvatarCircle(
                     Icon(
                         imageVector = Icons.Default.Groups,
                         contentDescription = groupName.ifBlank { "جروب الفصل" },
-                        tint = Color.White,
+                        tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(size * 0.54f)
                     )
                 }
@@ -555,8 +557,8 @@ private fun ConversationsListView(
 
         FloatingActionButton(
             onClick = onOpenNewDmPicker,
-            containerColor = Color(0xFF0284C7),
-            contentColor = Color.White,
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
             shape = CircleShape,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -589,7 +591,7 @@ private fun ConversationsListView(
         }
         StudentPhotoPickerDialog(
             student = syntheticGroupStudent,
-            blockAccent = Color(0xFF0284C7),
+            blockAccent = MaterialTheme.colorScheme.primary,
             isAdmin = true,
             onDismiss = { showGroupPhotoDialog = false },
             onSaveAvatarBase64 = { newBase64 ->
@@ -638,11 +640,11 @@ private fun PinnedGroupChatCard(
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .testTag("pinned_group_chat_card"),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF0284C7).copy(alpha = 0.14f)
+            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.09f)
         ),
-        border = BorderStroke(1.5.dp, Color(0xFF0284C7).copy(alpha = 0.55f))
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
     ) {
         Row(
             modifier = Modifier
@@ -684,14 +686,14 @@ private fun PinnedGroupChatCard(
                             overflow = TextOverflow.Ellipsis
                         )
                         Surface(
-                            color = Color(0xFF0284C7).copy(alpha = 0.22f),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Text(
                                 text = "📌 جروب الخدام",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF38BDF8),
+                                color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
@@ -701,7 +703,7 @@ private fun PinnedGroupChatCard(
                         Text(
                             text = timeLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (unreadCount > 0) Color(0xFF38BDF8) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (unreadCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = if (unreadCount > 0) FontWeight.Bold else FontWeight.Normal
                         )
                     }
@@ -743,6 +745,7 @@ private fun DmConversationRowCard(
     currentUserId: String,
     onClick: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     val isActiveNow = ChatFormatHelper.isServantActiveNow(peerProfile?.lastSeenAt)
     val isLastFromMe = dm.lastMessageSenderUid == currentUserId && dm.lastMessageText.isNotBlank()
     val lastText = when {
@@ -759,14 +762,14 @@ private fun DmConversationRowCard(
             .testTag("dm_card_$peerUid"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            containerColor = MaterialTheme.colorScheme.surface
         ),
         border = BorderStroke(
             width = 1.dp,
             color = if (unreadCount > 0) {
-                Color(0xFF0284C7).copy(alpha = 0.65f)
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
             } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                extColors.hairline
             }
         )
     ) {
@@ -793,7 +796,7 @@ private fun DmConversationRowCard(
                             .size(13.dp)
                             .align(Alignment.BottomEnd)
                             .clip(CircleShape)
-                            .background(Color(0xFF22C55E))
+                            .background(extColors.onlineGreen)
                             .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape)
                     )
                 }
@@ -821,7 +824,7 @@ private fun DmConversationRowCard(
                         Text(
                             text = timeLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (unreadCount > 0) Color(0xFF38BDF8) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (unreadCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = if (unreadCount > 0) FontWeight.Bold else FontWeight.Normal
                         )
                     }
@@ -859,8 +862,8 @@ fun UnreadCountPill(
     val label = ChatFormatHelper.formatUnreadBadge(count)
     if (label.isBlank()) return
     Surface(
-        color = Color(0xFF0284C7),
-        contentColor = Color.White,
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
         shape = RoundedCornerShape(999.dp),
         modifier = modifier
     ) {
@@ -870,7 +873,7 @@ fun UnreadCountPill(
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 11.sp
             ),
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onPrimary,
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
         )
     }
@@ -1056,11 +1059,12 @@ private fun NewPrivateChatServantPickerDialog(
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
+                                        val extColors = LocalKamExtendedColors.current
                                         val emailSub = servant.memberProfile?.email.orEmpty()
                                         Text(
                                             text = if (emailSub.isNotBlank()) "$statusText • $emailSub" else statusText,
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = if (isActive) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            color = if (isActive) extColors.onlineGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                                             fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -1256,16 +1260,18 @@ private fun ChatConversationView(
         }
     }
 
+    val extColors = LocalKamExtendedColors.current
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .imePadding()
             .testTag("chat_conversation_screen")
     ) {
-        // Telegram-Style Conversation Header Bar
+        // Conversation Header Bar (Nocturnal flat surface + 1dp hairline)
         Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
-            tonalElevation = 3.dp,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -1353,7 +1359,7 @@ private fun ChatConversationView(
                             Text(
                                 text = statusText,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (isActiveNow) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (isActiveNow) extColors.onlineGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontWeight = if (isActiveNow) FontWeight.Bold else FontWeight.Normal
                             )
                         }
@@ -1372,7 +1378,7 @@ private fun ChatConversationView(
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+        HorizontalDivider(thickness = 1.dp, color = extColors.hairline)
 
         // Messages Area
         Box(
@@ -1546,12 +1552,12 @@ private fun ChatConversationView(
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+        HorizontalDivider(thickness = 1.dp, color = extColors.hairline)
 
         // Bottom Input Bar (Text + Image Picker <=1024px/<60KB + Voice Recorder <=30s/<100KB)
         Surface(
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 4.dp,
+            tonalElevation = 0.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -1573,7 +1579,7 @@ private fun ChatConversationView(
                             modifier = Modifier
                                 .size(12.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFFEF4444))
+                                .background(MaterialTheme.colorScheme.error)
                         )
                         Text(
                             text = "جاري التسجيل ${ChatFormatHelper.formatAudioDuration(recordingSeconds)} / 0:30",
@@ -1602,10 +1608,10 @@ private fun ChatConversationView(
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF10B981),
-                                contentColor = Color.White
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
                             ),
-                            shape = RoundedCornerShape(18.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.testTag("send_voice_recording_button")
                         ) {
                             Icon(
@@ -1661,10 +1667,11 @@ private fun ChatConversationView(
                                 )
                             },
                             maxLines = 4,
-                            shape = RoundedCornerShape(22.dp),
+                            shape = RoundedCornerShape(16.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                unfocusedBorderColor = extColors.hairline
                             ),
                             modifier = Modifier
                                 .weight(1f)
@@ -1675,7 +1682,7 @@ private fun ChatConversationView(
                         if (canSendText) {
                             Surface(
                                 shape = CircleShape,
-                                color = Color(0xFF10B981),
+                                color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier
                                     .size(48.dp)
                                     .clip(CircleShape)
@@ -1692,7 +1699,7 @@ private fun ChatConversationView(
                                     Icon(
                                         imageVector = Icons.AutoMirrored.Filled.Send,
                                         contentDescription = "إرسال",
-                                        tint = Color.White
+                                        tint = MaterialTheme.colorScheme.onPrimary
                                     )
                                 }
                             }
@@ -1859,7 +1866,7 @@ private fun ChatConversationView(
         }
         StudentPhotoPickerDialog(
             student = syntheticGroupStudent,
-            blockAccent = Color(0xFF0284C7),
+            blockAccent = MaterialTheme.colorScheme.primary,
             isAdmin = true,
             onDismiss = { showGroupAvatarEditor = false },
             onSaveAvatarBase64 = { newBase64 ->
@@ -1976,8 +1983,8 @@ private fun ForwardMessagePickerDialog(
                     val gTitle = chatState.activeGroupName.ifBlank { "جروب الفصل" }
                     Surface(
                         shape = RoundedCornerShape(14.dp),
-                        color = Color(0xFF0284C7).copy(alpha = 0.16f),
-                        border = BorderStroke(1.dp, Color(0xFF0284C7).copy(alpha = 0.5f)),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
@@ -2144,8 +2151,8 @@ private fun FullscreenChatImageDialog(
             Button(
                 onClick = onSaveToDevice,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF059669),
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 ),
                 shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
@@ -2171,6 +2178,7 @@ private fun FullscreenChatImageDialog(
 
 @Composable
 private fun DaySeparatorChip(label: String) {
+    val extColors = LocalKamExtendedColors.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -2180,7 +2188,7 @@ private fun DaySeparatorChip(label: String) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
             shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            border = BorderStroke(1.dp, extColors.hairline)
         ) {
             Text(
                 text = label,
@@ -2541,14 +2549,15 @@ private fun SystemMessageCenteredPill(
         return
     }
 
+    val extColors = LocalKamExtendedColors.current
     val combinedEntries = remember(parsedReport) {
         parsedReport.absentEntries + parsedReport.issueEntries
     }
 
     Surface(
-        color = Color(0xFFF59E0B).copy(alpha = 0.12f),
-        shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.2.dp, Color(0xFFF59E0B).copy(alpha = 0.55f)),
+        color = extColors.offlineAmber.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, extColors.offlineAmber.copy(alpha = 0.45f)),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp, horizontal = 6.dp)
@@ -2596,7 +2605,7 @@ private fun SystemMessageCenteredPill(
                     ) {
                         for (entry in rowItems) {
                             val isAbsent = entry.status == AttendanceStatus.ABSENT
-                            val badgeColor = if (isAbsent) Color(0xFFEF4444) else Color(0xFFF59E0B)
+                            val badgeColor = if (isAbsent) MaterialTheme.colorScheme.error else extColors.offlineAmber
                             val badgeLabel = if (isAbsent) "غائب" else "مشكلة"
 
                             Surface(
@@ -2666,7 +2675,7 @@ private fun SystemMessageCenteredPill(
                                         Text(
                                             text = entry.note,
                                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                            color = Color(0xFFD97706),
+                                            color = extColors.offlineAmber,
                                             textAlign = TextAlign.Center,
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis
@@ -2682,7 +2691,7 @@ private fun SystemMessageCenteredPill(
                 }
             }
 
-            HorizontalDivider(color = Color(0xFFF59E0B).copy(alpha = 0.35f))
+            HorizontalDivider(color = extColors.offlineAmber.copy(alpha = 0.35f))
 
             // Footer Summary: Exact Counts & Numbers of Absent & Issue Students Today
             Column(
@@ -2708,7 +2717,7 @@ private fun SystemMessageCenteredPill(
                     },
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFDC2626)
+                    color = MaterialTheme.colorScheme.error
                 )
 
                 val issueNumbers = parsedReport.issueEntries
@@ -2724,7 +2733,7 @@ private fun SystemMessageCenteredPill(
                     },
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.ExtraBold,
-                    color = Color(0xFFD97706)
+                    color = extColors.offlineAmber
                 )
             }
         }
@@ -2773,12 +2782,13 @@ private fun AttendanceReportedChildPhotoDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                val extColors = LocalKamExtendedColors.current
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 200.dp, max = 300.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF0F172A)),
+                        .background(KamBackgroundDark),
                     contentAlignment = Alignment.Center
                 ) {
                     val bmp = fullBitmap
@@ -2803,7 +2813,7 @@ private fun AttendanceReportedChildPhotoDialog(
                         text = "ملاحظة: $note",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFD97706)
+                        color = extColors.offlineAmber
                     )
                 }
                 if (packedAvatar.isNotBlank()) {
@@ -2832,8 +2842,8 @@ private fun AttendanceReportedChildPhotoDialog(
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF059669),
-                            contentColor = Color.White
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2866,18 +2876,19 @@ private fun TelegramStyleMessageBubble(
     onRequestForward: () -> Unit,
     onRequestDelete: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     val bubbleBgColor = if (isOwnMessage) {
-        Color(0xFF0284C7) // Telegram vibrant ocean blue outgoing bubble
+        MaterialTheme.colorScheme.primary
     } else {
-        MaterialTheme.colorScheme.surfaceVariant
+        MaterialTheme.colorScheme.surface
     }
     val bubbleTextColor = if (isOwnMessage) {
-        Color.White
+        MaterialTheme.colorScheme.onPrimary
     } else {
         MaterialTheme.colorScheme.onSurface
     }
     val bubbleSubtleColor = if (isOwnMessage) {
-        Color.White.copy(alpha = 0.78f)
+        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f)
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -2896,7 +2907,8 @@ private fun TelegramStyleMessageBubble(
         Surface(
             color = bubbleBgColor,
             shape = bubbleShape,
-            tonalElevation = 2.dp,
+            border = if (isOwnMessage) null else BorderStroke(1.dp, extColors.hairline),
+            tonalElevation = 0.dp,
             modifier = Modifier.widthIn(min = 104.dp, max = 315.dp)
         ) {
             Column(
@@ -2919,7 +2931,7 @@ private fun TelegramStyleMessageBubble(
                         text = "↪ محوّلة من ${message.forwardedFromName}",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
-                        color = if (isOwnMessage) Color(0xFFE0F2FE) else Color(0xFF38BDF8),
+                        color = if (isOwnMessage) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f) else MaterialTheme.colorScheme.primary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -3197,7 +3209,7 @@ private fun ChatAudioBubbleContent(
     ) {
         Surface(
             shape = CircleShape,
-            color = if (isOwnMessage) Color.White.copy(alpha = 0.22f) else MaterialTheme.colorScheme.primary,
+            color = if (isOwnMessage) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.22f) else MaterialTheme.colorScheme.primary,
             modifier = Modifier
                 .size(48.dp)
                 .clip(CircleShape)
@@ -3228,21 +3240,21 @@ private fun ChatAudioBubbleContent(
                                 .width(3.5.dp)
                                 .height(13.dp)
                                 .clip(RoundedCornerShape(2.dp))
-                                .background(if (isOwnMessage) Color.White else MaterialTheme.colorScheme.onPrimary)
+                                .background(MaterialTheme.colorScheme.onPrimary)
                         )
                         Box(
                             modifier = Modifier
                                 .width(3.5.dp)
                                 .height(13.dp)
                                 .clip(RoundedCornerShape(2.dp))
-                                .background(if (isOwnMessage) Color.White else MaterialTheme.colorScheme.onPrimary)
+                                .background(MaterialTheme.colorScheme.onPrimary)
                         )
                     }
                 } else {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
                         contentDescription = "تشغيل الرسالة الصوتية",
-                        tint = if (isOwnMessage) Color.White else MaterialTheme.colorScheme.onPrimary
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
                 }
             }
@@ -3254,7 +3266,7 @@ private fun ChatAudioBubbleContent(
         ) {
             LinearProgressIndicator(
                 progress = { progress },
-                color = if (isOwnMessage) Color.White else MaterialTheme.colorScheme.primary,
+                color = if (isOwnMessage) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
                 trackColor = subtleColor.copy(alpha = 0.3f),
                 modifier = Modifier
                     .fillMaxWidth()

@@ -88,6 +88,8 @@ import com.example.data.model.CountryDialCodeOption
 import com.example.data.model.PhoneNumberFormatHelper
 import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
+import com.example.ui.theme.KamWhatsAppGreen
+import com.example.ui.theme.LocalKamExtendedColors
 import com.google.android.gms.auth.api.identity.GetPhoneNumberHintIntentRequest
 import com.google.android.gms.auth.api.identity.Identity
 
@@ -263,10 +265,11 @@ fun ServantPhoneOnboardingWizardDialog(
         PhoneWizardStep.STEP_4_DONE -> "تمام"
     }
 
+    val extColors = LocalKamExtendedColors.current
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.62f))
+            .background(Color.Black.copy(alpha = 0.65f))
             .clickable(
                 enabled = true,
                 onClick = {
@@ -285,11 +288,12 @@ fun ServantPhoneOnboardingWizardDialog(
                 .fillMaxWidth()
                 .widthIn(max = 420.dp)
                 .clickable(enabled = false, onClick = {}),
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(22.dp),
+            border = BorderStroke(1.dp, extColors.hairline),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surface
             ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)
+            elevation = CardDefaults.cardElevation(defaultElevation = if (extColors.isDark) 0.dp else 6.dp)
         ) {
             Column(
                 modifier = Modifier
@@ -405,7 +409,7 @@ fun ServantPhoneOnboardingWizardDialog(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = "تم الحفظ",
-                            tint = Color(0xFF25D366),
+                            tint = KamWhatsAppGreen,
                             modifier = Modifier.size(54.dp)
                         )
                         Text(
@@ -497,7 +501,7 @@ fun ServantPhoneOnboardingWizardDialog(
                                 .testTag("confirm_primary_yes_button"),
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF25D366),
+                                containerColor = KamWhatsAppGreen,
                                 contentColor = Color.White
                             )
                         ) {
@@ -613,7 +617,7 @@ fun ServantPhoneOnboardingWizardDialog(
                                 .testTag("confirm_secondary_yes_button"),
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF25D366),
+                                containerColor = KamWhatsAppGreen,
                                 contentColor = Color.White
                             )
                         ) {
@@ -673,7 +677,7 @@ private fun PhoneInputStepContent(
                 .testTag(hintButtonTag),
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF25D366),
+                containerColor = KamWhatsAppGreen,
                 contentColor = Color.White
             )
         ) {
@@ -1063,8 +1067,8 @@ fun ServantBlockContactRows(
             if (isOwnBlock) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFF25D366).copy(alpha = 0.16f),
-                    border = BorderStroke(1.dp, Color(0xFF25D366).copy(alpha = 0.6f)),
+                    color = KamWhatsAppGreen.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, KamWhatsAppGreen.copy(alpha = 0.6f)),
                     modifier = Modifier
                         .clickable(onClick = onAddOwnPhoneClick)
                         .testTag("servant_add_own_phone_chip_$blockId")
@@ -1076,14 +1080,14 @@ fun ServantBlockContactRows(
                         Icon(
                             imageVector = Icons.Default.Phone,
                             contentDescription = null,
-                            tint = Color(0xFF25D366),
+                            tint = KamWhatsAppGreen,
                             modifier = Modifier.size(13.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = "إضافة رقمي",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF25D366),
+                            color = KamWhatsAppGreen,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -1131,7 +1135,7 @@ fun ServantBlockContactRows(
                         // WhatsApp Button (#25D366)
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF25D366),
+                            color = KamWhatsAppGreen,
                             modifier = Modifier
                                 .clickable { openWhatsAppForPhone(context, phone) }
                                 .testTag("servant_whatsapp_button_${blockId}_$index")
@@ -1209,11 +1213,13 @@ fun ServantProfileSettingsCard(
 ) {
     val hasAnyPhone = primaryPhone.isNotBlank() || secondaryPhone.isNotBlank()
     var showEditNameDialog by rememberSaveable { mutableStateOf(false) }
+    val extColors = LocalKamExtendedColors.current
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+            .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
             .padding(16.dp)
             .testTag("servant_profile_settings_card"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1344,7 +1350,7 @@ fun ServantProfileSettingsCard(
                     .testTag("settings_edit_phone_button"),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF25D366),
+                    containerColor = KamWhatsAppGreen,
                     contentColor = Color.White
                 )
             ) {

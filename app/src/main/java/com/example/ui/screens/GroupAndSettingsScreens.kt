@@ -112,6 +112,7 @@ import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.components.openDialerForPhone
 import com.example.ui.components.openWhatsAppForPhone
 import com.example.ui.theme.KamSemanticColors
+import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.theme.LocalUiScaleController
 import com.example.ui.viewmodel.KamScreenState
 import com.example.ui.viewmodel.KamViewModel
@@ -183,6 +184,7 @@ fun GroupInvitationsScreen(
         KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_GROUP, scrolling = false)
     }
 
+    val extColors = LocalKamExtendedColors.current
     val fullDailyCode = state.group?.fullDailyInviteCode.orEmpty()
     val remainingHours = state.group?.remainingDailyCodeHours() ?: 24
     val bannedServants = state.group?.bannedServantsList.orEmpty()
@@ -237,10 +239,11 @@ fun GroupInvitationsScreen(
         item(key = "group_code_card") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
             ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
@@ -405,8 +408,9 @@ fun GroupInvitationsScreen(
             item(key = "admin_send_invite_card") {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Column(
                         modifier = Modifier.padding(14.dp),
@@ -483,8 +487,9 @@ fun GroupInvitationsScreen(
             item(key = "no_invitations_card") {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
@@ -512,8 +517,9 @@ fun GroupInvitationsScreen(
                 val activeShareCode = state.group?.fullDailyInviteCode?.ifBlank { inv.inviteCode } ?: inv.inviteCode
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Row(
                         modifier = Modifier
@@ -668,8 +674,9 @@ fun GroupInvitationsScreen(
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, extColors.hairline)
             ) {
                 Row(
                     modifier = Modifier
@@ -773,7 +780,8 @@ fun GroupInvitationsScreen(
                         .fillMaxWidth()
                         .testTag("personal_blocks_visibility_card"),
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Column(
                         modifier = Modifier.padding(14.dp),
@@ -864,7 +872,8 @@ fun GroupInvitationsScreen(
                     .fillMaxWidth()
                     .testTag("group_members_directory_card"),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, extColors.hairline)
             ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
@@ -884,7 +893,7 @@ fun GroupInvitationsScreen(
                         )
                     }
 
-                    HorizontalDivider()
+                    HorizontalDivider(color = extColors.hairline)
 
                     directoryMembers.forEach { member ->
                         val memberUid = member.effectiveUid
@@ -902,7 +911,8 @@ fun GroupInvitationsScreen(
 
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            border = BorderStroke(1.dp, extColors.hairline),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("group_member_row_$memberUid")
@@ -1050,7 +1060,8 @@ fun GroupInvitationsScreen(
                         .fillMaxWidth()
                         .testTag("banned_servants_card"),
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, extColors.hairline)
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -1123,8 +1134,9 @@ fun GroupInvitationsScreen(
         // 5. Compact Role Permissions Info Row
         item(key = "roles_matrix_card") {
             Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, extColors.hairline),
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { activeInfoDialogTopic = "ROLES" }
@@ -1743,6 +1755,8 @@ fun SettingsScreen(
         StudentAvatarImageHelper.setScrollActive(settingsListState.isScrollInProgress)
     }
 
+    val extColors = LocalKamExtendedColors.current
+
     LazyColumn(
         state = settingsListState,
         modifier = Modifier
@@ -1786,7 +1800,8 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .border(1.dp, extColors.hairline, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                     .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 10.dp)
                     .testTag("multi_group_switcher_card"),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -1804,7 +1819,7 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Bold
                     )
                 }
-                HorizontalDivider()
+                HorizontalDivider(color = extColors.hairline)
             }
         }
         items(
@@ -1829,7 +1844,7 @@ fun SettingsScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
                     .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -1867,7 +1882,8 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .border(1.dp, extColors.hairline, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -1891,7 +1907,7 @@ fun SettingsScreen(
                         )
                     }
                 }
-                HorizontalDivider()
+                HorizontalDivider(color = extColors.hairline)
             }
         }
 
@@ -1904,7 +1920,7 @@ fun SettingsScreen(
             val cardColor = KamSemanticColors.cardColor(card)
             val isLast = card == CardType.entries.last()
             val rowShape = if (isLast) {
-                RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
+                RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)
             } else {
                 RectangleShape
             }
@@ -1969,7 +1985,8 @@ fun SettingsScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                    .border(1.dp, extColors.hairline, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                     .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp)
             ) {
                 Text(
@@ -2078,7 +2095,7 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
                     .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -2132,7 +2149,8 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+                    .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -2213,6 +2231,7 @@ fun SettingsScreen(
 
 @Composable
 private fun GitHubAutoSyncSettingsCard() {
+    val extColors = LocalKamExtendedColors.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val syncState by GitHubSmartSyncEngine.syncState.collectAsStateWithLifecycle()
@@ -2220,7 +2239,8 @@ private fun GitHubAutoSyncSettingsCard() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+            .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
             .padding(16.dp)
             .testTag("github_smart_sync_settings_card"),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -2427,6 +2447,7 @@ private fun MultiGroupRowItem(
     isActive: Boolean,
     onClick: () -> Unit
 ) {
+    val extColors = LocalKamExtendedColors.current
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = if (isActive) {
@@ -2436,7 +2457,7 @@ private fun MultiGroupRowItem(
         },
         border = BorderStroke(
             width = if (isActive) 1.5.dp else 1.dp,
-            color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+            color = if (isActive) MaterialTheme.colorScheme.primary else extColors.hairline
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -2620,10 +2641,13 @@ private fun MultiGroupSwitcherCard(
         listOfNotNull(state.group)
     }
 
+    val extColors = LocalKamExtendedColors.current
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+            .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
             .padding(16.dp)
             .testTag("multi_group_switcher_card"),
         verticalArrangement = Arrangement.spacedBy(10.dp)
