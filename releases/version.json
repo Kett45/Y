@@ -4,10 +4,10 @@
   "minDeltaBaseVersionCode": 10,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
-  "commitSha": "440db9996a95",
+  "commitSha": "944411181e65",
   "apkSha256": "14f5eb9140a14e5a665be3f5c2255ecd693f562116c1712b5c3b92b3cb1f6501",
-  "updatedAt": "2026-11-17T09:19:50Z",
+  "updatedAt": "2026-11-18T11:19:19Z",
   "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.13 (نجم الكارت v1.13): تحديث تلقائي مباشر بأحدث بصمة للـ APK (440db9996a95)."
+  "releaseNotesArabic": "الإصدار 1.13 (نجم الكارت v1.13): تحديث تلقائي مباشر بأحدث بصمة للـ APK (944411181e65)."
 }
