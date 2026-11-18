@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Comment
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -128,6 +129,8 @@ fun HomeScreen(
     onAnalyzeBulkImport: (String) -> List<BulkImportLinePreview>,
     onConfirmBulkImport: (List<String>) -> Unit,
     onCreateBlock: (servantName: String, colorHex: String, servantUid: String) -> Unit,
+    onUpdateBlock: (block: ServantBlock, newName: String, newColorHex: String, newServantId: String?) -> Unit = { _, _, _, _ -> },
+    onUpdateBlockAvatar: (block: ServantBlock, avatarBase64: String) -> Unit = { _, _ -> },
     onMoveStudentToBlock: (Student, String) -> Unit,
     onReorderStudent: (Student, Boolean) -> Unit,
     onUpdateStudent: (Student, String, Int, String) -> Unit,
@@ -156,6 +159,8 @@ fun HomeScreen(
     var showDuplicateAlertsDialog by rememberSaveable { mutableStateOf(false) }
     var showDuplicateNamesDialog by rememberSaveable { mutableStateOf(false) }
     var showOwnServantPhotoDialog by rememberSaveable { mutableStateOf(false) }
+    var blockForAdminEditDialog by remember { mutableStateOf<ServantBlock?>(null) }
+    var blockForCustomPhotoDialog by remember { mutableStateOf<ServantBlock?>(null) }
     var studentForMoveSheet by remember { mutableStateOf<Student?>(null) }
     var studentForDetailsSheet by remember { mutableStateOf<Student?>(null) }
     var studentForPhotoDialog by remember { mutableStateOf<Student?>(null) }
@@ -379,7 +384,7 @@ fun HomeScreen(
                     val blockStudents = studentsByBlockId[block.id].orEmpty()
                     val isCollapsed = isBlockCollapsed(block.id)
                     val blockAccent = KamSemanticColors.blockColor(block.colorHex)
-                    val resolvedOwnerName = state.resolvedServantName(block.servantId, block.servantName)
+                    val resolvedOwnerName = state.resolvedBlockOwnerName(block)
                     val blockTintSurface = blockAccent.copy(alpha = 0.12f).compositeOver(elevatedRowSurfaceColor)
 
                     item(
@@ -387,7 +392,7 @@ fun HomeScreen(
                         contentType = "servant_block_header"
                     ) {
                         val isOwnBlock = block.servantId.isNotBlank() && block.servantId == currentUserId
-                        val servantProfile = state.memberProfileForServant(block.servantId)
+                        val servantProfile = state.memberProfileForBlock(block)
                         ServantBlockHeaderCard(
                             block = block,
                             resolvedOwnerName = resolvedOwnerName,
@@ -398,8 +403,18 @@ fun HomeScreen(
                             isCollapsed = isCollapsed,
                             servantProfile = servantProfile,
                             isOwnBlock = isOwnBlock,
+                            isAdmin = state.isAdmin,
                             onToggleCollapseById = onToggleCollapseByIdRemembered,
-                            onAvatarClick = if (isOwnBlock) onOpenOwnServantPhotoRemembered else null,
+                            onAvatarClick = when {
+                                isOwnBlock -> onOpenOwnServantPhotoRemembered
+                                state.isAdmin -> ({ blockForCustomPhotoDialog = block })
+                                else -> null
+                            },
+                            onAdminEditBlockClick = if (state.isAdmin) {
+                                { blockForAdminEditDialog = block }
+                            } else {
+                                null
+                            },
                             onAddOwnPhoneClick = onOpenPhoneWizard
                         )
                     }
@@ -555,8 +570,9 @@ fun HomeScreen(
 
     if (showAddBlockDialog && state.isAdmin) {
         AddServantBlockDialog(
-            memberProfiles = state.memberProfiles,
+            memberProfiles = state.allGroupServantCandidates,
             existingBlocks = state.blocks,
+            adminUid = state.group?.adminId.orEmpty(),
             resolvedMemberName = { profile ->
                 state.resolvedServantName(profile.effectiveUid, profile.displayName)
             },
@@ -564,6 +580,48 @@ fun HomeScreen(
             onConfirm = { servantName, colorHex, servantUid ->
                 onCreateBlock(servantName, colorHex, servantUid)
                 showAddBlockDialog = false
+            }
+        )
+    }
+
+    blockForAdminEditDialog?.let { targetBlk ->
+        val latestBlk = state.blocks.firstOrNull { it.id == targetBlk.id } ?: targetBlk
+        if (state.isAdmin) {
+            AdminEditAndAssignBlockDialog(
+                block = latestBlk,
+                memberProfiles = state.allGroupServantCandidates,
+                existingBlocks = state.blocks,
+                adminUid = state.group?.adminId.orEmpty(),
+                resolvedMemberName = { profile ->
+                    state.resolvedServantName(profile.effectiveUid, profile.displayName)
+                },
+                onOpenCustomBlockPhoto = {
+                    blockForAdminEditDialog = null
+                    blockForCustomPhotoDialog = latestBlk
+                },
+                onDismiss = { blockForAdminEditDialog = null },
+                onSave = { newName, newColorHex, newServantUid ->
+                    onUpdateBlock(latestBlk, newName, newColorHex, newServantUid)
+                    blockForAdminEditDialog = null
+                }
+            )
+        }
+    }
+
+    blockForCustomPhotoDialog?.let { targetBlk ->
+        val latestBlk = state.blocks.firstOrNull { it.id == targetBlk.id } ?: targetBlk
+        val blkAccent = KamSemanticColors.blockColor(latestBlk.colorHex)
+        ServantPhotoPickerDialog(
+            servantUid = latestBlk.servantId,
+            servantName = latestBlk.servantName,
+            groupId = state.group?.id.orEmpty(),
+            memberProfile = state.memberProfileForBlock(latestBlk),
+            accentColor = blkAccent,
+            customAvatarDocId = "servant_block_${latestBlk.id}",
+            onDismiss = { blockForCustomPhotoDialog = null },
+            onSaveBase64 = { newBase64 ->
+                onUpdateBlockAvatar(latestBlk, newBase64)
+                blockForCustomPhotoDialog = null
             }
         )
     }
@@ -1156,8 +1214,10 @@ private fun ServantBlockHeaderCard(
     isCollapsed: Boolean,
     servantProfile: ServantMemberProfile? = null,
     isOwnBlock: Boolean = false,
+    isAdmin: Boolean = false,
     onToggleCollapseById: (String) -> Unit,
     onAvatarClick: (() -> Unit)? = null,
+    onAdminEditBlockClick: (() -> Unit)? = null,
     onAddOwnPhoneClick: () -> Unit = {}
 ) {
     val currentBlockId by rememberUpdatedState(block.id)
@@ -1193,13 +1253,14 @@ private fun ServantBlockHeaderCard(
                 modifier = Modifier.weight(1f)
             ) {
                 ServantAvatarCircle(
-                    servantUid = block.servantId.ifBlank { block.id },
+                    servantUid = block.servantId,
                     servantName = resolvedOwnerName,
                     groupId = groupId,
                     memberProfile = servantProfile,
                     accentColor = blockAccent,
                     size = 42.dp,
-                    isEditable = isOwnBlock,
+                    isEditable = isOwnBlock || isAdmin,
+                    blockId = block.id,
                     onClick = onAvatarClick
                 )
                 Spacer(modifier = Modifier.width(10.dp))
@@ -1210,33 +1271,77 @@ private fun ServantBlockHeaderCard(
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold
                     )
+                    val assignedLabel = when {
+                        block.servantId.isNotBlank() && servantProfile != null ->
+                            "$groupName • $studentsCount طفل • الخادم: ${servantProfile.displayName.ifBlank { resolvedOwnerName }}"
+                        block.servantId.isBlank() && isAdmin ->
+                            "$groupName • $studentsCount طفل • بدون خادم مربوط"
+                        else -> "$groupName • $studentsCount طفل"
+                    }
                     Text(
-                        text = "$groupName • $studentsCount طفل",
+                        text = assignedLabel,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .background(blockAccent.copy(alpha = 0.25f), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "$studentsCount",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = blockAccent,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                        contentDescription = if (isCollapsed) "عرض الأطفال" else "طي البلوك",
-                        tint = blockAccent,
-                        modifier = Modifier.size(20.dp)
-                    )
+                if (isAdmin && onAdminEditBlockClick != null) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+                        border = BorderStroke(1.dp, blockAccent.copy(alpha = 0.7f)),
+                        modifier = Modifier
+                            .clickable(onClick = onAdminEditBlockClick)
+                            .testTag("home_admin_assign_servant_button_${block.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "تعيين خادم وتعديل البلوك",
+                                tint = blockAccent,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "تعيين خادم",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .background(blockAccent.copy(alpha = 0.25f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "$studentsCount",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = blockAccent,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                            contentDescription = if (isCollapsed) "عرض الأطفال" else "طي البلوك",
+                            tint = blockAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
         }
@@ -2107,6 +2212,7 @@ private fun BulkImportStudentsDialog(
 private fun AddServantBlockDialog(
     memberProfiles: List<ServantMemberProfile>,
     existingBlocks: List<ServantBlock>,
+    adminUid: String = "",
     resolvedMemberName: (ServantMemberProfile) -> String,
     onDismiss: () -> Unit,
     onConfirm: (servantName: String, colorHex: String, servantUid: String) -> Unit
@@ -2114,30 +2220,90 @@ private fun AddServantBlockDialog(
     var selectedMemberUid by rememberSaveable { mutableStateOf("") }
     var servantName by rememberSaveable { mutableStateOf("") }
     var selectedPreset by rememberSaveable { mutableStateOf(BlockColorPreset.BLUE) }
-    var showMultiBlockConfirmWarning by remember { mutableStateOf(false) }
 
-    val existingBlockOwnerUids = remember(existingBlocks) {
-        existingBlocks.mapNotNull { it.servantId.takeIf { uid -> uid.isNotBlank() } }.toSet()
+    val existingBlocksByOwner = remember(existingBlocks) {
+        existingBlocks
+            .filter { it.servantId.isNotBlank() }
+            .groupBy { it.servantId }
     }
-    val selectedAlreadyHasBlock = selectedMemberUid.isNotBlank() && selectedMemberUid in existingBlockOwnerUids
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("إنشاء بلوك خادم جديد (الأمين)") },
+        title = { Text("إنشاء بلوك خادم جديد (الأمين فقط)", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "حدد الخادم المسؤول عن هذا البلوك (أو أنشئه باسم خادم جديد):",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // Option 0: Unlinked / New Servant Name (Default so it NEVER links to Admin by accident!)
+                val isUnlinkedSelected = selectedMemberUid.isBlank()
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isUnlinkedSelected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    border = BorderStroke(
+                        width = if (isUnlinkedSelected) 2.dp else 1.dp,
+                        color = if (isUnlinkedSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            selectedMemberUid = ""
+                        }
+                        .testTag("add_block_select_unlinked")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "خادم جديد / بدون ربط بحساب حالياً",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "ينشئ البلوك باسم الخادم فقط بدون أخذ صورة الأمين",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (isUnlinkedSelected) {
+                            Text(
+                                text = "✓ محدد",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
                 if (memberProfiles.isNotEmpty()) {
                     Text(
-                        text = "اختر الخادم من أعضاء المجموعة:",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
+                        text = "أو اختر خادماً مسجلاً في المجموعة لوضعه في هذا البلوك:",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         memberProfiles.forEach { member ->
                             val uid = member.effectiveUid
                             val displayName = resolvedMemberName(member)
                             val isSelected = selectedMemberUid == uid
-                            val alreadyOwns = uid in existingBlockOwnerUids
+                            val ownedBlocks = existingBlocksByOwner[uid].orEmpty()
+                            val isMemberAdmin = uid == adminUid
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
@@ -2148,27 +2314,40 @@ private fun AddServantBlockDialog(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        selectedMemberUid = uid
-                                        servantName = displayName
-                                        showMultiBlockConfirmWarning = false
+                                        if (isSelected) {
+                                            selectedMemberUid = ""
+                                        } else {
+                                            selectedMemberUid = uid
+                                            servantName = displayName
+                                        }
                                     }
+                                    .testTag("add_block_select_member_$uid")
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = displayName,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    if (alreadyOwns) {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = "لديه بلوك",
+                                            text = displayName + if (isMemberAdmin) " (الأمين)" else "",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        if (ownedBlocks.isNotEmpty()) {
+                                            Text(
+                                                text = "بلوكاته الحالية: ${ownedBlocks.joinToString("، ") { it.servantName }}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.secondary
+                                            )
+                                        }
+                                    }
+                                    if (isSelected) {
+                                        Text(
+                                            text = "✓ تم اختياره",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.secondary,
-                                            fontWeight = FontWeight.SemiBold
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     }
                                 }
@@ -2181,29 +2360,13 @@ private fun AddServantBlockDialog(
                     value = servantName,
                     onValueChange = {
                         servantName = it.take(80)
-                        showMultiBlockConfirmWarning = false
                     },
-                    label = { Text("اسم الخادم المسؤول عن البلوك") },
+                    label = { Text("اسم البلوك / اسم الخادم") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("add_block_servant_name_input")
                 )
-
-                if (selectedAlreadyHasBlock || showMultiBlockConfirmWarning) {
-                    Surface(
-                        color = KamSemanticColors.NotificationCardConflict.copy(alpha = 0.14f),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, KamSemanticColors.NotificationCardConflict)
-                    ) {
-                        Text(
-                            text = "تنبيه: هذا الخادم لديه بلوك بالفعل. يمكنك استثناءه كأمين ومنحه بلوكاً إضافياً بالضغط على إنشاء.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(8.dp)
-                        )
-                    }
-                }
 
                 Text(
                     text = "اختر لون البلوك:",
@@ -2247,16 +2410,237 @@ private fun AddServantBlockDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (selectedAlreadyHasBlock && !showMultiBlockConfirmWarning) {
-                        showMultiBlockConfirmWarning = true
-                    } else {
-                        onConfirm(servantName.trim(), selectedPreset.hex, selectedMemberUid)
-                    }
+                    onConfirm(servantName.trim(), selectedPreset.hex, selectedMemberUid.trim())
                 },
                 enabled = servantName.trim().isNotBlank(),
                 modifier = Modifier.testTag("confirm_add_block_button")
             ) {
-                Text(if (showMultiBlockConfirmWarning) "تأكيد ومنح بلوك إضافي" else "إنشاء البلوك")
+                Text("إنشاء البلوك")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إلغاء")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AdminEditAndAssignBlockDialog(
+    block: ServantBlock,
+    memberProfiles: List<ServantMemberProfile>,
+    existingBlocks: List<ServantBlock>,
+    adminUid: String,
+    resolvedMemberName: (ServantMemberProfile) -> String,
+    onOpenCustomBlockPhoto: () -> Unit,
+    onDismiss: () -> Unit,
+    onSave: (newName: String, newColorHex: String, newServantUid: String) -> Unit
+) {
+    var editedName by rememberSaveable(block.id) { mutableStateOf(block.servantName) }
+    var editedColorHex by rememberSaveable(block.id) { mutableStateOf(block.colorHex) }
+    var editedServantUid by rememberSaveable(block.id) { mutableStateOf(block.servantId) }
+
+    val existingBlocksByOwner = remember(existingBlocks) {
+        existingBlocks
+            .filter { it.servantId.isNotBlank() }
+            .groupBy { it.servantId }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "تعيين خادم وتعديل «بلوك ${block.servantName}»",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onOpenCustomBlockPhoto,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_block_custom_photo_button")
+                ) {
+                    Text(
+                        text = "تخصيص / تغيير صورة هذا البلوك",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                OutlinedTextField(
+                    value = editedName,
+                    onValueChange = { editedName = it.take(80) },
+                    label = { Text("اسم البلوك / الخادم") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("home_admin_edit_block_name_input")
+                )
+
+                Text(
+                    text = "تعيين الخادم المسؤول عن البلوك (صلاحية الأمين):",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                val isUnlinked = editedServantUid.isBlank()
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isUnlinked) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(
+                        width = if (isUnlinked) 2.dp else 1.dp,
+                        color = if (isUnlinked) MaterialTheme.colorScheme.primary else Color.Transparent
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { editedServantUid = "" }
+                        .testTag("home_admin_assign_unlinked")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "بدون ربط بحساب (اسم وصورة مستقلة للبلوك)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "يفصل هذا البلوك عن حساب وصورة الأمين",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (isUnlinked) {
+                            Text(
+                                text = "✓ محدد",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                memberProfiles.forEach { member ->
+                    val uid = member.effectiveUid
+                    val displayName = resolvedMemberName(member)
+                    val isSelected = editedServantUid == uid
+                    val isMemberAdmin = uid == adminUid
+                    val otherOwnedBlocks = existingBlocksByOwner[uid].orEmpty().filter { it.id != block.id }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(
+                            width = if (isSelected) 2.dp else 1.dp,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (isSelected) {
+                                    editedServantUid = ""
+                                } else {
+                                    editedServantUid = uid
+                                    editedName = displayName
+                                }
+                            }
+                            .testTag("home_admin_assign_member_$uid")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = displayName + if (isMemberAdmin) " (الأمين)" else "",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (otherOwnedBlocks.isNotEmpty()) {
+                                    Text(
+                                        text = "مسجل أيضاً في: ${otherOwnedBlocks.joinToString("، ") { it.servantName }}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+                            }
+                            if (isSelected) {
+                                Text(
+                                    text = "✓ الخادم المختار",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    text = "لون البلوك:",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    BlockColorPreset.entries.forEach { preset ->
+                        val color = KamSemanticColors.blockColor(preset.hex)
+                        val isSelected = editedColorHex.equals(preset.hex, ignoreCase = true)
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = color.copy(alpha = if (isSelected) 0.35f else 0.15f),
+                            border = BorderStroke(if (isSelected) 2.dp else 1.dp, color),
+                            modifier = Modifier.clickable { editedColorHex = preset.hex }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(CircleShape)
+                                        .background(color)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = preset.arabicName,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val trimmed = editedName.trim()
+                    if (trimmed.isNotEmpty()) {
+                        onSave(trimmed, editedColorHex, editedServantUid.trim())
+                    }
+                },
+                enabled = editedName.trim().isNotBlank(),
+                modifier = Modifier.testTag("home_admin_save_block_button")
+            ) {
+                Text("حفظ التعديلات")
             }
         },
         dismissButton = {

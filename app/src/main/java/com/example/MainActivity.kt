@@ -696,6 +696,8 @@ fun AuthenticatedKamApp(
                             onAnalyzeBulkImport = viewModel::analyzeBulkImportText,
                             onConfirmBulkImport = viewModel::importBulkStudents,
                             onCreateBlock = viewModel::createServantBlock,
+                            onUpdateBlock = viewModel::updateServantBlock,
+                            onUpdateBlockAvatar = viewModel::updateBlockCustomAvatar,
                             onMoveStudentToBlock = viewModel::moveStudentToBlock,
                             onReorderStudent = viewModel::reorderStudentWithinBlock,
                             onUpdateStudent = viewModel::updateStudentDetails,

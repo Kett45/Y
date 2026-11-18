@@ -867,25 +867,65 @@ fun ServantAvatarCircle(
     accentColor: Color,
     size: Dp = 44.dp,
     isEditable: Boolean = false,
+    blockId: String = "",
     onClick: (() -> Unit)? = null
 ) {
+    val cleanServantUid = servantUid.trim()
+    val cleanBlockId = blockId.trim()
+    val customBlockPhotoRaw = if (cleanBlockId.isNotBlank()) {
+        StudentAvatarImageHelper.peekCachedLocalAlbumRaw("servant_block_$cleanBlockId")
+    } else {
+        ""
+    }
+    val memberHasOwnPhoto = cleanServantUid.isNotBlank() && (
+        memberProfile?.effectiveHasAvatar == true ||
+            !memberProfile?.effectiveAvatarBase64.isNullOrBlank() ||
+            StudentAvatarImageHelper.peekCachedLocalAlbumRaw("servant_$cleanServantUid").isNotBlank()
+        )
+
     val syntheticStudent = remember(
-        servantUid,
+        cleanServantUid,
+        cleanBlockId,
         servantName,
         groupId,
         memberProfile?.effectiveAvatarKey,
         memberProfile?.effectiveHasAvatar,
-        memberProfile?.effectiveAvatarBase64
+        memberProfile?.effectiveAvatarBase64,
+        customBlockPhotoRaw,
+        memberHasOwnPhoto
     ) {
-        val cleanUid = servantUid.ifBlank { servantName.hashCode().toString() }
+        val useMemberAvatar = cleanServantUid.isNotBlank() && (memberHasOwnPhoto || cleanBlockId.isBlank())
+        val resolvedDocId = when {
+            useMemberAvatar -> "servant_$cleanServantUid"
+            cleanBlockId.isNotBlank() -> "servant_block_$cleanBlockId"
+            cleanServantUid.isNotBlank() -> "servant_$cleanServantUid"
+            else -> "servant_${servantName.hashCode()}"
+        }
+        val resolvedBase64 = if (useMemberAvatar) {
+            memberProfile?.effectiveAvatarBase64.orEmpty()
+        } else {
+            customBlockPhotoRaw
+        }
+        val resolvedHasAvatar = if (useMemberAvatar) {
+            memberProfile?.effectiveHasAvatar == true || resolvedBase64.isNotBlank()
+        } else {
+            cleanBlockId.isNotBlank() || resolvedBase64.isNotBlank()
+        }
+        val resolvedHash = if (useMemberAvatar) {
+            memberProfile?.effectiveAvatarKey.orEmpty()
+        } else if (customBlockPhotoRaw.isNotBlank()) {
+            Student.computeAvatarHash(customBlockPhotoRaw)
+        } else {
+            ""
+        }
         Student(
-            id = "servant_$cleanUid",
+            id = resolvedDocId,
             groupId = groupId,
             name = servantName.ifBlank { "خادم" },
             avatarInitials = ArabicInitialsHelper.extractInitials(servantName.ifBlank { "خادم" }),
-            avatarBase64 = memberProfile?.effectiveAvatarBase64.orEmpty(),
-            hasAvatar = memberProfile?.effectiveHasAvatar == true,
-            avatarHash = memberProfile?.effectiveAvatarKey.orEmpty()
+            avatarBase64 = resolvedBase64,
+            hasAvatar = resolvedHasAvatar,
+            avatarHash = resolvedHash
         )
     }
 
@@ -897,7 +937,7 @@ fun ServantAvatarCircle(
             blockAccent = accentColor,
             size = size,
             onClick = onClick ?: {},
-            testTag = "servant_avatar_${servantUid.ifBlank { "default" }}",
+            testTag = "servant_avatar_${cleanServantUid.ifBlank { cleanBlockId.ifBlank { "default" } }}",
             blockLabel = "خادم البلوك: ${servantName.ifBlank { "خادم" }}"
         )
         if (isEditable && onClick != null) {
@@ -921,7 +961,7 @@ fun ServantAvatarCircle(
 }
 
 /**
- * Photo picker dialog for the Servant's profile photo (<50KB compressed and cached locally on disk).
+ * Photo picker dialog for the Servant's profile photo or a specific Block's custom photo (<50KB compressed and cached locally on disk).
  */
 @Composable
 fun ServantPhotoPickerDialog(
@@ -930,25 +970,50 @@ fun ServantPhotoPickerDialog(
     groupId: String,
     memberProfile: ServantMemberProfile?,
     accentColor: Color,
+    customAvatarDocId: String = "",
     onDismiss: () -> Unit,
     onSaveBase64: (String) -> Unit
 ) {
+    val cleanCustomId = customAvatarDocId.trim()
+    val customRaw = if (cleanCustomId.isNotBlank()) {
+        StudentAvatarImageHelper.peekCachedLocalAlbumRaw(cleanCustomId)
+    } else {
+        ""
+    }
     val syntheticStudent = remember(
         servantUid,
+        cleanCustomId,
         servantName,
         groupId,
         memberProfile?.effectiveAvatarKey,
         memberProfile?.effectiveHasAvatar,
-        memberProfile?.effectiveAvatarBase64
+        memberProfile?.effectiveAvatarBase64,
+        customRaw
     ) {
+        val docId = cleanCustomId.ifBlank { "servant_${servantUid.ifBlank { "me" }}" }
+        val base64 = if (cleanCustomId.isNotBlank()) {
+            customRaw
+        } else {
+            memberProfile?.effectiveAvatarBase64.orEmpty()
+        }
+        val hasAv = if (cleanCustomId.isNotBlank()) {
+            customRaw.isNotBlank() || true
+        } else {
+            memberProfile?.effectiveHasAvatar == true
+        }
+        val hash = if (cleanCustomId.isNotBlank()) {
+            if (customRaw.isNotBlank()) Student.computeAvatarHash(customRaw) else ""
+        } else {
+            memberProfile?.effectiveAvatarKey.orEmpty()
+        }
         Student(
-            id = "servant_${servantUid.ifBlank { "me" }}",
+            id = docId,
             groupId = groupId,
             name = servantName.ifBlank { "خادم" },
             avatarInitials = ArabicInitialsHelper.extractInitials(servantName.ifBlank { "خادم" }),
-            avatarBase64 = memberProfile?.effectiveAvatarBase64.orEmpty(),
-            hasAvatar = memberProfile?.effectiveHasAvatar == true,
-            avatarHash = memberProfile?.effectiveAvatarKey.orEmpty()
+            avatarBase64 = base64,
+            hasAvatar = hasAv,
+            avatarHash = hash
         )
     }
 

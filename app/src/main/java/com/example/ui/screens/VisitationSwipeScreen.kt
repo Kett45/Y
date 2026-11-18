@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -63,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -74,6 +77,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.model.ChildNote
 import com.example.data.model.ChildNoteType
 import com.example.data.model.Student
@@ -105,20 +109,39 @@ fun VisitationSwipeScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Filter to ONLY children belonging to the current servant's block(s)
+    // Filter to children belonging to the current servant's block(s),
+    // with an optional block selector for the Admin so the Admin can inspect any block or all blocks.
     val ownBlocks = remember(state.blocks, currentUserId) {
         state.blocks.filter { it.servantId == currentUserId }
     }
-    val ownBlockIds = remember(ownBlocks) {
-        ownBlocks.map { it.id }.toSet()
+    var selectedAdminBlockFilter by rememberSaveable(state.isAdmin) {
+        mutableStateOf("OWN") // "OWN", "ALL", or specific block.id
     }
-    val blockStudents = remember(state.students, ownBlockIds) {
+
+    val activeBlocks = remember(state.blocks, ownBlocks, state.isAdmin, selectedAdminBlockFilter) {
+        if (!state.isAdmin) {
+            ownBlocks
+        } else {
+            when (selectedAdminBlockFilter) {
+                "ALL" -> state.blocks
+                "OWN" -> if (ownBlocks.isNotEmpty()) ownBlocks else state.blocks
+                else -> state.blocks.filter { it.id == selectedAdminBlockFilter }.ifEmpty {
+                    if (ownBlocks.isNotEmpty()) ownBlocks else state.blocks
+                }
+            }
+        }
+    }
+
+    val activeBlockIds = remember(activeBlocks) {
+        activeBlocks.map { it.id }.toSet()
+    }
+    val blockStudents = remember(state.students, activeBlockIds) {
         state.students
-            .filter { it.blockId.isNotBlank() && it.blockId in ownBlockIds }
+            .filter { it.blockId.isNotBlank() && it.blockId in activeBlockIds }
             .sortedBy { it.studentNumber }
     }
 
-    var currentIndex by rememberSaveable(ownBlockIds.toString(), blockStudents.size) {
+    var currentIndex by rememberSaveable(activeBlockIds.toString(), blockStudents.size) {
         mutableIntStateOf(0)
     }
     val sessionDecisions = remember { mutableStateListOf<VisitationSwipeDecision>() }
@@ -184,104 +207,199 @@ fun VisitationSwipeScreen(
             modifier = Modifier
                 .widthIn(max = 600.dp)
                 .fillMaxSize()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Top Header
+            // Compact Top Header + Live Counters Row combined to give maximum vertical screen space to the photo card
             Surface(
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 2.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF8B5CF6).copy(alpha = 0.16f)),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Favorite,
-                                contentDescription = null,
-                                tint = Color(0xFF8B5CF6),
-                                modifier = Modifier.size(22.dp)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF8B5CF6).copy(alpha = 0.16f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Favorite,
+                                    contentDescription = null,
+                                    tint = Color(0xFF8B5CF6),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = "الافتقاد الذكي بالسحب",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                                val blockTitles = activeBlocks.joinToString(" • ") { it.servantName }
+                                Text(
+                                    text = if (blockTitles.isNotBlank()) "البلوك: $blockTitles" else "خاص بأطفال بلوكك فقط",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
-                        Column {
-                            Text(
-                                text = "الافتقاد الذكي بالسحب",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.ExtraBold
-                            )
-                            val blockTitles = ownBlocks.joinToString(" • ") { it.servantName }
-                            Text(
-                                text = if (blockTitles.isNotBlank()) "بلوكك: $blockTitles" else "خاص بأطفال بلوكك فقط",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+
+                        // Compact inline counters
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = Color(0xFF8B5CF6).copy(alpha = 0.12f)
+                            ) {
+                                Text(
+                                    text = "${blockStudents.size} طفل",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF8B5CF6),
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = KamSemanticColors.onlineIndicator.copy(alpha = 0.14f)
+                            ) {
+                                Text(
+                                    text = "✓ $visitedCount",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = KamSemanticColors.onlineIndicator,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = KamSemanticColors.offlineIndicator.copy(alpha = 0.14f)
+                            ) {
+                                Text(
+                                    text = "🔔 $followupCount",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = KamSemanticColors.offlineIndicator,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+
+                            if (sessionDecisions.isNotEmpty()) {
+                                IconButton(
+                                    onClick = {
+                                        if (sessionDecisions.isNotEmpty() && currentIndex > 0) {
+                                            sessionDecisions.removeAt(sessionDecisions.lastIndex)
+                                            currentIndex = (currentIndex - 1).coerceAtLeast(0)
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("visitation_undo_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Undo,
+                                        contentDescription = "تراجع",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
                         }
                     }
 
-                    if (sessionDecisions.isNotEmpty()) {
-                        IconButton(
-                            onClick = {
-                                if (sessionDecisions.isNotEmpty() && currentIndex > 0) {
-                                    sessionDecisions.removeAt(sessionDecisions.lastIndex)
-                                    currentIndex = (currentIndex - 1).coerceAtLeast(0)
-                                }
-                            },
-                            modifier = Modifier.testTag("visitation_undo_button")
+                    // Admin quick block filter strip so the Admin can inspect any servant's block
+                    if (state.isAdmin && state.blocks.size > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Undo,
-                                contentDescription = "تراجع",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                            if (ownBlocks.isNotEmpty()) {
+                                val isOwnSelected = selectedAdminBlockFilter == "OWN"
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (isOwnSelected) Color(0xFF8B5CF6) else Color(0xFF8B5CF6).copy(alpha = 0.10f),
+                                    modifier = Modifier.clickable {
+                                        selectedAdminBlockFilter = "OWN"
+                                        currentIndex = 0
+                                    }
+                                ) {
+                                    Text(
+                                        text = "بلوكي",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isOwnSelected) Color.White else Color(0xFF8B5CF6),
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                            val isAllSelected = selectedAdminBlockFilter == "ALL" || (selectedAdminBlockFilter == "OWN" && ownBlocks.isEmpty())
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = if (isAllSelected) Color(0xFF8B5CF6) else Color(0xFF8B5CF6).copy(alpha = 0.10f),
+                                modifier = Modifier.clickable {
+                                    selectedAdminBlockFilter = "ALL"
+                                    currentIndex = 0
+                                }
+                            ) {
+                                Text(
+                                    text = "كل البلوكات",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isAllSelected) Color.White else Color(0xFF8B5CF6),
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                            state.blocks.forEach { blk ->
+                                val isSelected = selectedAdminBlockFilter == blk.id
+                                val blkColor = KamSemanticColors.blockColor(blk.colorHex)
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (isSelected) blkColor else blkColor.copy(alpha = 0.12f),
+                                    modifier = Modifier.clickable {
+                                        selectedAdminBlockFilter = blk.id
+                                        currentIndex = 0
+                                    }
+                                ) {
+                                    Text(
+                                        text = blk.servantName,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isSelected) Color.White else blkColor,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Live Counters Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                VisitationCounterChip(
-                    label = "أطفال بلوكك",
-                    count = blockStudents.size,
-                    color = Color(0xFF8B5CF6),
-                    modifier = Modifier.weight(1f)
-                )
-                VisitationCounterChip(
-                    label = "تم افتقاده ✓",
-                    count = visitedCount,
-                    color = KamSemanticColors.onlineIndicator,
-                    modifier = Modifier.weight(1f)
-                )
-                VisitationCounterChip(
-                    label = "محتاج متابعة 🔔",
-                    count = followupCount,
-                    color = KamSemanticColors.offlineIndicator,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            if (ownBlocks.isEmpty()) {
+            if (activeBlocks.isEmpty()) {
                 // No block assigned to current servant
                 Card(
                     modifier = Modifier
@@ -349,14 +467,14 @@ fun VisitationSwipeScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "لا يوجد أطفال مسجلين في بلوكك بعد",
+                            text = "لا يوجد أطفال مسجلين في هذا البلوك بعد",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "أضف أطفالاً إلى بلوكك من الشاشة الرئيسية ليظهروا هنا فوراً في قائمة الافتقاد الذكي.",
+                            text = "أضف أطفالاً إلى البلوك من الشاشة الرئيسية ليظهروا هنا فوراً في قائمة الافتقاد الذكي.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
@@ -365,8 +483,9 @@ fun VisitationSwipeScreen(
                 }
             } else if (currentIndex < blockStudents.size) {
                 val currentStudent = blockStudents[currentIndex]
-                val studentBlock = ownBlocks.firstOrNull { it.id == currentStudent.blockId }
-                val progress = (currentIndex.toFloat() / blockStudents.size.toFloat()).coerceIn(0f, 1f)
+                val studentBlock = state.blocks.firstOrNull { it.id == currentStudent.blockId }
+                val studentBlockColor = KamSemanticColors.blockColor(studentBlock?.colorHex ?: "#8B5CF6")
+                val progress = ((currentIndex + 1).toFloat() / blockStudents.size.toFloat()).coerceIn(0f, 1f)
 
                 var largePhoto by remember(currentStudent.id, currentStudent.effectiveAvatarKey) {
                     mutableStateOf(StudentAvatarImageHelper.getCachedLargeAttendancePhoto(currentStudent))
@@ -377,48 +496,27 @@ fun VisitationSwipeScreen(
                     }
                 }
 
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "الطفل ${currentIndex + 1} من ${blockStudents.size}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "اسحب يميناً (تم افتقاده) • لأسفل (ملاحظة) • يساراً (محتاج متابعة)",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF8B5CF6),
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(999.dp)),
-                        color = Color(0xFF8B5CF6)
-                    )
-                }
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(999.dp)),
+                    color = Color(0xFF8B5CF6)
+                )
 
                 val tintOverlay by animateColorAsState(
                     targetValue = when {
-                        offsetX.value > 90f -> KamSemanticColors.onlineIndicator.copy(alpha = 0.16f)
-                        offsetX.value < -90f -> KamSemanticColors.offlineIndicator.copy(alpha = 0.16f)
-                        offsetY.value > 90f -> Color(0xFF8B5CF6).copy(alpha = 0.16f)
+                        offsetX.value > 90f -> KamSemanticColors.onlineIndicator.copy(alpha = 0.28f)
+                        offsetX.value < -90f -> KamSemanticColors.offlineIndicator.copy(alpha = 0.28f)
+                        offsetY.value > 90f -> Color(0xFF8B5CF6).copy(alpha = 0.28f)
                         else -> Color.Transparent
                     },
                     animationSpec = tween(120),
                     label = "visitationSwipeTint"
                 )
 
-                // Active Swipe Card
+                // Full-Bleed Edge-to-Edge Photo Swipe Card filling the screen
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -489,145 +587,232 @@ fun VisitationSwipeScreen(
                             )
                         }
                         .testTag("visitation_active_student_card"),
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(26.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
+                        containerColor = Color(0xFF14121E)
                     ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(tintOverlay)
-                            .padding(18.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            // Top status badges
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = Color(0xFF8B5CF6).copy(alpha = 0.14f)
-                                ) {
-                                    Text(
-                                        text = studentBlock?.servantName ?: "بلوكي",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = Color(0xFF8B5CF6),
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(
-                                            horizontal = 12.dp,
-                                            vertical = 5.dp
-                                        )
-                                    )
-                                }
-
-                                val studentPts = state.pointsForStudentInSelectedMonth(currentStudent.id)
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant
-                                ) {
-                                    Text(
-                                        text = "#${currentStudent.studentNumber} • $studentPts نقطة",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(
-                                            horizontal = 10.dp,
-                                            vertical = 5.dp
-                                        )
-                                    )
-                                }
-                            }
-
-                            // Center Avatar + Name + Memorization info
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = Color(0xFF8B5CF6).copy(alpha = 0.15f),
-                                    border = BorderStroke(3.dp, Color(0xFF8B5CF6)),
-                                    modifier = Modifier.size(132.dp)
-                                ) {
-                                    val bmp = largePhoto
-                                    if (bmp != null) {
-                                        Image(
-                                            bitmap = bmp,
-                                            contentDescription = currentStudent.name,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .clip(CircleShape)
-                                        )
-                                    } else {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text(
-                                                text = currentStudent.avatarInitials,
-                                                style = MaterialTheme.typography.headlineLarge,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                color = Color(0xFF8B5CF6)
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        // 1. Full-screen edge-to-edge child photo filling 100% of the card
+                        val bmp = largePhoto
+                        if (bmp != null) {
+                            Image(
+                                bitmap = bmp,
+                                contentDescription = currentStudent.name,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            // Full-bleed artistic gradient backdrop when child has no photo yet
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                studentBlockColor.copy(alpha = 0.85f),
+                                                Color(0xFF2D1B4E),
+                                                Color(0xFF12101B)
                                             )
-                                        }
-                                    }
-                                }
-
-                                Text(
-                                    text = currentStudent.name,
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    textAlign = TextAlign.Center
-                                )
-
-                                if (currentStudent.lastMemorizedText.isNotBlank()) {
+                                        )
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(180.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White.copy(alpha = 0.14f))
+                                        .border(3.dp, Color.White.copy(alpha = 0.35f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
                                     Text(
-                                        text = "آخر تسميع: ${currentStudent.lastMemorizedText}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        textAlign = TextAlign.Center,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
+                                        text = currentStudent.avatarInitials,
+                                        fontSize = 64.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color.White
                                     )
                                 }
                             }
+                        }
 
-                            // Recent Visitation Note for this child if any
+                        // 2. Top gradient scrim for crisp badge readability over bright photos
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(110.dp)
+                                .align(Alignment.TopCenter)
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Black.copy(alpha = 0.68f),
+                                            Color.Transparent
+                                        )
+                                    )
+                                )
+                        )
+
+                        // 3. Bottom gradient scrim for child name, memorization, and last visitation note
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(250.dp)
+                                .align(Alignment.BottomCenter)
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Transparent,
+                                            Color.Black.copy(alpha = 0.65f),
+                                            Color.Black.copy(alpha = 0.92f)
+                                        )
+                                    )
+                                )
+                        )
+
+                        // 4. Live Swipe Tint Overlay
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(tintOverlay)
+                        )
+
+                        // 5. Live Swipe Direction Stamp in Center
+                        val swipeStamp = when {
+                            offsetX.value > 95f -> Triple("تم افتقاده ✓", KamSemanticColors.onlineIndicator, true)
+                            offsetX.value < -95f -> Triple("محتاج متابعة 🔔", KamSemanticColors.offlineIndicator, true)
+                            offsetY.value > 95f -> Triple("ملاحظة افتقاد 📝", Color(0xFF8B5CF6), true)
+                            else -> Triple("", Color.Transparent, false)
+                        }
+                        if (swipeStamp.third) {
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = swipeStamp.second.copy(alpha = 0.92f),
+                                border = BorderStroke(2.dp, Color.White),
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .padding(16.dp)
+                            ) {
+                                Text(
+                                    text = swipeStamp.first,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+                                )
+                            }
+                        }
+
+                        // 6. Top Overlay Bar (Block name, Child index, Points)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .align(Alignment.TopCenter)
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = Color.Black.copy(alpha = 0.55f),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))
+                            ) {
+                                Text(
+                                    text = "بلوك ${studentBlock?.servantName ?: "بلوكي"} • ${currentIndex + 1}/${blockStudents.size}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(
+                                        horizontal = 12.dp,
+                                        vertical = 6.dp
+                                    )
+                                )
+                            }
+
+                            val studentPts = state.pointsForStudentInSelectedMonth(currentStudent.id)
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = Color.Black.copy(alpha = 0.55f),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))
+                            ) {
+                                Text(
+                                    text = "#${currentStudent.studentNumber} • $studentPts نقطة",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(
+                                        horizontal = 12.dp,
+                                        vertical = 6.dp
+                                    )
+                                )
+                            }
+                        }
+
+                        // 7. Bottom Overlay Info (Child Name, Last Memorization, Last Visitation Note, Swipe Hint)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .align(Alignment.BottomCenter)
+                                .padding(horizontal = 18.dp, vertical = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = currentStudent.name,
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+
+                            if (currentStudent.lastMemorizedText.isNotBlank()) {
+                                Text(
+                                    text = "📖 آخر تسميع: ${currentStudent.lastMemorizedText}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White.copy(alpha = 0.92f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
                             val lastChildVisitation = remember(visitationNotes, currentStudent.id) {
                                 visitationNotes.firstOrNull { it.studentId == currentStudent.id }
                             }
                             if (lastChildVisitation != null) {
                                 Surface(
                                     shape = RoundedCornerShape(14.dp),
-                                    color = Color(0xFF8B5CF6).copy(alpha = 0.1f),
+                                    color = Color.White.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.24f)),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Column(
-                                        modifier = Modifier.padding(10.dp),
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                         verticalArrangement = Arrangement.spacedBy(2.dp)
                                     ) {
                                         Text(
                                             text = "آخر افتقاد مسجل:",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = Color(0xFF8B5CF6),
+                                            color = Color(0xFFD8B4FE),
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
                                             text = lastChildVisitation.text,
                                             style = MaterialTheme.typography.bodySmall,
+                                            color = Color.White,
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                 }
-                            } else {
-                                Spacer(modifier = Modifier.height(4.dp))
                             }
+
+                            Text(
+                                text = "اسحب يميناً (تم افتقاده ✓) • لأسفل (ملاحظة 📝) • يساراً (متابعة 🔔)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.78f),
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center
+                            )
                         }
                     }
                 }
@@ -653,7 +838,7 @@ fun VisitationSwipeScreen(
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(52.dp)
+                            .height(50.dp)
                             .testTag("visitation_btn_visited")
                     ) {
                         Icon(
@@ -674,7 +859,7 @@ fun VisitationSwipeScreen(
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(52.dp)
+                            .height(50.dp)
                             .testTag("visitation_btn_note")
                     ) {
                         Icon(
@@ -701,7 +886,7 @@ fun VisitationSwipeScreen(
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(52.dp)
+                            .height(50.dp)
                             .testTag("visitation_btn_followup")
                     ) {
                         Icon(

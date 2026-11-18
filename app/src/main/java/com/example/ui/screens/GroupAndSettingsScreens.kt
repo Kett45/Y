@@ -663,6 +663,8 @@ fun GroupInvitationsScreen(
             val isHiddenForMe = blk.id in state.hiddenBlockIds
             val isBlockAdminOwner = blk.servantId.isNotBlank() && blk.servantId == state.group?.adminId
             val hasActiveServant = blk.servantId.isNotBlank() && !isBlockAdminOwner
+            val assignedServantProfile = state.memberProfileForBlock(blk)
+            val displayOwnerName = state.resolvedBlockOwnerName(blk)
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -680,10 +682,14 @@ fun GroupInvitationsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(18.dp)
-                                .background(blkColor, CircleShape)
+                        ServantAvatarCircle(
+                            servantUid = blk.servantId,
+                            servantName = displayOwnerName,
+                            groupId = blk.groupId.ifBlank { state.group?.id.orEmpty() },
+                            memberProfile = assignedServantProfile,
+                            size = 38.dp,
+                            accentColor = blkColor,
+                            blockId = blk.id
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
@@ -693,8 +699,8 @@ fun GroupInvitationsScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             val servantStatusText = when {
-                                isBlockAdminOwner -> "بلوك أمين المجموعة"
-                                hasActiveServant -> "خادم مشترك في المجموعة"
+                                isBlockAdminOwner -> "بلوك أمين المجموعة ($displayOwnerName)"
+                                hasActiveServant -> "الخادم المسؤول: $displayOwnerName"
                                 else -> "بلوك بدون خادم مرتبط حالياً"
                             }
                             Text(
@@ -1199,30 +1205,56 @@ fun GroupInvitationsScreen(
                             }
                         }
                     }
-                    if (state.memberProfiles.isNotEmpty()) {
-                        Text("ربط البلوك بحساب خادم في المجموعة (اختياري):", style = MaterialTheme.typography.labelMedium)
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                    val servantCandidates = state.allGroupServantCandidates
+                    Text("تعيين خادم مسؤول عن هذا البلوك:", style = MaterialTheme.typography.labelMedium)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val unassignedSelected = selectedServantUid.isBlank()
+                        OutlinedButton(
+                            onClick = { selectedServantUid = "" },
+                            shape = RoundedCornerShape(999.dp),
+                            border = BorderStroke(
+                                width = if (unassignedSelected) 2.dp else 1.dp,
+                                color = if (unassignedSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                         ) {
-                            state.memberProfiles.forEach { member ->
-                                val mUid = member.effectiveUid
-                                val selected = selectedServantUid == mUid
-                                OutlinedButton(
-                                    onClick = {
-                                        selectedServantUid = if (selected) "" else mUid
-                                        if (newBlockName.isBlank()) {
-                                            newBlockName = member.displayName
-                                        }
+                            Text(
+                                text = if (unassignedSelected) "✓ خادم جديد / بدون ربط حالياً" else "خادم جديد / بدون ربط حالياً",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (unassignedSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+
+                        servantCandidates.forEach { member ->
+                            val mUid = member.effectiveUid
+                            val selected = selectedServantUid == mUid
+                            val isMemberAdmin = mUid == state.group?.adminId
+                            OutlinedButton(
+                                onClick = {
+                                    selectedServantUid = if (selected) "" else mUid
+                                    if (!selected && newBlockName.isBlank()) {
+                                        newBlockName = member.displayName
+                                    }
+                                },
+                                shape = RoundedCornerShape(999.dp),
+                                border = BorderStroke(
+                                    width = if (selected) 2.dp else 1.dp,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                ),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = buildString {
+                                        if (selected) append("✓ ")
+                                        append(member.displayName)
+                                        if (isMemberAdmin) append(" (الأمين)")
                                     },
-                                    shape = RoundedCornerShape(999.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = if (selected) "✓ ${member.displayName}" else member.displayName,
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
-                                }
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                )
                             }
                         }
                     }
@@ -1298,27 +1330,53 @@ fun GroupInvitationsScreen(
                             }
                         }
                     }
-                    if (state.memberProfiles.isNotEmpty()) {
-                        Text("الخادم المسؤول عن البلوك:", style = MaterialTheme.typography.labelMedium)
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                    val servantCandidates = state.allGroupServantCandidates
+                    Text("تعيين الخادم المسؤول عن البلوك:", style = MaterialTheme.typography.labelMedium)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val unassignedSelected = editedServantId.isBlank()
+                        OutlinedButton(
+                            onClick = { editedServantId = "" },
+                            shape = RoundedCornerShape(999.dp),
+                            border = BorderStroke(
+                                width = if (unassignedSelected) 2.dp else 1.dp,
+                                color = if (unassignedSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                         ) {
-                            state.memberProfiles.forEach { member ->
-                                val mUid = member.effectiveUid
-                                val selected = editedServantId == mUid
-                                OutlinedButton(
-                                    onClick = {
-                                        editedServantId = if (selected) "" else mUid
+                            Text(
+                                text = if (unassignedSelected) "✓ بدون ربط بحساب خادم" else "بدون ربط بحساب خادم",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (unassignedSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+
+                        servantCandidates.forEach { member ->
+                            val mUid = member.effectiveUid
+                            val selected = editedServantId == mUid
+                            val isMemberAdmin = mUid == state.group?.adminId
+                            OutlinedButton(
+                                onClick = {
+                                    editedServantId = if (selected) "" else mUid
+                                },
+                                shape = RoundedCornerShape(999.dp),
+                                border = BorderStroke(
+                                    width = if (selected) 2.dp else 1.dp,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                ),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = buildString {
+                                        if (selected) append("✓ ")
+                                        append(member.displayName)
+                                        if (isMemberAdmin) append(" (الأمين)")
                                     },
-                                    shape = RoundedCornerShape(999.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = if (selected) "✓ ${member.displayName}" else member.displayName,
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
-                                }
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                )
                             }
                         }
                     }

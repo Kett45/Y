@@ -1256,6 +1256,52 @@ class KamRepository(private val db: FirebaseFirestore) {
         }
     }
 
+    suspend fun updateBlockCustomAvatar(
+        groupId: String,
+        blockId: String,
+        avatarBase64: String,
+        memberUids: List<String> = emptyList(),
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        require(groupId.isNotBlank() && blockId.isNotBlank()) { "البلوك غير محدد" }
+        val avatarDocId = "servant_block_$blockId".take(80)
+        val safeAvatar = avatarBase64.trim().take(50000)
+        val hasAvatar = safeAvatar.isNotBlank()
+        val avatarHash = if (hasAvatar) Student.computeAvatarHash(safeAvatar) else ""
+        val safeMembers = memberUids.ifEmpty { listOf(uid) }.distinct().take(MAX_SERVANTS_PER_GROUP)
+
+        StudentAvatarImageHelper.writeLocalAlbumRaw(null, avatarDocId, safeAvatar)
+        val avatarRef = db.collection("groups").document(groupId)
+            .collection("avatars").document(avatarDocId)
+        try {
+            val task = if (hasAvatar) {
+                avatarRef.set(
+                    mapOf(
+                        "groupId" to groupId,
+                        "studentId" to avatarDocId,
+                        "avatarBase64" to safeAvatar,
+                        "avatarHash" to avatarHash,
+                        "updatedByUid" to uid,
+                        "memberUids" to safeMembers,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            } else {
+                avatarRef.delete()
+            }
+            if (waitForServerAck) {
+                task.await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, avatarRef.path)
+            throw e
+        }
+    }
+
     suspend fun deleteBlock(groupId: String, blockId: String): Result<Unit> = runCatching {
         requireUserId()
         val docRef = db.collection("groups").document(groupId).collection("blocks").document(blockId)

@@ -373,10 +373,76 @@ data class KamScreenState(
         return fallbackName.ifBlank { "خادم" }
     }
 
+    fun resolvedBlockOwnerName(block: ServantBlock): String {
+        val explicitBlockName = block.servantName.trim()
+        if (block.servantId.isNotBlank()) {
+            val alias = servantAliases[block.servantId]?.trim()?.takeIf { it.isNotBlank() }
+            if (alias != null) return alias
+            if (explicitBlockName.isNotBlank()) return explicitBlockName
+            val memberName = memberProfileForServant(block.servantId)?.displayName?.trim()?.takeIf { it.isNotBlank() }
+            if (memberName != null) return memberName
+        }
+        return explicitBlockName.ifBlank { "خادم" }
+    }
+
+    fun memberProfileForBlock(block: ServantBlock): ServantMemberProfile? {
+        val uid = block.servantId.trim()
+        if (uid.isBlank()) return null
+        return memberProfileForServant(uid)
+    }
+
+    val allGroupServantCandidates: List<ServantMemberProfile>
+        get() {
+            val byUid = LinkedHashMap<String, ServantMemberProfile>()
+            memberProfiles.forEach { profile ->
+                val uid = profile.effectiveUid.trim()
+                if (uid.isNotBlank()) {
+                    byUid[uid] = profile
+                }
+            }
+            val grp = group
+            if (grp != null && grp.adminId.isNotBlank() && grp.adminId !in byUid) {
+                byUid[grp.adminId] = ServantMemberProfile(
+                    id = grp.adminId,
+                    uid = grp.adminId,
+                    displayName = grp.adminName.ifBlank { "الأمين" },
+                    groupId = grp.inviteCode
+                )
+            }
+            blocks.forEach { blk ->
+                val bUid = blk.servantId.trim()
+                if (bUid.isNotBlank() && bUid !in byUid) {
+                    byUid[bUid] = ServantMemberProfile(
+                        id = bUid,
+                        uid = bUid,
+                        displayName = blk.servantName.ifBlank { "خادم" },
+                        groupId = blk.groupId
+                    )
+                }
+            }
+            grp?.memberUids?.forEachIndexed { idx, uid ->
+                val cleanUid = uid.trim()
+                if (cleanUid.isNotBlank() && cleanUid !in byUid && cleanUid !in grp.bannedUids) {
+                    val fallback = if (cleanUid == userProfile?.userId) {
+                        userProfile.displayName.ifBlank { "خادم ${idx + 1}" }
+                    } else {
+                        "خادم مشترك (${idx + 1})"
+                    }
+                    byUid[cleanUid] = ServantMemberProfile(
+                        id = cleanUid,
+                        uid = cleanUid,
+                        displayName = fallback,
+                        groupId = grp.inviteCode
+                    )
+                }
+            }
+            return byUid.values.toList()
+        }
+
     fun blockNameForStudent(student: Student): String {
         val blk = blocks.firstOrNull { it.id == student.blockId }
         return if (blk != null && blk.servantName.isNotBlank()) {
-            val resolvedServant = resolvedServantName(blk.servantId, blk.servantName)
+            val resolvedServant = resolvedBlockOwnerName(blk)
             "بلوك $resolvedServant"
         } else {
             "بدون بلوك"
@@ -680,6 +746,7 @@ class KamViewModel(
     private val recentTapTimestamps = mutableMapOf<String, Long>()
     private var lastMigratedGroupKey: String = ""
     private var lastMigratedInlineAvatarsGroupKey: String = ""
+    private var lastRepairedAdminBlocksGroupKey: String = ""
     private var lastSyncedMemberGroupKey: String = ""
     private var lastSavedCacheSignature: String = ""
     private var lastAutoRotatedGroupKey: String = ""
@@ -718,7 +785,7 @@ class KamViewModel(
 
     init {
         StudentAvatarImageHelper.cloudAvatarFetcher = { groupId, targetId ->
-            if (targetId.startsWith("servant_")) {
+            if (targetId.startsWith("servant_") && !targetId.startsWith("servant_block_")) {
                 repository.fetchServantAvatar(groupId, targetId.removePrefix("servant_"))
             } else {
                 repository.fetchStudentAvatar(groupId, targetId)
@@ -1260,8 +1327,42 @@ class KamViewModel(
                 ?: userGroups.firstOrNull { it.inviteCode != lastEjectedBannedGroupId }?.inviteCode.orEmpty()
         }
 
-        val effectiveBlocks = if (activeGroup == null) emptyList() else blocks
+        val rawEffectiveBlocks = if (activeGroup == null) emptyList() else blocks
         val effectiveMembers = if (activeGroup == null) emptyList() else mergedMembers
+
+        // Sanitize legacy blocks that accidentally received adminId when Admin created blocks for other servants
+        val (effectiveBlocks, blocksNeedingCloudRepair) = sanitizeLegacyAdminBlocks(
+            rawBlocks = rawEffectiveBlocks,
+            activeGroup = activeGroup,
+            members = effectiveMembers,
+            profile = profile
+        )
+        if (
+            activeGroup != null &&
+            activeGroup.adminId == currentUserId &&
+            blocksNeedingCloudRepair.isNotEmpty()
+        ) {
+            val repairSig = "${activeGroup.inviteCode}_${blocksNeedingCloudRepair.joinToString(",") { "${it.id}:${it.servantId}" }}"
+            if (repairSig != lastRepairedAdminBlocksGroupKey) {
+                lastRepairedAdminBlocksGroupKey = repairSig
+                val snapGroup = activeGroup
+                viewModelScope.launch(Dispatchers.IO) {
+                    blocksNeedingCloudRepair.forEach { repairedBlock ->
+                        repository.updateBlock(
+                            groupId = snapGroup.inviteCode,
+                            blockId = repairedBlock.id,
+                            servantName = repairedBlock.servantName,
+                            colorHex = repairedBlock.colorHex,
+                            sortOrder = repairedBlock.sortOrder,
+                            memberUids = snapGroup.memberUids,
+                            servantId = repairedBlock.servantId,
+                            waitForServerAck = false
+                        )
+                    }
+                }
+            }
+        }
+
         val effectiveStudents = if (activeGroup == null) emptyList() else sequentiallyNumberedStudents
         val effectiveEvents = if (activeGroup == null) emptyList() else events
         val effectiveBalances = if (activeGroup == null) emptyList() else balances
@@ -1733,12 +1834,12 @@ class KamViewModel(
         showBanner("تم الإبقاء على الاسمين كطفلين منفصلين")
     }
 
-    // --- Servant Blocks (Create & Delete strictly Admin-only) ---
+    // --- Servant Blocks (Create, Edit & Assign Servant strictly Admin-only) ---
 
     fun createServantBlock(
         servantName: String,
         colorHex: String,
-        servantUid: String = currentUserId
+        servantUid: String = ""
     ) {
         val state = uiState.value
         val group = state.group ?: return
@@ -1746,18 +1847,20 @@ class KamViewModel(
             showBanner("إنشاء البلوكات متاح لأمين المجموعة فقط")
             return
         }
+        val cleanServantUid = servantUid.trim()
+        val cleanServantName = servantName.trim()
         viewModelScope.launch {
             val nextOrder = (state.blocks.maxOfOrNull { it.sortOrder.toInt() } ?: -1) + 1
             repository.createBlock(
                 groupId = group.inviteCode,
-                servantId = servantUid.ifBlank { currentUserId },
-                servantName = servantName,
+                servantId = cleanServantUid,
+                servantName = cleanServantName,
                 colorHex = colorHex,
                 sortOrder = nextOrder,
                 memberUids = group.memberUids,
                 waitForServerAck = false
             ).onSuccess {
-                showBanner("تم إضافة بلوك الخادم: $servantName")
+                showBanner("تم إضافة بلوك الخادم: $cleanServantName")
             }.onFailure {
                 _operationError.value = it.localizedMessage ?: "تعذر إضافة البلوك (متاح للأمين فقط)"
             }
@@ -1772,20 +1875,54 @@ class KamViewModel(
     ) {
         val state = uiState.value
         val group = state.group ?: return
+        if (!state.isAdmin && block.servantId != currentUserId) {
+            showBanner("تعديل البلوكات وتعيين الخدام متاح لأمين المجموعة فقط")
+            return
+        }
         viewModelScope.launch {
             repository.updateBlock(
                 groupId = group.inviteCode,
                 blockId = block.id,
-                servantName = newName,
+                servantName = newName.trim(),
                 colorHex = newColorHex,
                 sortOrder = block.sortOrder,
                 memberUids = group.memberUids,
-                servantId = if (state.isAdmin) newServantId else null,
+                servantId = if (state.isAdmin) newServantId?.trim() else null,
                 waitForServerAck = false
             ).onSuccess {
-                showBanner("تم تحديث بلوك $newName")
+                showBanner("تم تحديث بلوك ${newName.trim()}")
             }.onFailure {
                 _operationError.value = it.localizedMessage ?: "تعذر تعديل البلوك"
+            }
+        }
+    }
+
+    fun updateBlockCustomAvatar(
+        block: ServantBlock,
+        avatarBase64: String
+    ) {
+        val state = uiState.value
+        val group = state.group ?: return
+        if (!state.isAdmin) {
+            showBanner("تخصيص صورة البلوك متاح لأمين المجموعة فقط")
+            return
+        }
+        val cleanAvatar = avatarBase64.trim().take(50000)
+        val hasAvatar = cleanAvatar.isNotBlank()
+        viewModelScope.launch {
+            repository.updateBlockCustomAvatar(
+                groupId = group.inviteCode,
+                blockId = block.id,
+                avatarBase64 = cleanAvatar,
+                memberUids = group.memberUids,
+                waitForServerAck = false
+            ).onSuccess {
+                showBanner(
+                    if (hasAvatar) "تم تحديث صورة «بلوك ${block.servantName}»"
+                    else "تم حذف الصورة المخصصة لـ «بلوك ${block.servantName}»"
+                )
+            }.onFailure { err ->
+                _operationError.value = err.localizedMessage ?: "تعذر تحديث صورة البلوك"
             }
         }
     }
@@ -3085,13 +3222,23 @@ class KamViewModel(
                 ownPrimary.isNotBlank() ||
                 ownSecondary.isNotBlank()
             val cachedNotes = if (activeGroup == null) emptyList() else LocalClassroomCache.getMemoryChildNotes(activeGroup.inviteCode)
+            val sanitizedCachedBlocks = if (activeGroup == null) {
+                emptyList()
+            } else {
+                sanitizeLegacyAdminBlocks(
+                    rawBlocks = cached.blocks,
+                    activeGroup = activeGroup,
+                    members = cached.memberProfiles,
+                    profile = effectiveProfile
+                ).first
+            }
             return KamScreenState(
                 isLoading = false,
                 userProfile = effectiveProfile,
                 group = activeGroup,
                 userGroups = cached.userGroups,
                 isAdmin = activeGroup?.adminId == currentUserId,
-                blocks = if (activeGroup == null) emptyList() else cached.blocks,
+                blocks = sanitizedCachedBlocks,
                 memberProfiles = if (activeGroup == null) emptyList() else cached.memberProfiles,
                 students = if (activeGroup == null) emptyList() else cached.students,
                 cardEvents = if (activeGroup == null) emptyList() else cached.cardEvents.filter { it.monthKey == monthKey },
@@ -3108,6 +3255,66 @@ class KamViewModel(
                 ownPhoneHidden = ownHidden,
                 ownAvatarHash = ownAvatarHash
             )
+        }
+
+        /**
+         * Detects and repairs blocks that accidentally inherited `group.adminId` when the Admin
+         * created blocks for other servants without selecting a member UID.
+         */
+        fun sanitizeLegacyAdminBlocks(
+            rawBlocks: List<ServantBlock>,
+            activeGroup: Group?,
+            members: List<ServantMemberProfile>,
+            profile: UserProfile?
+        ): Pair<List<ServantBlock>, List<ServantBlock>> {
+            if (activeGroup == null || rawBlocks.isEmpty() || activeGroup.adminId.isBlank()) {
+                return rawBlocks to emptyList()
+            }
+            val adminId = activeGroup.adminId.trim()
+            val adminBlocks = rawBlocks.filter { it.servantId.trim() == adminId }
+            if (adminBlocks.size <= 1) {
+                return rawBlocks to emptyList()
+            }
+
+            val adminMemberName = members.firstOrNull { it.effectiveUid == adminId }?.displayName?.trim().orEmpty()
+            val adminProfileName = if (profile?.userId == adminId) profile.displayName.trim() else ""
+            val adminGroupName = activeGroup.adminName.trim()
+            val knownAdminNamesNorm = listOf(adminMemberName, adminProfileName, adminGroupName)
+                .filter { it.isNotBlank() }
+                .map { ArabicInitialsHelper.normalizeArabicName(it) }
+                .filter { it.isNotBlank() }
+                .toSet()
+
+            val primaryAdminBlock = adminBlocks.firstOrNull { blk ->
+                val normBlk = ArabicInitialsHelper.normalizeArabicName(blk.servantName)
+                normBlk.isNotBlank() && normBlk in knownAdminNamesNorm
+            } ?: adminBlocks.minWithOrNull(compareBy<ServantBlock> { it.sortOrder }.thenBy { it.id })
+
+            val repairedList = ArrayList<ServantBlock>(rawBlocks.size)
+            val cloudRepairs = ArrayList<ServantBlock>()
+
+            for (blk in rawBlocks) {
+                if (blk.servantId.trim() == adminId && blk.id != primaryAdminBlock?.id) {
+                    val normBlkName = ArabicInitialsHelper.normalizeArabicName(blk.servantName)
+                    val isExplicitlyAdminName = normBlkName.isNotBlank() && normBlkName in knownAdminNamesNorm
+                    if (!isExplicitlyAdminName) {
+                        val matchedMember = members.firstOrNull { member ->
+                            val mUid = member.effectiveUid.trim()
+                            mUid.isNotBlank() &&
+                                mUid != adminId &&
+                                normBlkName.isNotBlank() &&
+                                ArabicInitialsHelper.normalizeArabicName(member.displayName) == normBlkName
+                        }
+                        val fixedServantId = matchedMember?.effectiveUid?.trim().orEmpty()
+                        val fixedBlock = blk.copy(servantId = fixedServantId)
+                        repairedList.add(fixedBlock)
+                        cloudRepairs.add(fixedBlock)
+                        continue
+                    }
+                }
+                repairedList.add(blk)
+            }
+            return repairedList to cloudRepairs
         }
 
         /**
