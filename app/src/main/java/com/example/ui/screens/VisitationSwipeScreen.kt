@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -48,6 +49,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -98,8 +100,9 @@ import kotlin.math.roundToInt
 
 private data class VisitationSwipeDecision(
     val student: Student,
-    val status: VisitationStatus,
-    val noteText: String
+    val status: VisitationStatus?,
+    val noteText: String,
+    val isSkipped: Boolean = false
 )
 
 @Composable
@@ -107,6 +110,7 @@ fun VisitationSwipeScreen(
     state: KamScreenState,
     currentUserId: String,
     onRecordVisitation: (student: Student, status: VisitationStatus, noteText: String, notifyGroup: Boolean) -> Unit,
+    onUpdateStudent: (student: Student, newName: String, newNumber: Int, newBlockId: String) -> Unit = { _, _, _, _ -> },
     onDeleteNote: (ChildNote) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -171,6 +175,8 @@ fun VisitationSwipeScreen(
     var noteDialogStudent by remember { mutableStateOf<Student?>(null) }
     var noteDraftText by remember { mutableStateOf("") }
     var noteSelectedStatus by remember { mutableStateOf(VisitationStatus.VISITED) }
+    var editNameStudent by remember { mutableStateOf<Student?>(null) }
+    var editNameDraft by remember { mutableStateOf("") }
 
     val visitationNotes = remember(state.childNotes, blockStudents) {
         val ownStudentIds = blockStudents.map { it.id }.toSet()
@@ -179,8 +185,8 @@ fun VisitationSwipeScreen(
         }
     }
 
-    val visitedCount = sessionDecisions.count { it.status == VisitationStatus.VISITED }
-    val followupCount = sessionDecisions.count { it.status == VisitationStatus.FOLLOWUP }
+    val visitedCount = sessionDecisions.count { !it.isSkipped && it.status == VisitationStatus.VISITED }
+    val followupCount = sessionDecisions.count { !it.isSkipped && it.status == VisitationStatus.FOLLOWUP }
 
     val offsetX = remember { Animatable(0f) }
     val offsetY = remember { Animatable(0f) }
@@ -195,8 +201,20 @@ fun VisitationSwipeScreen(
             VisitationStatus.FOLLOWUP -> "يحتاج متابعة وافتقاد خلال الأسبوع 🔔"
         }
         val finalNote = noteText.trim().ifBlank { defaultText }
-        sessionDecisions.add(VisitationSwipeDecision(student, status, finalNote))
+        sessionDecisions.add(VisitationSwipeDecision(student, status, finalNote, isSkipped = false))
         onRecordVisitation(student, status, finalNote, true)
+        currentIndex = (currentIndex + 1).coerceAtMost(blockStudents.size)
+    }
+
+    fun handleSkipStudent(student: Student) {
+        sessionDecisions.add(
+            VisitationSwipeDecision(
+                student = student,
+                status = null,
+                noteText = "",
+                isSkipped = true
+            )
+        )
         currentIndex = (currentIndex + 1).coerceAtMost(blockStudents.size)
     }
 
@@ -531,13 +549,10 @@ fun VisitationSwipeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .offset {
-                            IntOffset(
-                                offsetX.value.roundToInt(),
-                                offsetY.value.roundToInt()
-                            )
-                        }
                         .graphicsLayer {
+                            // Use physical screen translation so RTL layout never reverses horizontal drag direction
+                            translationX = offsetX.value
+                            translationY = offsetY.value
                             rotationZ = (offsetX.value / 28f).coerceIn(-12f, 12f)
                         }
                         .pointerInput(currentStudent.id) {
@@ -767,14 +782,43 @@ fun VisitationSwipeScreen(
                                 .padding(horizontal = 18.dp, vertical = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text(
-                                text = currentStudent.name,
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = currentStudent.name,
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Surface(
+                                    shape = CircleShape,
+                                    color = Color.White.copy(alpha = 0.20f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.38f)),
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            editNameStudent = currentStudent
+                                            editNameDraft = currentStudent.name
+                                        }
+                                        .testTag("visitation_edit_student_name_button")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "تعديل اسم الطفل",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
 
                             if (currentStudent.lastMemorizedText.isNotBlank()) {
                                 Text(
@@ -828,10 +872,10 @@ fun VisitationSwipeScreen(
                     }
                 }
 
-                // 1-Handed Bottom Action Bar (Right = Visited, Center = Note, Left = Needs Follow-up)
+                // 1-Handed Bottom Action Bar (Visited, Note, Skip/Next, Needs Follow-up)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Button(
@@ -846,19 +890,26 @@ fun VisitationSwipeScreen(
                             containerColor = KamSemanticColors.onlineIndicator,
                             contentColor = Color.White
                         ),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(1.1f)
                             .height(50.dp)
                             .testTag("visitation_btn_visited")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Check,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
+                            contentDescription = "تم افتقاده",
+                            modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("تم افتقاده ✓", fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = "تم ✓",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
 
                     FilledTonalButton(
@@ -867,7 +918,8 @@ fun VisitationSwipeScreen(
                             noteDraftText = ""
                             noteSelectedStatus = VisitationStatus.VISITED
                         },
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                         modifier = Modifier
                             .weight(1f)
                             .height(50.dp)
@@ -875,11 +927,44 @@ fun VisitationSwipeScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Edit,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
+                            contentDescription = "كتابة ملاحظة",
+                            modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("ملاحظة 📝", fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = "ملاحظة",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            handleSkipStudent(currentStudent)
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        modifier = Modifier
+                            .weight(0.95f)
+                            .height(50.dp)
+                            .testTag("visitation_btn_skip")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.SkipNext,
+                            contentDescription = "تخطي للتالي",
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                            text = "تخطي",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
 
                     Button(
@@ -894,19 +979,26 @@ fun VisitationSwipeScreen(
                             containerColor = KamSemanticColors.offlineIndicator,
                             contentColor = Color.White
                         ),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(1.05f)
                             .height(50.dp)
                             .testTag("visitation_btn_followup")
                     ) {
                         Icon(
                             imageVector = Icons.Default.NotificationsActive,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
+                            contentDescription = "يحتاج متابعة",
+                            modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("متابعة 🔔", fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = "متابعة",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                 }
             } else {
@@ -1150,6 +1242,63 @@ fun VisitationSwipeScreen(
             },
             dismissButton = {
                 TextButton(onClick = { noteDialogStudent = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Inline Edit Child Name Dialog directly from the Visitation Card
+    val targetEditNameStudent = editNameStudent
+    if (targetEditNameStudent != null) {
+        AlertDialog(
+            onDismissRequest = { editNameStudent = null },
+            title = {
+                Text(
+                    text = "تعديل اسم الطفل",
+                    fontWeight = FontWeight.ExtraBold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "يمكنك تصحيح أو تحديث اسم الطفل مباشرة دون مغادرة شاشة الافتقاد.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = editNameDraft,
+                        onValueChange = { editNameDraft = it.take(120) },
+                        label = { Text("اسم الطفل") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("visitation_edit_name_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = editNameDraft.trim()
+                        if (trimmed.isNotEmpty()) {
+                            onUpdateStudent(
+                                targetEditNameStudent,
+                                trimmed,
+                                targetEditNameStudent.studentNumber.toInt(),
+                                targetEditNameStudent.blockId
+                            )
+                            editNameStudent = null
+                        }
+                    },
+                    enabled = editNameDraft.trim().isNotEmpty(),
+                    modifier = Modifier.testTag("visitation_save_name_button")
+                ) {
+                    Text("حفظ الاسم")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editNameStudent = null }) {
                     Text("إلغاء")
                 }
             }

@@ -35,12 +35,14 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.PersonOff
@@ -165,7 +167,8 @@ fun GroupInvitationsScreen(
     onDeleteBlockKeepingChildren: (ServantBlock) -> Unit = onDeleteBlock,
     onDeleteBlockWithChildren: (ServantBlock) -> Unit = {},
     onSavePersonalServantAlias: (targetUid: String, alias: String) -> Unit = { _, _ -> },
-    onEditOwnDisplayName: (String) -> Unit = {}
+    onEditOwnDisplayName: (String) -> Unit = {},
+    onToggleAssistantAdmin: (targetUid: String, targetName: String, makeAssistant: Boolean) -> Unit = { _, _, _ -> }
 ) {
     val context = LocalContext.current
     var inviteeName by rememberSaveable { mutableStateOf("") }
@@ -179,6 +182,7 @@ fun GroupInvitationsScreen(
     var aliasInputText by rememberSaveable { mutableStateOf("") }
     var showEditOwnNameDialog by rememberSaveable { mutableStateOf(false) }
     var ownNameDraft by rememberSaveable { mutableStateOf("") }
+    var memberPendingAssistantToggle by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
 
     LaunchedEffect(Unit) {
         KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_GROUP, scrolling = false)
@@ -206,16 +210,21 @@ fun GroupInvitationsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     when (activeInfoDialogTopic) {
                         "CODE" -> {
-                            Text("• بادئة المجموعة الفريدة: ${state.group?.inviteCode.orEmpty()} • الجزء اليومي: ${state.group?.effectiveDailyToken.orEmpty()}")
-                            Text("• يتغير الجزء اليومي تلقائياً كل ٢٤ ساعة لمنع دخول غير المدعوين (متبقي حوالي $remainingHours ساعة).")
-                            Text("• شارك الرمز الكامل ($fullDailyCode) مع الخادم الجديد؛ بادئة المجموعة تضمن عدم تداخل أي مجموعتين نهائياً.")
+                            if (state.isAdmin) {
+                                Text("• بادئة المجموعة الفريدة: ${state.group?.inviteCode.orEmpty()} • الجزء اليومي: ${state.group?.effectiveDailyToken.orEmpty()}")
+                                Text("• يتغير الجزء اليومي تلقائياً كل ٢٤ ساعة لمنع دخول غير المدعوين (متبقي حوالي $remainingHours ساعة).")
+                                Text("• شارك الرمز الكامل ($fullDailyCode) مع الخادم الجديد؛ بادئة المجموعة تضمن عدم تداخل أي مجموعتين نهائياً.")
+                            } else {
+                                Text("• كود الدعوة اليومي متاح لأمين المجموعة ومساعد الأمين فقط لحماية خصوصية الفصل.")
+                            }
                         }
                         "BLOCKS" -> {
                             Text("• الضغط على زر الإزالة بجوار بلوك الخادم يقوم بإزالة الخادم وحظره من المجموعة فقط مع الإبقاء على البلوك وجميع أطفاله ونقاطهم محفوظة بالكامل.")
                         }
                         else -> {
-                            Text("• الأمين: كل الصلاحيات شاملة إزالة وحظر الخدام، تجديد الرمز اليومي، إنشاء المجموعة، والدعوات.")
-                            Text("• الخادم: يرى كل أطفال وبلوكات المجموعة، يضيف ويعدّل وينقل ويرتّب ويعطي الكروت (الحذف مرفوض من السيرفر).")
+                            Text("• الأمين الأساسي: كل الصلاحيات شاملة تعيين/إلغاء مساعد الأمين، كود الدعوة، إزالة وحظر الخدام، وتعديل قواعد المجموعة.")
+                            Text("• مساعد الأمين: ينال كافة صلاحيات الأمين (كود الدعوة اليومي، إنشاء وتعديل وحذف البلوكات، حذف الأطفال، تعديل قواعد المجموعة، وإدارة الخدام والدعوات).")
+                            Text("• الخادم: يرى كل أطفال وبلوكات المجموعة، يضيف ويعدّل وينقل ويرتّب ويعطي الكروت (كود الدعوة والحذف للأمين ومساعده فقط).")
                         }
                     }
                 }
@@ -228,11 +237,57 @@ fun GroupInvitationsScreen(
         )
     }
 
+    val pendingAssistant = memberPendingAssistantToggle
+    if (pendingAssistant != null) {
+        val (targetUid, targetName, makeAssistant) = pendingAssistant
+        AlertDialog(
+            onDismissRequest = { memberPendingAssistantToggle = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Filled.AdminPanelSettings,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = {
+                Text(
+                    text = if (makeAssistant) "تعيين مساعد أمين" else "إلغاء صلاحية مساعد الأمين",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = if (makeAssistant) {
+                        "هل تريد تعيين \"$targetName\" كمساعد أمين للمجموعة؟\n\nسينال المساعد كامل الصلاحيات: رؤية ومشاركة وتجديد كود الدعوة، إدارة البلوكات والأطفال، تعديل قواعد المجموعة، وإدارة الخدام."
+                    } else {
+                        "هل تريد إلغاء صلاحية مساعد الأمين عن \"$targetName\"؟\n\nسيعود كخادم عادي في المجموعة ولن يتمكن بعد الآن من رؤية كود الدعوة أو تعديل قواعد المجموعة."
+                    }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        memberPendingAssistantToggle = null
+                        onToggleAssistantAdmin(targetUid, targetName, makeAssistant)
+                    },
+                    modifier = Modifier.testTag("confirm_toggle_assistant_admin_button")
+                ) {
+                    Text(if (makeAssistant) "تأكيد التعيين" else "تأكيد الإلغاء")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { memberPendingAssistantToggle = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .testTag("group_invitations_list"),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // 1. Group Header, Counters & Daily Invite Code Card (Clean & Compact)
@@ -279,7 +334,7 @@ fun GroupInvitationsScreen(
                         }
 
                         IconButton(
-                            onClick = { activeInfoDialogTopic = "CODE" },
+                            onClick = { activeInfoDialogTopic = if (state.isAdmin) "CODE" else "ROLES" },
                             modifier = Modifier
                                 .size(32.dp)
                                 .testTag("group_code_info_button")
@@ -293,52 +348,52 @@ fun GroupInvitationsScreen(
                         }
                     }
 
-                    // Code Actions Row: Copy Full Code + Share + Compact Timer "⏱ ٢١س" + Small Refresh Icon
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(
-                            onClick = {
-                                val code = fullDailyCode.ifBlank { state.group?.inviteCode.orEmpty() }
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                clipboard?.setPrimaryClip(ClipData.newPlainText("رمز المجموعة اليومي", code))
-                                onCopyBanner("تم نسخ رمز المجموعة اليومي: $code")
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("copy_group_code_button")
+                    // Invite Code Actions: strictly visible ONLY to Primary Admin & Assistant Admins
+                    if (state.isAdmin) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "نسخ الرمز اليومي", modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = fullDailyCode.ifBlank { state.group?.inviteCode ?: "---" },
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        }
+                            Button(
+                                onClick = {
+                                    val code = fullDailyCode.ifBlank { state.group?.inviteCode.orEmpty() }
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    clipboard?.setPrimaryClip(ClipData.newPlainText("رمز المجموعة اليومي", code))
+                                    onCopyBanner("تم نسخ رمز المجموعة اليومي: $code")
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("copy_group_code_button")
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "نسخ الرمز اليومي", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = fullDailyCode.ifBlank { state.group?.inviteCode ?: "---" },
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
 
-                        // Compact Timer Badge "⏱ ٢١س"
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
-                        ) {
-                            Text(
-                                text = "⏱ ${SaturdayCalendarHelper.toArabicDigits(remainingHours)}س",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
-                            )
-                        }
+                            // Compact Timer Badge "⏱ ٢١س"
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
+                            ) {
+                                Text(
+                                    text = "⏱ ${SaturdayCalendarHelper.toArabicDigits(remainingHours)}س",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                                )
+                            }
 
-                        // Small Refresh Icon Button (Admin Only)
-                        if (state.isAdmin) {
+                            // Small Refresh Icon Button (Admin & Assistant Admin)
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
                                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
@@ -357,36 +412,64 @@ fun GroupInvitationsScreen(
                                     )
                                 }
                             }
-                        }
 
-                        OutlinedButton(
-                            onClick = {
-                                val grp = state.group ?: return@OutlinedButton
-                                val code = grp.fullDailyInviteCode
-                                val msg = KamViewModel.buildInvitationShareText(
-                                    groupName = grp.name,
-                                    inviteCode = code,
-                                    inviteeName = "خادم الفصل"
+                            OutlinedButton(
+                                onClick = {
+                                    val grp = state.group ?: return@OutlinedButton
+                                    val code = grp.fullDailyInviteCode
+                                    val msg = KamViewModel.buildInvitationShareText(
+                                        groupName = grp.name,
+                                        inviteCode = code,
+                                        inviteeName = "خادم الفصل"
+                                    )
+                                    shareInvitationText(
+                                        context = context,
+                                        shareMessage = msg,
+                                        inviteCode = code,
+                                        onCopyFallback = onCopyBanner
+                                    )
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                modifier = Modifier.testTag("share_group_invite_button")
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = "مشاركة الدعوة", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "مشاركة",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
-                                shareInvitationText(
-                                    context = context,
-                                    shareMessage = msg,
-                                    inviteCode = code,
-                                    onCopyFallback = onCopyBanner
-                                )
-                            },
+                            }
+                        }
+                    } else {
+                        Surface(
                             shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                            modifier = Modifier.testTag("share_group_invite_button")
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("group_code_admin_only_notice")
                         ) {
-                            Icon(Icons.Default.Share, contentDescription = "مشاركة الدعوة", modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "مشاركة",
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                softWrap = false
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "كود الدعوة متاح لأمين المجموعة ومساعد الأمين فقط",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                     }
                 }
@@ -397,6 +480,7 @@ fun GroupInvitationsScreen(
         item(key = "multi_group_switcher_in_group_screen") {
             MultiGroupSwitcherCard(
                 state = state,
+                currentUserId = currentUserId,
                 onSwitchGroup = onSwitchGroup,
                 onJoinGroupByCode = onJoinGroupByCode,
                 onCreateNewGroup = onCreateNewGroup
@@ -540,35 +624,41 @@ fun GroupInvitationsScreen(
                                 else -> "معلّقة ⏳"
                             }
                             Text(
-                                text = "الحالة: $statusArabic • الرمز اليومي: $activeShareCode",
+                                text = if (state.isAdmin) {
+                                    "الحالة: $statusArabic • الرمز اليومي: $activeShareCode"
+                                } else {
+                                    "الحالة: $statusArabic"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            // Share invitation button for any recorded invitation using the current valid daily code
-                            IconButton(
-                                onClick = {
-                                    val shareMsg = KamViewModel.buildInvitationShareText(
-                                        groupName = inv.groupName.ifBlank { state.group?.name.orEmpty() },
-                                        inviteCode = activeShareCode,
-                                        inviteeName = inv.inviteeName
+                            // Share invitation button (Admin & Assistant Admin only)
+                            if (state.isAdmin) {
+                                IconButton(
+                                    onClick = {
+                                        val shareMsg = KamViewModel.buildInvitationShareText(
+                                            groupName = inv.groupName.ifBlank { state.group?.name.orEmpty() },
+                                            inviteCode = activeShareCode,
+                                            inviteeName = inv.inviteeName
+                                        )
+                                        shareInvitationText(
+                                            context = context,
+                                            shareMessage = shareMsg,
+                                            inviteCode = activeShareCode,
+                                            onCopyFallback = onCopyBanner
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("share_inv_${inv.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Share,
+                                        contentDescription = "مشاركة الدعوة",
+                                        tint = MaterialTheme.colorScheme.primary
                                     )
-                                    shareInvitationText(
-                                        context = context,
-                                        shareMessage = shareMsg,
-                                        inviteCode = activeShareCode,
-                                        onCopyFallback = onCopyBanner
-                                    )
-                                },
-                                modifier = Modifier.testTag("share_inv_${inv.id}")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Share,
-                                    contentDescription = "مشاركة الدعوة",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
+                                }
                             }
 
                             if (inv.status == "PENDING") {
@@ -898,6 +988,8 @@ fun GroupInvitationsScreen(
                     directoryMembers.forEach { member ->
                         val memberUid = member.effectiveUid
                         val isMe = memberUid == currentUserId
+                        val isMemberPrimaryAdmin = memberUid == state.group?.adminId
+                        val isMemberAssistantAdmin = state.group?.isAssistantAdmin(memberUid) == true
                         val memberBlock = state.blocks.firstOrNull { it.servantId == memberUid }
                         val accentColor = if (memberBlock != null) {
                             KamSemanticColors.blockColor(memberBlock.colorHex)
@@ -949,7 +1041,7 @@ fun GroupInvitationsScreen(
                                                     style = MaterialTheme.typography.titleSmall,
                                                     fontWeight = FontWeight.Bold
                                                 )
-                                                if (memberUid == state.group?.adminId) {
+                                                if (isMemberPrimaryAdmin) {
                                                     Surface(
                                                         shape = RoundedCornerShape(999.dp),
                                                         color = MaterialTheme.colorScheme.primaryContainer
@@ -961,6 +1053,30 @@ fun GroupInvitationsScreen(
                                                             fontWeight = FontWeight.Bold,
                                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                                         )
+                                                    }
+                                                } else if (isMemberAssistantAdmin) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(999.dp),
+                                                        color = MaterialTheme.colorScheme.tertiaryContainer
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Filled.AdminPanelSettings,
+                                                                contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                                modifier = Modifier.size(12.dp)
+                                                            )
+                                                            Text(
+                                                                text = "مساعد أمين",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1017,31 +1133,69 @@ fun GroupInvitationsScreen(
                                 }
 
                                 val phones = member.nonEmptyPhones
-                                if (phones.isNotEmpty()) {
-                                    val firstPhone = phones.first()
-                                    Row(
+                                val canManageAssistantRole = state.isPrimaryAdmin && !isMe && !isMemberPrimaryAdmin
+                                if (phones.isNotEmpty() || canManageAssistantRole) {
+                                    FlowRow(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        OutlinedButton(
-                                            onClick = { openDialerForPhone(context, firstPhone) },
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            shape = RoundedCornerShape(8.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Call,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(firstPhone, style = MaterialTheme.typography.labelSmall)
+                                        if (canManageAssistantRole) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    memberPendingAssistantToggle = Triple(
+                                                        memberUid,
+                                                        resolvedName,
+                                                        !isMemberAssistantAdmin
+                                                    )
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                shape = RoundedCornerShape(8.dp),
+                                                colors = if (isMemberAssistantAdmin) {
+                                                    ButtonDefaults.outlinedButtonColors(
+                                                        contentColor = MaterialTheme.colorScheme.error
+                                                    )
+                                                } else {
+                                                    ButtonDefaults.outlinedButtonColors(
+                                                        contentColor = MaterialTheme.colorScheme.primary
+                                                    )
+                                                },
+                                                modifier = Modifier.testTag("toggle_assistant_admin_$memberUid")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.AdminPanelSettings,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(
+                                                    text = if (isMemberAssistantAdmin) "إلغاء صلاحية المساعد" else "تعيين كمساعد أمين",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
                                         }
-                                        OutlinedButton(
-                                            onClick = { openWhatsAppForPhone(context, firstPhone) },
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            shape = RoundedCornerShape(8.dp)
-                                        ) {
-                                            Text("واتساب", style = MaterialTheme.typography.labelSmall)
+                                        if (phones.isNotEmpty()) {
+                                            val firstPhone = phones.first()
+                                            OutlinedButton(
+                                                onClick = { openDialerForPhone(context, firstPhone) },
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                shape = RoundedCornerShape(8.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Call,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(firstPhone, style = MaterialTheme.typography.labelSmall)
+                                            }
+                                            OutlinedButton(
+                                                onClick = { openWhatsAppForPhone(context, firstPhone) },
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                shape = RoundedCornerShape(8.dp)
+                                            ) {
+                                                Text("واتساب", style = MaterialTheme.typography.labelSmall)
+                                            }
                                         }
                                     }
                                 }
@@ -1762,7 +1916,7 @@ fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .testTag("settings_lazy_column"),
-        contentPadding = PaddingValues(16.dp)
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp)
     ) {
         // 0a. Servant WhatsApp Profile & Phone Numbers Card
         item(key = "servant_profile_and_phone_settings", contentType = "settings_card") {
@@ -1836,6 +1990,7 @@ fun SettingsScreen(
                 MultiGroupRowItem(
                     group = grp,
                     isActive = grp.inviteCode == activeGroupCode,
+                    showInviteCode = grp.isUserAdmin(currentUserId),
                     onClick = { onSwitchGroup(grp.inviteCode) }
                 )
             }
@@ -2445,6 +2600,7 @@ private fun GitHubAutoSyncSettingsCard() {
 private fun MultiGroupRowItem(
     group: Group,
     isActive: Boolean,
+    showInviteCode: Boolean = false,
     onClick: () -> Unit
 ) {
     val extColors = LocalKamExtendedColors.current
@@ -2471,7 +2627,7 @@ private fun MultiGroupRowItem(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "${group.name} (رمز: ${group.inviteCode})",
+                    text = if (showInviteCode) "${group.name} (رمز: ${group.inviteCode})" else group.name,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -2627,6 +2783,7 @@ private fun JoinOrCreateGroupDialogs(
 @Composable
 private fun MultiGroupSwitcherCard(
     state: KamScreenState,
+    currentUserId: String,
     onSwitchGroup: (String) -> Unit,
     onJoinGroupByCode: (inviteCode: String, servantName: String) -> Unit,
     onCreateNewGroup: (groupName: String, adminName: String) -> Unit
@@ -2672,6 +2829,7 @@ private fun MultiGroupSwitcherCard(
             MultiGroupRowItem(
                 group = grp,
                 isActive = grp.inviteCode == activeCode,
+                showInviteCode = grp.isUserAdmin(currentUserId),
                 onClick = { onSwitchGroup(grp.inviteCode) }
             )
         }

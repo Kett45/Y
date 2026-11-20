@@ -59,16 +59,27 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/groups/$(groupId)) &&
         (
           uid() in get(/databases/$(database)/documents/groups/$(groupId)).data.memberUids ||
-          get(/databases/$(database)/documents/groups/$(groupId)).data.adminId == uid()
+          get(/databases/$(database)/documents/groups/$(groupId)).data.adminId == uid() ||
+          (
+            'assistantAdminIds' in get(/databases/$(database)/documents/groups/$(groupId)).data &&
+            uid() in get(/databases/$(database)/documents/groups/$(groupId)).data.assistantAdminIds
+          )
         );
     }
 
     // Admin check on the parent /groups/{groupId} document.
-    // Delete operations on students and blocks are strictly restricted to the Group Admin.
+    // Both the primary Group Admin (adminId) and appointed Assistant Admins (assistantAdminIds)
+    // hold full admin permissions across blocks, students, invitations, policies, and moderation.
     function isGroupAdmin(groupId) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/groups/$(groupId)) &&
-        get(/databases/$(database)/documents/groups/$(groupId)).data.adminId == uid();
+        (
+          get(/databases/$(database)/documents/groups/$(groupId)).data.adminId == uid() ||
+          (
+            'assistantAdminIds' in get(/databases/$(database)/documents/groups/$(groupId)).data &&
+            uid() in get(/databases/$(database)/documents/groups/$(groupId)).data.assistantAdminIds
+          )
+        );
     }
 
     function groupAllowsServantUndo(groupId) {
@@ -127,7 +138,7 @@ service cloud.firestore {
           'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'inviteCode', 'name', 'adminId', 'adminName', 'memberUids',
+          'inviteCode', 'name', 'adminId', 'adminName', 'assistantAdminIds', 'memberUids',
           'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
           'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
           'bannedUids', 'bannedServantEntries', 'dailyInviteToken', 'inviteCodeUpdatedAtMillis',
@@ -139,6 +150,7 @@ service cloud.firestore {
         isNonEmptyString(data.name, 100) &&
         isNonEmptyString(data.adminId, 64) &&
         isNonEmptyString(data.adminName, 100) &&
+        (!('assistantAdminIds' in data) || isBoundedStringList(data.assistantAdminIds, 0, 20)) &&
         isBoundedStringList(data.memberUids, 1, 50) &&
         data.adminId in data.memberUids &&
         data.allowServantUndo is bool &&
@@ -151,7 +163,7 @@ service cloud.firestore {
         (!('bannedServantEntries' in data) || isBoundedStringList(data.bannedServantEntries, 0, 50)) &&
         (!('dailyInviteToken' in data) || isOptionalString(data.dailyInviteToken, 16)) &&
         (!('inviteCodeUpdatedAtMillis' in data) || (data.inviteCodeUpdatedAtMillis is int && data.inviteCodeUpdatedAtMillis >= 0)) &&
-        (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 50000)) &&
+        (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 360000)) &&
         (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
         (!('createdAt' in data) || data.createdAt is timestamp) &&
         data.updatedAt is timestamp;
@@ -217,7 +229,7 @@ service cloud.firestore {
         data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 5000 &&
         (!('position' in data) || isValidNumberPos(data.position)) &&
         isOptionalString(data.avatarInitials, 10) &&
-        (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 50000)) &&
+        (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 360000)) &&
         (!('hasAvatar' in data) || data.hasAvatar is bool) &&
         (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
         isNonEmptyString(data.createdByUid, 64) &&
@@ -241,7 +253,7 @@ service cloud.firestore {
         data.groupId == groupId &&
         data.studentId == studentId &&
         isNonEmptyString(data.studentId, 80) &&
-        isOptionalString(data.avatarBase64, 50000) &&
+        isOptionalString(data.avatarBase64, 360000) &&
         isOptionalString(data.avatarHash, 64) &&
         isNonEmptyString(data.updatedByUid, 64) &&
         (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
@@ -327,10 +339,10 @@ service cloud.firestore {
         data.phoneVerified == false &&
         (!('showPhone' in data) || data.showPhone is bool) &&
         (!('phoneHidden' in data) || data.phoneHidden is bool) &&
-        (!('avatar' in data) || isOptionalString(data.avatar, 50000)) &&
+        (!('avatar' in data) || isOptionalString(data.avatar, 360000)) &&
         (!('hasAvatar' in data) || data.hasAvatar is bool) &&
         (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
-        (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 50000)) &&
+        (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 360000)) &&
         (!('memberUids' in data) || isBoundedStringList(data.memberUids, 1, 50)) &&
         (!('lastSeenAt' in data) || data.lastSeenAt is timestamp) &&
         data.createdAt is timestamp &&
@@ -348,11 +360,11 @@ service cloud.firestore {
         (data.type == 'IMAGE' &&
           data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
           'mediaBase64' in data && data.mediaBase64 is string &&
-          data.mediaBase64.size() > 0 && data.mediaBase64.size() <= 60000 &&
+          data.mediaBase64.size() > 0 && data.mediaBase64.size() <= 460000 &&
           (!('mediaUrl' in data) || isOptionalString(data.mediaUrl, 500)) &&
           (!('mediaMimeType' in data) || isOptionalString(data.mediaMimeType, 60)) &&
-          (!('imageWidth' in data) || (data.imageWidth is int && data.imageWidth >= 0 && data.imageWidth <= 1024)) &&
-          (!('imageHeight' in data) || (data.imageHeight is int && data.imageHeight >= 0 && data.imageHeight <= 1024))) ||
+          (!('imageWidth' in data) || (data.imageWidth is int && data.imageWidth >= 0 && data.imageWidth <= 1600)) &&
+          (!('imageHeight' in data) || (data.imageHeight is int && data.imageHeight >= 0 && data.imageHeight <= 1600))) ||
         (data.type == 'AUDIO' &&
           data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
           'mediaBase64' in data && data.mediaBase64 is string &&
@@ -565,9 +577,10 @@ service cloud.firestore {
         'createdAt' in incoming() &&
         isValidGroup(incoming(), groupId);
 
-      // Admin can update group settings & memberUids;
-      // A member can update non-policy fields (e.g. rotating daily invite token or leaving),
-      // and a joining non-banned servant can append ONLY their own UID to memberUids.
+      // Primary Admin can update all fields including assistantAdminIds;
+      // Assistant Admins can update policies, invite tokens, bans, avatar, and memberUids (except changing adminId/assistantAdminIds or banning primary admin);
+      // Regular members can update non-policy fields (e.g. avatar or leaving) without touching policies/bans/assistants;
+      // Joining non-banned servants can append ONLY their own UID to memberUids.
       allow update: if isSignedIn() &&
         isValidGroup(incoming(), groupId) &&
         incoming().adminId == existing().adminId &&
@@ -576,27 +589,27 @@ service cloud.firestore {
         (
           existing().adminId == uid() ||
           (
-            uid() in existing().memberUids &&
-            incoming().name == existing().name &&
-            incoming().allowServantUndo == existing().allowServantUndo &&
-            incoming().enforceWeeklyCardLimit == existing().enforceWeeklyCardLimit &&
-            incoming().maxMonthlyPoints == existing().maxMonthlyPoints &&
-            incoming().attendanceIsCardOnly == existing().attendanceIsCardOnly &&
-            incoming().showLeaderboard == existing().showLeaderboard &&
-            incoming().autoStudentNumber == existing().autoStudentNumber
+            'assistantAdminIds' in existing() &&
+            uid() in existing().assistantAdminIds &&
+            !incoming().diff(existing()).affectedKeys().hasAny(['assistantAdminIds']) &&
+            !('bannedUids' in incoming() && existing().adminId in incoming().bannedUids)
           ) ||
           (
-            uid() in incoming().memberUids &&
-            !('bannedUids' in existing() && uid() in existing().bannedUids) &&
-            incoming().memberUids.size() == existing().memberUids.size() + 1 &&
-            incoming().memberUids.hasAll(existing().memberUids) &&
-            incoming().name == existing().name &&
-            incoming().allowServantUndo == existing().allowServantUndo &&
-            incoming().enforceWeeklyCardLimit == existing().enforceWeeklyCardLimit &&
-            incoming().maxMonthlyPoints == existing().maxMonthlyPoints &&
-            incoming().attendanceIsCardOnly == existing().attendanceIsCardOnly &&
-            incoming().showLeaderboard == existing().showLeaderboard &&
-            incoming().autoStudentNumber == existing().autoStudentNumber
+            !incoming().diff(existing()).affectedKeys().hasAny([
+              'assistantAdminIds', 'bannedUids', 'bannedServantEntries',
+              'dailyInviteToken', 'inviteCodeUpdatedAtMillis', 'name',
+              'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
+              'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber'
+            ]) &&
+            (
+              uid() in existing().memberUids ||
+              (
+                uid() in incoming().memberUids &&
+                !('bannedUids' in existing() && uid() in existing().bannedUids) &&
+                incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+                incoming().memberUids.hasAll(existing().memberUids)
+              )
+            )
           )
         );
 

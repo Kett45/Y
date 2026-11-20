@@ -182,9 +182,9 @@ object StudentAvatarImageHelper {
     private const val ALBUM_PREFS_NAME = "kam_student_photo_albums"
     private const val HD_PHOTO_PREFS_NAME = "kam_student_full_photos_hd"
     private const val AVATAR_FILES_ROOT_DIR = "student_avatars"
-    private const val MAX_FIRESTORE_AVATAR_CHARS = 45_000
+    const val MAX_FIRESTORE_AVATAR_CHARS = 350_000
     private const val MAX_LOCAL_ALBUM_PHOTOS = 20
-    private const val THUMBNAIL_TARGET_SIZE_PX = 160
+    private const val THUMBNAIL_TARGET_SIZE_PX = 240
     private val SAFE_STUDENT_NAME_REGEX = Regex("[^\\p{L}\\p{N}_-]+")
 
     private val framedAvatarCache = object : LruCache<Int, ImageBitmap>(200) {}
@@ -363,11 +363,11 @@ object StudentAvatarImageHelper {
     }
 
     private fun getWebpThumbnailFile(context: Context, cacheKey: Int): File {
-        return File(getThumbDir(context), "cthumb_${cacheKey}.webp")
+        return File(getThumbDir(context), "cthumb240_${cacheKey}.webp")
     }
 
     private fun getLegacyPngThumbnailFile(context: Context, cacheKey: Int): File {
-        return File(getThumbDir(context), "cthumb_${cacheKey}.png")
+        return File(getThumbDir(context), "cthumb240_${cacheKey}.png")
     }
 
     private fun findExistingThumbnailFile(context: Context, cacheKey: Int): File? {
@@ -858,16 +858,16 @@ object StudentAvatarImageHelper {
         panXFraction: Float = 0f,
         panYFraction: Float = 0f,
         rotationDegrees: Int = 0,
-        maxDimensionPx: Int = 520,
-        maxBytes: Int = 14_500
+        maxDimensionPx: Int = 1080,
+        maxBytes: Int = 155_000
     ): String {
         if (source.width <= 0 || source.height <= 0) return ""
 
-        // Scale down proportionally WITHOUT cropping so the full rectangular image is preserved
+        // Scale down proportionally WITHOUT cropping so the full rectangular image is preserved at high clarity
         val srcW = source.width
         val srcH = source.height
         val longestSide = max(srcW, srcH)
-        val cloudBitmap = if (longestSide > maxDimensionPx) {
+        var cloudBitmap = if (longestSide > maxDimensionPx) {
             val scale = maxDimensionPx.toFloat() / longestSide.toFloat()
             val targetW = max(1, (srcW * scale).roundToInt())
             val targetH = max(1, (srcH * scale).roundToInt())
@@ -876,21 +876,37 @@ object StudentAvatarImageHelper {
             source
         }
 
-        var quality = 78
+        var quality = 90
         var compressedBytes: ByteArray
         do {
             val out = ByteArrayOutputStream()
             cloudBitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
             compressedBytes = out.toByteArray()
-            quality -= 8
-        } while (compressedBytes.size > maxBytes && quality >= 24)
+            quality -= 5
+        } while (compressedBytes.size > maxBytes && quality >= 66)
+
+        // If still larger than maxBytes even at quality 66, gently scale down dimensions instead of crushing quality
+        var shrinkAttempts = 0
+        while (compressedBytes.size > maxBytes && shrinkAttempts < 2) {
+            shrinkAttempts++
+            val nextW = max(480, (cloudBitmap.width * 0.85f).roundToInt())
+            val nextH = max(480, (cloudBitmap.height * 0.85f).roundToInt())
+            val nextBmp = Bitmap.createScaledBitmap(cloudBitmap, nextW, nextH, true)
+            if (cloudBitmap !== source && nextBmp !== cloudBitmap) {
+                cloudBitmap.recycle()
+            }
+            cloudBitmap = nextBmp
+            val out = ByteArrayOutputStream()
+            cloudBitmap.compress(Bitmap.CompressFormat.JPEG, 76, out)
+            compressedBytes = out.toByteArray()
+        }
 
         val cloudBase64 = Base64.encodeToString(compressedBytes, Base64.NO_WRAP)
 
         // Save a higher-definition uncropped binary JPEG file locally (instead of Base64 in SharedPreferences)
         if (context != null && cloudBase64.isNotBlank()) {
             try {
-                val hdMaxDim = 1080
+                val hdMaxDim = 1280
                 val hdBitmap = if (longestSide > hdMaxDim) {
                     val scale = hdMaxDim.toFloat() / longestSide.toFloat()
                     Bitmap.createScaledBitmap(
@@ -904,10 +920,10 @@ object StudentAvatarImageHelper {
                 }
                 val hdFile = getHdPhotoFile(context, cloudBase64.hashCode())
                 FileOutputStream(hdFile).use { outStream ->
-                    hdBitmap.compress(Bitmap.CompressFormat.JPEG, 88, outStream)
+                    hdBitmap.compress(Bitmap.CompressFormat.JPEG, 92, outStream)
                 }
             } catch (_: Exception) {
-                // Ignore if local storage is tight; cloudBase64 still contains the full uncropped photo
+                // Ignore if local storage is tight; cloudBase64 still contains the crisp high-res photo
             }
         }
 
@@ -929,8 +945,8 @@ object StudentAvatarImageHelper {
         panXFraction: Float = 0f,
         panYFraction: Float = 0f,
         rotationDegrees: Int = 0,
-        targetSizePx: Int = 520,
-        maxBytes: Int = 14_500
+        targetSizePx: Int = 1080,
+        maxBytes: Int = 155_000
     ): String {
         return encodeFullPhotoWithCropMetadata(
             context = null,
@@ -939,15 +955,15 @@ object StudentAvatarImageHelper {
             panXFraction = panXFraction,
             panYFraction = panYFraction,
             rotationDegrees = rotationDegrees,
-            maxDimensionPx = max(360, targetSizePx),
+            maxDimensionPx = max(640, targetSizePx),
             maxBytes = maxBytes
         )
     }
 
     fun cropAndCompressToBase64(
         source: Bitmap,
-        targetSizePx: Int = 520,
-        maxBytes: Int = 14_500
+        targetSizePx: Int = 1080,
+        maxBytes: Int = 155_000
     ): String {
         return encodeFullPhotoWithCropMetadata(
             context = null,
@@ -956,7 +972,7 @@ object StudentAvatarImageHelper {
             panXFraction = 0f,
             panYFraction = 0f,
             rotationDegrees = 0,
-            maxDimensionPx = max(360, targetSizePx),
+            maxDimensionPx = max(640, targetSizePx),
             maxBytes = maxBytes
         )
     }

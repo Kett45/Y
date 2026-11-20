@@ -310,6 +310,8 @@ data class KamScreenState(
     val group: Group? = null,
     val userGroups: List<Group> = emptyList(),
     val isAdmin: Boolean = false,
+    val isPrimaryAdmin: Boolean = false,
+    val isAssistantAdmin: Boolean = false,
     val blocks: List<ServantBlock> = emptyList(),
     val memberProfiles: List<ServantMemberProfile> = emptyList(),
     val students: List<Student> = emptyList(),
@@ -1452,7 +1454,9 @@ class KamViewModel(
             userProfile = profile,
             group = activeGroup,
             userGroups = userGroups.filter { currentUserId !in it.bannedUids },
-            isAdmin = activeGroup?.adminId == currentUserId,
+            isAdmin = activeGroup?.isUserAdmin(currentUserId) == true,
+            isPrimaryAdmin = activeGroup?.isPrimaryAdmin(currentUserId) == true,
+            isAssistantAdmin = activeGroup?.isAssistantAdmin(currentUserId) == true,
             blocks = effectiveBlocks,
             memberProfiles = effectiveMembers,
             students = effectiveStudents,
@@ -1484,7 +1488,7 @@ class KamViewModel(
         combine(_actionBanner, _operationError) { banner, error -> banner to error }
     ) { coreState, searchQuery, isOnline, hasPendingWrites, (banner, error) ->
         val activeGroup = coreState.group
-        if (activeGroup != null && activeGroup.adminId == currentUserId && isOnline && activeGroup.isDailyCodeExpired()) {
+        if (activeGroup != null && activeGroup.isUserAdmin(currentUserId) && isOnline && activeGroup.isDailyCodeExpired()) {
             val rotationKey = "${activeGroup.inviteCode}_${activeGroup.inviteCodeUpdatedAtMillis}"
             if (rotationKey != lastAutoRotatedGroupKey) {
                 lastAutoRotatedGroupKey = rotationKey
@@ -1907,7 +1911,7 @@ class KamViewModel(
             showBanner("تخصيص صورة البلوك متاح لأمين المجموعة فقط")
             return
         }
-        val cleanAvatar = avatarBase64.trim().take(50000)
+        val cleanAvatar = avatarBase64.trim().take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
         val hasAvatar = cleanAvatar.isNotBlank()
         viewModelScope.launch {
             repository.updateBlockCustomAvatar(
@@ -1943,8 +1947,12 @@ class KamViewModel(
             showBanner("هذا البلوك غير مرتبط بحساب خادم حالياً (الأطفال والبلوك محفوظون)")
             return
         }
-        if (targetUid == group.adminId) {
-            showBanner("لا يمكن إزالة حساب أمين المجموعة")
+        if (targetUid == group.adminId || targetUid == currentUserId) {
+            showBanner("لا يمكن إزالة حساب أمين المجموعة أو حسابك الشخصي")
+            return
+        }
+        if (!group.isPrimaryAdmin(currentUserId) && group.isAssistantAdmin(targetUid)) {
+            showBanner("لا يمكن لمساعد الأمين إزالة مساعد أمين آخر")
             return
         }
         val childrenCount = state.students.count { it.blockId == block.id }
@@ -1960,6 +1968,38 @@ class KamViewModel(
                 )
             }.onFailure { err ->
                 _operationError.value = err.localizedMessage ?: "تعذر إزالة وحظر الخادم"
+            }
+            _isBusy.value = false
+        }
+    }
+
+    fun toggleAssistantAdmin(
+        targetUid: String,
+        targetName: String,
+        makeAssistant: Boolean
+    ) {
+        val state = uiState.value
+        val group = state.group ?: return
+        if (!group.isPrimaryAdmin(currentUserId)) {
+            showBanner("تعيين أو إلغاء مساعد الأمين متاح لأمين المجموعة الأساسي فقط")
+            return
+        }
+        if (targetUid.isBlank() || targetUid == group.adminId) return
+        viewModelScope.launch {
+            _isBusy.value = true
+            repository.setAssistantAdminStatus(
+                groupId = group.inviteCode,
+                targetUid = targetUid,
+                makeAssistant = makeAssistant,
+                currentGroup = group
+            ).onSuccess {
+                if (makeAssistant) {
+                    showBanner("تم تعيين '$targetName' كمساعد أمين بكامل الصلاحيات ✓")
+                } else {
+                    showBanner("تم إلغاء صلاحية مساعد الأمين عن '$targetName'")
+                }
+            }.onFailure { err ->
+                _operationError.value = err.localizedMessage ?: "تعذر تحديث صلاحية مساعد الأمين"
             }
             _isBusy.value = false
         }
@@ -2556,8 +2596,8 @@ class KamViewModel(
         autoStudentNumber: Boolean
     ) {
         val group = uiState.value.group ?: return
-        if (group.adminId != currentUserId) {
-            _operationError.value = "تعديل قواعد المجموعة متاح لأمين المجموعة فقط (${group.adminName})"
+        if (!group.isUserAdmin(currentUserId)) {
+            _operationError.value = "تعديل قواعد المجموعة متاح لأمين المجموعة أو مساعده فقط (${group.adminName})"
             return
         }
 
@@ -2807,7 +2847,7 @@ class KamViewModel(
     fun updateGroupAvatar(avatarBase64: String) {
         val state = uiState.value
         val group = state.group ?: return
-        val cleanAvatar = avatarBase64.trim().take(50000)
+        val cleanAvatar = avatarBase64.trim().take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
         val hash = if (cleanAvatar.isNotBlank()) Student.computeAvatarHash(cleanAvatar) else ""
         StudentAvatarImageHelper.writeLocalAlbumRaw(null, "group_${group.inviteCode}", cleanAvatar)
         _optimisticGroupPolicyOverride.value = group.copy(avatarBase64 = cleanAvatar, avatarHash = hash)
@@ -3109,7 +3149,7 @@ class KamViewModel(
     }
 
     fun updateOwnServantAvatar(avatarBase64: String) {
-        val cleanAvatar = avatarBase64.trim().take(50000)
+        val cleanAvatar = avatarBase64.trim().take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
         val hasAvatar = cleanAvatar.isNotBlank()
         val newHash = if (hasAvatar) Student.computeAvatarHash(cleanAvatar) else ""
         StudentAvatarImageHelper.writeLocalAlbumRaw(null, "servant_$currentUserId", cleanAvatar)
@@ -3237,7 +3277,9 @@ class KamViewModel(
                 userProfile = effectiveProfile,
                 group = activeGroup,
                 userGroups = cached.userGroups,
-                isAdmin = activeGroup?.adminId == currentUserId,
+                isAdmin = activeGroup?.isUserAdmin(currentUserId) == true,
+                isPrimaryAdmin = activeGroup?.isPrimaryAdmin(currentUserId) == true,
+                isAssistantAdmin = activeGroup?.isAssistantAdmin(currentUserId) == true,
                 blocks = sanitizedCachedBlocks,
                 memberProfiles = if (activeGroup == null) emptyList() else cached.memberProfiles,
                 students = if (activeGroup == null) emptyList() else cached.students,

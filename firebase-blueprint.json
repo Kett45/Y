@@ -107,6 +107,10 @@
           "type": "array",
           "description": "Bounded list (max 50) of member UIDs (Admin + up to 49 Servants)."
         },
+        "assistantAdminIds": {
+          "type": "array",
+          "description": "Optional bounded list (max 20) of Assistant Admin UIDs appointed by the primary Admin who inherit full admin permissions."
+        },
         "allowServantUndo": {
           "type": "boolean",
           "description": "Whether a servant is allowed to undo/delete a card event they recorded by mistake."

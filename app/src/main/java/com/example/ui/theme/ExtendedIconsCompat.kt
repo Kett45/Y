@@ -66,8 +66,44 @@ val Icons.Filled.ArrowUpward: ImageVector
 val Icons.Filled.CalendarMonth: ImageVector
     get() = Icons.Default.DateRange
 
+private var _cameraAltIcon: ImageVector? = null
 val Icons.Filled.CameraAlt: ImageVector
-    get() = Icons.Default.AccountCircle
+    get() = _cameraAltIcon ?: ImageVector.Builder(
+        name = "Filled.CameraAlt",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(12f, 12f)
+            moveToRelative(-3.2f, 0f)
+            arcToRelative(3.2f, 3.2f, 0f, true, true, 6.4f, 0f)
+            arcToRelative(3.2f, 3.2f, 0f, true, true, -6.4f, 0f)
+        }
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(9f, 2f)
+            lineTo(7.17f, 4f)
+            horizontalLineTo(4f)
+            curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
+            verticalLineToRelative(12f)
+            curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+            horizontalLineToRelative(16f)
+            curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+            verticalLineTo(6f)
+            curveToRelative(0f, -1.1f, -0.9f, -2f, -2f, -2f)
+            horizontalLineToRelative(-3.17f)
+            lineTo(15f, 2f)
+            horizontalLineTo(9f)
+            close()
+            moveTo(12f, 17f)
+            curveToRelative(-2.76f, 0f, -5f, -2.24f, -5f, -5f)
+            reflectiveCurveToRelative(2.24f, -5f, 5f, -5f)
+            reflectiveCurveToRelative(5f, 2.24f, 5f, 5f)
+            reflectiveCurveToRelative(-2.24f, 5f, -5f, 5f)
+            close()
+        }
+    }.build().also { _cameraAltIcon = it }
 
 val Icons.Filled.CloudDone: ImageVector
     get() = Icons.Default.CheckCircle
@@ -302,8 +338,44 @@ val Icons.Filled.PersonRemove: ImageVector
         }
     }.build().also { _personRemoveIcon = it }
 
+private var _photoLibraryIcon: ImageVector? = null
 val Icons.Filled.PhotoLibrary: ImageVector
-    get() = Icons.Default.AccountCircle
+    get() = _photoLibraryIcon ?: ImageVector.Builder(
+        name = "Filled.PhotoLibrary",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(22f, 16f)
+            verticalLineTo(4f)
+            curveToRelative(0f, -1.1f, -0.9f, -2f, -2f, -2f)
+            horizontalLineTo(8f)
+            curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
+            verticalLineToRelative(12f)
+            curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+            horizontalLineToRelative(12f)
+            curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+            close()
+            moveTo(11f, 12f)
+            lineToRelative(2.03f, 2.71f)
+            lineTo(16f, 11f)
+            lineToRelative(4f, 5f)
+            horizontalLineTo(8f)
+            lineToRelative(3f, -4f)
+            close()
+            moveTo(2f, 6f)
+            verticalLineToRelative(14f)
+            curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+            horizontalLineToRelative(14f)
+            verticalLineToRelative(-2f)
+            horizontalLineTo(4f)
+            verticalLineTo(6f)
+            horizontalLineTo(2f)
+            close()
+        }
+    }.build().also { _photoLibraryIcon = it }
 
 val Icons.Filled.School: ImageVector
     get() = Icons.Default.Star
@@ -388,4 +460,347 @@ val Icons.Filled.FactCheck: ImageVector
 
 val Icons.Filled.AutoStories: ImageVector
     get() = Icons.Default.Edit
+
+private var _micIcon: ImageVector? = null
+val Icons.Filled.Mic: ImageVector
+    get() = _micIcon ?: ImageVector.Builder(
+        name = "Filled.Mic",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(12f, 14f)
+            curveToRelative(1.66f, 0f, 2.99f, -1.34f, 2.99f, -3f)
+            lineTo(15f, 5f)
+            curveToRelative(0f, -1.66f, -1.34f, -3f, -3f, -3f)
+            reflectiveCurveTo(9f, 3.34f, 9f, 5f)
+            verticalLineToRelative(6f)
+            curveToRelative(0f, 1.66f, 1.34f, 3f, 3f, 3f)
+            close()
+            moveTo(17.3f, 11f)
+            curveToRelative(0f, 3f, -2.54f, 5.1f, -5.3f, 5.1f)
+            reflectiveCurveTo(6.7f, 14f, 6.7f, 11f)
+            horizontalLineTo(5f)
+            curveToRelative(0f, 3.41f, 2.72f, 6.23f, 6f, 6.72f)
+            verticalLineTo(21f)
+            horizontalLineToRelative(2f)
+            verticalLineToRelative(-3.28f)
+            curveToRelative(3.28f, -0.48f, 6f, -3.3f, 6f, -6.72f)
+            horizontalLineToRelative(-1.7f)
+            close()
+        }
+    }.build().also { _micIcon = it }
+
+private var _imageIcon: ImageVector? = null
+val Icons.Filled.Image: ImageVector
+    get() = _imageIcon ?: ImageVector.Builder(
+        name = "Filled.Image",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(21f, 19f)
+            verticalLineTo(5f)
+            curveToRelative(0f, -1.1f, -0.9f, -2f, -2f, -2f)
+            horizontalLineTo(5f)
+            curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
+            verticalLineToRelative(14f)
+            curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+            horizontalLineToRelative(14f)
+            curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+            close()
+            moveTo(8.5f, 13.5f)
+            lineToRelative(2.5f, 3.01f)
+            lineTo(14.5f, 12f)
+            lineToRelative(4.5f, 6f)
+            horizontalLineTo(5f)
+            lineToRelative(3.5f, -4.5f)
+            close()
+        }
+    }.build().also { _imageIcon = it }
+
+private var _rotateRightIcon: ImageVector? = null
+val Icons.Filled.RotateRight: ImageVector
+    get() = _rotateRightIcon ?: ImageVector.Builder(
+        name = "Filled.RotateRight",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(15.55f, 5.55f)
+            lineTo(11f, 1f)
+            verticalLineToRelative(3.07f)
+            curveTo(7.06f, 4.56f, 4f, 7.92f, 4f, 12f)
+            reflectiveCurveToRelative(3.05f, 7.44f, 7f, 7.93f)
+            verticalLineToRelative(-2.02f)
+            curveToRelative(-2.84f, -0.48f, -5f, -2.94f, -5f, -5.91f)
+            reflectiveCurveToRelative(2.16f, -5.43f, 5f, -5.91f)
+            verticalLineTo(10f)
+            lineToRelative(4.55f, -4.45f)
+            close()
+            moveTo(19.93f, 11f)
+            curveToRelative(-0.17f, -1.39f, -0.72f, -2.73f, -1.62f, -3.89f)
+            lineToRelative(-1.42f, 1.42f)
+            curveToRelative(0.54f, 0.75f, 0.88f, 1.6f, 1.02f, 2.47f)
+            horizontalLineToRelative(2.02f)
+            close()
+            moveTo(13f, 17.9f)
+            verticalLineToRelative(2.02f)
+            curveToRelative(1.39f, -0.17f, 2.74f, -0.71f, 3.9f, -1.61f)
+            lineToRelative(-1.44f, -1.44f)
+            curveToRelative(-0.75f, 0.54f, -1.59f, 0.89f, -2.46f, 1.03f)
+            close()
+            moveTo(16.89f, 15.48f)
+            lineToRelative(1.42f, 1.41f)
+            curveToRelative(0.9f, -1.16f, 1.45f, -2.5f, 1.62f, -3.89f)
+            horizontalLineToRelative(-2.02f)
+            curveToRelative(-0.14f, 0.87f, -0.48f, 1.72f, -1.02f, 2.48f)
+            close()
+        }
+    }.build().also { _rotateRightIcon = it }
+
+private var _cropIcon: ImageVector? = null
+val Icons.Filled.Crop: ImageVector
+    get() = _cropIcon ?: ImageVector.Builder(
+        name = "Filled.Crop",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(17f, 15f)
+            horizontalLineToRelative(2f)
+            verticalLineTo(7f)
+            curveToRelative(0f, -1.1f, -0.9f, -2f, -2f, -2f)
+            horizontalLineTo(9f)
+            verticalLineToRelative(2f)
+            horizontalLineToRelative(8f)
+            verticalLineToRelative(8f)
+            close()
+            moveTo(7f, 17f)
+            verticalLineTo(1f)
+            horizontalLineTo(5f)
+            verticalLineToRelative(4f)
+            horizontalLineTo(1f)
+            verticalLineToRelative(2f)
+            horizontalLineToRelative(4f)
+            verticalLineToRelative(10f)
+            curveToRelative(0f, 1.1f, 0.9f, 2f, 2f, 2f)
+            horizontalLineToRelative(10f)
+            verticalLineToRelative(4f)
+            horizontalLineToRelative(2f)
+            verticalLineToRelative(-4f)
+            horizontalLineToRelative(4f)
+            verticalLineToRelative(-2f)
+            horizontalLineTo(7f)
+            close()
+        }
+    }.build().also { _cropIcon = it }
+
+private var _skipNextIcon: ImageVector? = null
+val Icons.Filled.SkipNext: ImageVector
+    get() = _skipNextIcon ?: ImageVector.Builder(
+        name = "Filled.SkipNext",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(6f, 18f)
+            lineToRelative(8.5f, -6f)
+            lineTo(6f, 6f)
+            verticalLineToRelative(12f)
+            close()
+            moveTo(16f, 6f)
+            verticalLineToRelative(12f)
+            horizontalLineToRelative(2f)
+            verticalLineTo(6f)
+            horizontalLineToRelative(-2f)
+            close()
+        }
+    }.build().also { _skipNextIcon = it }
+
+private var _doneAllIcon: ImageVector? = null
+val Icons.Filled.DoneAll: ImageVector
+    get() = _doneAllIcon ?: ImageVector.Builder(
+        name = "Filled.DoneAll",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(18f, 7f)
+            lineToRelative(-1.41f, -1.41f)
+            lineToRelative(-6.34f, 6.34f)
+            lineToRelative(1.41f, 1.41f)
+            lineTo(18f, 7f)
+            close()
+            moveTo(22.24f, 5.59f)
+            lineTo(11.66f, 16.17f)
+            lineTo(7.48f, 12f)
+            lineToRelative(-1.41f, 1.41f)
+            lineTo(11.66f, 19f)
+            lineToRelative(12f, -12f)
+            lineToRelative(-1.42f, -1.41f)
+            close()
+            moveTo(0.41f, 13.41f)
+            lineTo(6f, 19f)
+            lineToRelative(1.41f, -1.41f)
+            lineTo(1.83f, 12f)
+            lineTo(0.41f, 13.41f)
+            close()
+        }
+    }.build().also { _doneAllIcon = it }
+
+private var _chatBubbleIcon: ImageVector? = null
+val Icons.Filled.ChatBubble: ImageVector
+    get() = _chatBubbleIcon ?: ImageVector.Builder(
+        name = "Filled.ChatBubble",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(20f, 2f)
+            horizontalLineTo(4f)
+            curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
+            verticalLineToRelative(18f)
+            lineToRelative(4f, -4f)
+            horizontalLineToRelative(14f)
+            curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+            verticalLineTo(4f)
+            curveToRelative(0f, -1.1f, -0.9f, -2f, -2f, -2f)
+            close()
+            moveTo(8f, 11f)
+            horizontalLineTo(6f)
+            verticalLineTo(9f)
+            horizontalLineToRelative(2f)
+            verticalLineToRelative(2f)
+            close()
+            moveTo(13f, 11f)
+            horizontalLineToRelative(-2f)
+            verticalLineTo(9f)
+            horizontalLineToRelative(2f)
+            verticalLineToRelative(2f)
+            close()
+            moveTo(18f, 11f)
+            horizontalLineToRelative(-2f)
+            verticalLineTo(9f)
+            horizontalLineToRelative(2f)
+            verticalLineToRelative(2f)
+            close()
+        }
+    }.build().also { _chatBubbleIcon = it }
+
+private var _chatBubbleOutlineIcon: ImageVector? = null
+val Icons.Filled.ChatBubbleOutline: ImageVector
+    get() = _chatBubbleOutlineIcon ?: ImageVector.Builder(
+        name = "Filled.ChatBubbleOutline",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(20f, 2f)
+            horizontalLineTo(4f)
+            curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f)
+            verticalLineToRelative(18f)
+            lineToRelative(4f, -4f)
+            horizontalLineToRelative(14f)
+            curveToRelative(1.1f, 0f, 2f, -0.9f, 2f, -2f)
+            verticalLineTo(4f)
+            curveToRelative(0f, -1.1f, -0.9f, -2f, -2f, -2f)
+            close()
+            moveTo(20f, 16f)
+            horizontalLineTo(6f)
+            lineToRelative(-2f, 2f)
+            verticalLineTo(4f)
+            horizontalLineToRelative(16f)
+            verticalLineToRelative(12f)
+            close()
+        }
+    }.build().also { _chatBubbleOutlineIcon = it }
+
+private var _groupsOutlineIcon: ImageVector? = null
+val Icons.Filled.GroupsOutline: ImageVector
+    get() = _groupsOutlineIcon ?: ImageVector.Builder(
+        name = "Filled.GroupsOutline",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(12f, 6f)
+            curveToRelative(1.1f, 0f, 2f, 0.9f, 2f, 2f)
+            reflectiveCurveToRelative(-0.9f, 2f, -2f, 2f)
+            reflectiveCurveToRelative(-2f, -0.9f, -2f, -2f)
+            reflectiveCurveToRelative(0.9f, -2f, 2f, -2f)
+            moveTo(12f, 15f)
+            curveToRelative(2.7f, 0f, 5.8f, 1.29f, 6f, 2f)
+            verticalLineToRelative(1f)
+            horizontalLineTo(6f)
+            verticalLineToRelative(-0.99f)
+            curveToRelative(0.2f, -0.72f, 3.3f, -2.01f, 6f, -2.01f)
+            moveTo(12f, 4f)
+            curveToRelative(-2.21f, 0f, -4f, 1.79f, -4f, 4f)
+            reflectiveCurveToRelative(1.79f, 4f, 4f, 4f)
+            reflectiveCurveToRelative(4f, -1.79f, 4f, -4f)
+            reflectiveCurveToRelative(-1.79f, -4f, -4f, -4f)
+            close()
+            moveTo(12f, 13f)
+            curveToRelative(-2.67f, 0f, -8f, 1.34f, -8f, 4f)
+            verticalLineToRelative(3f)
+            horizontalLineToRelative(16f)
+            verticalLineToRelative(-3f)
+            curveToRelative(0f, -2.66f, -5.33f, -4f, -8f, -4f)
+            close()
+        }
+    }.build().also { _groupsOutlineIcon = it }
+
+private var _adminPanelSettingsIcon: ImageVector? = null
+val Icons.Filled.AdminPanelSettings: ImageVector
+    get() = _adminPanelSettingsIcon ?: ImageVector.Builder(
+        name = "Filled.AdminPanelSettings",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(12f, 1f)
+            lineTo(3f, 5f)
+            verticalLineToRelative(6f)
+            curveToRelative(0f, 5.55f, 3.84f, 10.74f, 9f, 12f)
+            curveToRelative(5.16f, -1.26f, 9f, -6.45f, 9f, -12f)
+            verticalLineTo(5f)
+            lineToRelative(-9f, -4f)
+            close()
+            moveTo(12f, 6.5f)
+            lineToRelative(1.45f, 2.95f)
+            lineToRelative(3.25f, 0.47f)
+            lineToRelative(-2.35f, 2.29f)
+            lineToRelative(0.55f, 3.24f)
+            lineTo(12f, 13.92f)
+            lineToRelative(-2.9f, 1.53f)
+            lineToRelative(0.55f, -3.24f)
+            lineTo(7.3f, 9.92f)
+            lineToRelative(3.25f, -0.47f)
+            lineTo(12f, 6.5f)
+            close()
+        }
+    }.build().also { _adminPanelSettingsIcon = it }
+
+
 

@@ -290,7 +290,7 @@ class KamRepository(private val db: FirebaseFirestore) {
     ): Result<Unit> = runCatching {
         requireUserId()
         require(groupId.isNotBlank()) { "المجموعة غير محددة" }
-        val safeAvatar = avatarBase64.trim().take(50000)
+        val safeAvatar = avatarBase64.trim().take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
         val avatarHash = if (safeAvatar.isNotBlank()) Student.computeAvatarHash(safeAvatar) else ""
         StudentAvatarImageHelper.writeLocalAlbumRaw(null, "group_$groupId", safeAvatar)
         val docRef = db.collection("groups").document(groupId)
@@ -686,13 +686,19 @@ class KamRepository(private val db: FirebaseFirestore) {
         currentGroup: Group
     ): Result<Group> = runCatching {
         val adminUid = requireUserId()
-        require(currentGroup.adminId == adminUid) { "إزالة وحظر الخادم متاحة لأمين المجموعة فقط" }
+        require(currentGroup.isUserAdmin(adminUid)) { "إزالة وحظر الخادم متاحة لأمين المجموعة أو مساعده فقط" }
         val targetServantUid = block.servantId.trim()
-        require(targetServantUid.isNotBlank() && targetServantUid != adminUid) {
+        require(targetServantUid.isNotBlank() && targetServantUid != currentGroup.adminId && targetServantUid != adminUid) {
             "لا يمكن إزالة أو حظر أمين المجموعة"
         }
+        if (!currentGroup.isPrimaryAdmin(adminUid)) {
+            require(!currentGroup.isAssistantAdmin(targetServantUid)) {
+                "لا يمكن لمساعد الأمين إزالة مساعد أمين آخر"
+            }
+        }
 
-        val updatedMembers = currentGroup.memberUids.filter { it != targetServantUid }.ifEmpty { listOf(adminUid) }
+        val updatedMembers = currentGroup.memberUids.filter { it != targetServantUid }.ifEmpty { listOf(currentGroup.adminId.ifBlank { adminUid }) }
+        val updatedAssistants = currentGroup.assistantAdminIds.filter { it != targetServantUid }
         val updatedBannedUids = (currentGroup.bannedUids + targetServantUid).distinct().take(50)
         val cleanServantName = block.servantName.trim().ifBlank { "خادم" }.replace("|", " ").take(80)
         val updatedBannedEntries = (
@@ -706,15 +712,16 @@ class KamRepository(private val db: FirebaseFirestore) {
         try {
             val batch = db.batch()
             // 1. Remove servant UID from memberUids & add to bannedUids + bannedServantEntries
-            batch.update(
-                groupRef,
-                mapOf(
-                    "memberUids" to updatedMembers,
-                    "bannedUids" to updatedBannedUids,
-                    "bannedServantEntries" to updatedBannedEntries,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+            val groupUpdates = mutableMapOf<String, Any>(
+                "memberUids" to updatedMembers,
+                "bannedUids" to updatedBannedUids,
+                "bannedServantEntries" to updatedBannedEntries,
+                "updatedAt" to FieldValue.serverTimestamp()
             )
+            if (currentGroup.isPrimaryAdmin(adminUid) && updatedAssistants != currentGroup.assistantAdminIds) {
+                groupUpdates["assistantAdminIds"] = updatedAssistants
+            }
+            batch.update(groupRef, groupUpdates)
             // 2. Keep the block and all its children intact; only clear servantId on the block
             batch.update(
                 blockRef,
@@ -728,6 +735,7 @@ class KamRepository(private val db: FirebaseFirestore) {
 
             currentGroup.copy(
                 memberUids = updatedMembers,
+                assistantAdminIds = if (currentGroup.isPrimaryAdmin(adminUid)) updatedAssistants else currentGroup.assistantAdminIds,
                 bannedUids = updatedBannedUids,
                 bannedServantEntries = updatedBannedEntries
             )
@@ -748,7 +756,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         currentGroup: Group
     ): Result<Group> = runCatching {
         val adminUid = requireUserId()
-        require(currentGroup.adminId == adminUid) { "إلغاء الحظر متاح لأمين المجموعة فقط" }
+        require(currentGroup.isUserAdmin(adminUid)) { "إلغاء الحظر متاح لأمين المجموعة أو مساعده فقط" }
         val updatedBannedUids = currentGroup.bannedUids.filter { it != servantUid }
         val updatedBannedEntries = currentGroup.bannedServantEntries.filterNot { it.startsWith("$servantUid|") }
         val groupRef = db.collection("groups").document(groupId)
@@ -764,6 +772,50 @@ class KamRepository(private val db: FirebaseFirestore) {
                 bannedUids = updatedBannedUids,
                 bannedServantEntries = updatedBannedEntries
             )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, groupRef.path)
+            throw e
+        }
+    }
+
+    /**
+     * Allows the primary Group Admin (`adminId`) to appoint or remove an Assistant Admin
+     * (`assistantAdminIds`) who inherits full admin permissions across the group.
+     */
+    suspend fun setAssistantAdminStatus(
+        groupId: String,
+        targetUid: String,
+        makeAssistant: Boolean,
+        currentGroup: Group
+    ): Result<Group> = runCatching {
+        val actorUid = requireUserId()
+        require(currentGroup.isPrimaryAdmin(actorUid)) {
+            "تعيين أو إلغاء مساعد الأمين متاح لأمين المجموعة الأساسي فقط"
+        }
+        val cleanTarget = targetUid.trim()
+        require(cleanTarget.isNotBlank() && cleanTarget != currentGroup.adminId) {
+            "لا يمكن تغيير صلاحية أمين المجموعة الأساسي"
+        }
+        require(cleanTarget in currentGroup.memberUids) {
+            "هذا الخادم ليس عضواً حالياً في المجموعة"
+        }
+
+        val updatedAssistants = if (makeAssistant) {
+            (currentGroup.assistantAdminIds + cleanTarget).distinct().take(20)
+        } else {
+            currentGroup.assistantAdminIds.filter { it != cleanTarget }
+        }
+        val groupRef = db.collection("groups").document(groupId)
+        try {
+            groupRef.update(
+                mapOf(
+                    "assistantAdminIds" to updatedAssistants,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            currentGroup.copy(assistantAdminIds = updatedAssistants)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -888,7 +940,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                         val blockId = (legacyDoc.getString("blockId") ?: "").take(128)
                         val sortOrder = (legacyDoc.getLong("sortOrder") ?: 0L).coerceIn(0L, 100000L)
                         val pos = legacyDoc.getDouble("position")?.takeIf { it != 0.0 } ?: nextPos
-                        val avatarBase64 = (legacyDoc.getString("avatarBase64") ?: "").take(50000)
+                        val avatarBase64 = (legacyDoc.getString("avatarBase64") ?: "").take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
 
                         val payload = mutableMapOf<String, Any>(
                             "groupId" to groupId,
@@ -962,7 +1014,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                 docsWithInlineAvatar.chunked(20).forEach { chunk ->
                     val batch = db.batch()
                     chunk.forEach { doc ->
-                        val rawAvatar = doc.getString("avatarBase64").orEmpty().trim().take(50000)
+                        val rawAvatar = doc.getString("avatarBase64").orEmpty().trim().take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
                         if (rawAvatar.isNotBlank()) {
                             val hash = Student.computeAvatarHash(rawAvatar)
                             val avatarRef = groupRef.collection("avatars").document(doc.id)
@@ -1266,7 +1318,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         val uid = requireUserId()
         require(groupId.isNotBlank() && blockId.isNotBlank()) { "البلوك غير محدد" }
         val avatarDocId = "servant_block_$blockId".take(80)
-        val safeAvatar = avatarBase64.trim().take(50000)
+        val safeAvatar = avatarBase64.trim().take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
         val hasAvatar = safeAvatar.isNotBlank()
         val avatarHash = if (hasAvatar) Student.computeAvatarHash(safeAvatar) else ""
         val safeMembers = memberUids.ifEmpty { listOf(uid) }.distinct().take(MAX_SERVANTS_PER_GROUP)
@@ -1512,7 +1564,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                 avatarBase64 == null -> {
                     val existingRaw = current?.effectiveAvatarBase64?.trim().orEmpty()
                         .ifBlank { StudentAvatarImageHelper.readLocalAlbumRaw(null, "servant_$uid") }
-                        .take(50000)
+                        .take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
                     finalAvatarBase64 = existingRaw
                     finalHasAvatar = (current?.effectiveHasAvatar == true) || existingRaw.isNotBlank()
                     finalAvatarHash = current?.avatarHash?.ifBlank {
@@ -1526,7 +1578,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                     StudentAvatarImageHelper.writeLocalAlbumRaw(null, "servant_$uid", "")
                 }
                 else -> {
-                    val cleanAvatar = avatarBase64.trim().take(50000)
+                    val cleanAvatar = avatarBase64.trim().take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
                     finalAvatarBase64 = cleanAvatar
                     finalHasAvatar = true
                     finalAvatarHash = Student.computeAvatarHash(cleanAvatar)
@@ -1898,7 +1950,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         waitForServerAck: Boolean = true
     ): Result<Unit> = runCatching {
         val uid = requireUserId()
-        val safeAvatar = avatarBase64.trim().take(50000)
+        val safeAvatar = avatarBase64.trim().take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
         val hasAvatar = safeAvatar.isNotBlank()
         val avatarHash = Student.computeAvatarHash(safeAvatar)
         val safeMembers = memberUids.ifEmpty { listOf(uid) }.distinct().take(MAX_SERVANTS_PER_GROUP)
@@ -1988,7 +2040,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         studentsWithInlineAvatars.chunked(20).forEach { chunk ->
             val batch = db.batch()
             chunk.forEach { stu ->
-                val rawAvatar = stu.avatarBase64.trim().take(50000)
+                val rawAvatar = stu.avatarBase64.trim().take(StudentAvatarImageHelper.MAX_FIRESTORE_AVATAR_CHARS)
                 if (rawAvatar.isNotBlank()) {
                     val hash = Student.computeAvatarHash(rawAvatar)
                     val avatarRef = groupRef.collection("avatars").document(stu.id)

@@ -281,7 +281,7 @@ fun HomeScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("home_lazy_column"),
-                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 92.dp),
+                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 148.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // 1. Compact Header Bar
@@ -516,7 +516,7 @@ fun HomeScreen(
                     onClick = { showAddMenuDialog = true },
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                        .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 88.dp)
                 )
             }
         }

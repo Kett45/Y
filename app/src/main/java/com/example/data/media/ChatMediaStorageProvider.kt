@@ -40,6 +40,11 @@ interface ChatMediaStorageProvider {
         captionText: String = ""
     ): Result<PreparedChatMediaPayload>
 
+    suspend fun prepareEditedImagePayload(
+        bitmap: Bitmap,
+        captionText: String = ""
+    ): Result<PreparedChatMediaPayload>
+
     suspend fun prepareAudioPayload(
         audioFile: File,
         durationSec: Int
@@ -84,9 +89,9 @@ object InlineFirestoreChatMediaStorageProvider : ChatMediaStorageProvider {
     private val SAFE_ID_REGEX = Regex("[^a-zA-Z0-9_-]")
 
     // Target binary byte ceilings so that Base64 encoding (4/3x) stays strictly below the Firestore rule limits:
-    // - 60,000 Base64 chars = 45,000 raw bytes -> we target <= 43,000 raw bytes (< 57,500 Base64 chars < 60KB)
+    // - 450,000 Base64 chars = 337,500 raw bytes -> we target <= 330,000 raw bytes (< 440,000 Base64 chars < 460KB rule cap)
     // - 100,000 Base64 chars = 75,000 raw bytes -> we target <= 72,000 raw bytes (< 96,000 Base64 chars < 100KB)
-    private const val MAX_RAW_IMAGE_BYTES = 43_000
+    private const val MAX_RAW_IMAGE_BYTES = 330_000
     private const val MAX_RAW_AUDIO_BYTES = 72_000
 
     private val memoryBitmapCache = object : LruCache<String, Bitmap>(24) {}
@@ -134,71 +139,101 @@ object InlineFirestoreChatMediaStorageProvider : ChatMediaStorageProvider {
 
             val decodeOptions = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
-                inPreferredConfig = Bitmap.Config.RGB_565
+                inPreferredConfig = Bitmap.Config.ARGB_8888
             }
             val decoded = resolver.openInputStream(imageUri)?.use { input ->
                 BitmapFactory.decodeStream(input, null, decodeOptions)
             } ?: throw IllegalStateException("تعذر فتح الصورة المختارة")
 
-            // 3. Scale down so max dimension <= 1024px
-            val maxDim = max(decoded.width, decoded.height)
-            var currentBitmap = if (maxDim > ChatMessage.MAX_IMAGE_DIMENSION_PX) {
-                val ratio = ChatMessage.MAX_IMAGE_DIMENSION_PX.toFloat() / maxDim.toFloat()
-                val targetW = (decoded.width * ratio).roundToInt().coerceAtLeast(1)
-                val targetH = (decoded.height * ratio).roundToInt().coerceAtLeast(1)
-                Bitmap.createScaledBitmap(decoded, targetW, targetH, true).also {
-                    if (it !== decoded) decoded.recycle()
-                }
-            } else {
-                decoded
-            }
-
-            // 4. Compress iteratively until raw JPEG bytes <= MAX_RAW_IMAGE_BYTES (Base64 < 60KB)
-            var compressedBytes = compressBitmapToTarget(currentBitmap, MAX_RAW_IMAGE_BYTES)
-            var scaleAttempts = 0
-            while (compressedBytes.size > MAX_RAW_IMAGE_BYTES && scaleAttempts < 4) {
-                scaleAttempts++
-                val nextW = (currentBitmap.width * 0.78f).roundToInt().coerceAtLeast(160)
-                val nextH = (currentBitmap.height * 0.78f).roundToInt().coerceAtLeast(160)
-                val smaller = Bitmap.createScaledBitmap(currentBitmap, nextW, nextH, true)
-                if (smaller !== currentBitmap) {
-                    currentBitmap.recycle()
-                }
-                currentBitmap = smaller
-                compressedBytes = compressBitmapToTarget(currentBitmap, MAX_RAW_IMAGE_BYTES)
-            }
-
-            val finalW = currentBitmap.width
-            val finalH = currentBitmap.height
-            val base64Str = Base64.encodeToString(compressedBytes, Base64.NO_WRAP)
-            require(base64Str.length <= ChatMessage.MAX_IMAGE_BASE64_CHARS) {
-                "حجم الصورة كبير جداً حتى بعد الضغط (الحد الأقصى 60KB)"
-            }
-
-            val cleanCaption = captionText.trim().take(ChatMessage.MAX_TEXT_LENGTH)
-                .ifBlank { ChatMessage.IMAGE_DEFAULT_LABEL }
-
-            PreparedChatMediaPayload(
-                type = ChatMessageType.IMAGE,
-                textLabel = cleanCaption,
-                mediaBase64 = base64Str,
-                mediaMimeType = "image/jpeg",
-                imageWidth = finalW,
-                imageHeight = finalH
+            compressAndBuildImagePayload(
+                sourceBitmap = decoded,
+                captionText = captionText,
+                recycleSourceWhenScaled = true
             )
         }
     }
 
+    override suspend fun prepareEditedImagePayload(
+        bitmap: Bitmap,
+        captionText: String
+    ): Result<PreparedChatMediaPayload> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(!bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0) {
+                "تعذر قراءة الصورة المعدّلة"
+            }
+            compressAndBuildImagePayload(
+                sourceBitmap = bitmap,
+                captionText = captionText,
+                recycleSourceWhenScaled = false
+            )
+        }
+    }
+
+    private fun compressAndBuildImagePayload(
+        sourceBitmap: Bitmap,
+        captionText: String,
+        recycleSourceWhenScaled: Boolean
+    ): PreparedChatMediaPayload {
+        // Scale down proportionally only if longest edge exceeds MAX_IMAGE_DIMENSION_PX (1440px)
+        val maxDim = max(sourceBitmap.width, sourceBitmap.height)
+        var currentBitmap = if (maxDim > ChatMessage.MAX_IMAGE_DIMENSION_PX) {
+            val ratio = ChatMessage.MAX_IMAGE_DIMENSION_PX.toFloat() / maxDim.toFloat()
+            val targetW = (sourceBitmap.width * ratio).roundToInt().coerceAtLeast(1)
+            val targetH = (sourceBitmap.height * ratio).roundToInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(sourceBitmap, targetW, targetH, true).also {
+                if (recycleSourceWhenScaled && it !== sourceBitmap) sourceBitmap.recycle()
+            }
+        } else {
+            sourceBitmap
+        }
+        var ownsCurrentBitmap = currentBitmap !== sourceBitmap || recycleSourceWhenScaled
+
+        // Compress with high clarity first; gently downscale only if huge raw image exceeds budget
+        var compressedBytes = compressBitmapToTarget(currentBitmap, MAX_RAW_IMAGE_BYTES)
+        var scaleAttempts = 0
+        while (compressedBytes.size > MAX_RAW_IMAGE_BYTES && scaleAttempts < 3) {
+            scaleAttempts++
+            val nextW = (currentBitmap.width * 0.85f).roundToInt().coerceAtLeast(480)
+            val nextH = (currentBitmap.height * 0.85f).roundToInt().coerceAtLeast(480)
+            val smaller = Bitmap.createScaledBitmap(currentBitmap, nextW, nextH, true)
+            if (ownsCurrentBitmap && smaller !== currentBitmap) {
+                currentBitmap.recycle()
+            }
+            currentBitmap = smaller
+            ownsCurrentBitmap = true
+            compressedBytes = compressBitmapToTarget(currentBitmap, MAX_RAW_IMAGE_BYTES)
+        }
+
+        val finalW = currentBitmap.width
+        val finalH = currentBitmap.height
+        val base64Str = Base64.encodeToString(compressedBytes, Base64.NO_WRAP)
+        require(base64Str.length <= ChatMessage.MAX_IMAGE_BASE64_CHARS) {
+            "حجم الصورة كبير جداً حتى بعد الضغط"
+        }
+
+        val cleanCaption = captionText.trim().take(ChatMessage.MAX_TEXT_LENGTH)
+            .ifBlank { ChatMessage.IMAGE_DEFAULT_LABEL }
+
+        return PreparedChatMediaPayload(
+            type = ChatMessageType.IMAGE,
+            textLabel = cleanCaption,
+            mediaBase64 = base64Str,
+            mediaMimeType = "image/jpeg",
+            imageWidth = finalW,
+            imageHeight = finalH
+        )
+    }
+
     private fun compressBitmapToTarget(bitmap: Bitmap, maxBytes: Int): ByteArray {
         val out = ByteArrayOutputStream()
-        var quality = 80
-        while (quality >= 24) {
+        var quality = 90
+        while (quality >= 66) {
             out.reset()
             bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
             if (out.size() <= maxBytes) {
                 return out.toByteArray()
             }
-            quality -= 10
+            quality -= 6
         }
         return out.toByteArray()
     }

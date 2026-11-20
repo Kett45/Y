@@ -741,6 +741,189 @@ test("12. ChildNotes supports group member reads/creates, author deletes, and re
   await assertSucceeds(noteRef.delete());
 });
 
+test("13. High-resolution student avatars (<=360KB) and chat images (<=460KB, <=1600px) are allowed while oversized payloads are rejected", async () => {
+  await seedGroupWithMembers();
+  const now = new Date();
+  const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
+
+  const hdAvatarPayload = "A".repeat(180000);
+  const avatarRef = servantDb
+    .collection("groups")
+    .doc(GROUP_ID)
+    .collection("avatars")
+    .doc("stu_hd_1");
+
+  await assertSucceeds(
+    avatarRef.set({
+      groupId: GROUP_ID,
+      studentId: "stu_hd_1",
+      avatarBase64: hdAvatarPayload,
+      avatarHash: "hd_hash_1",
+      updatedByUid: SERVANT_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertFails(
+    avatarRef.set({
+      groupId: GROUP_ID,
+      studentId: "stu_hd_1",
+      avatarBase64: "A".repeat(370000),
+      avatarHash: "hd_hash_too_big",
+      updatedByUid: SERVANT_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  const msgCol = servantDb.collection("groups").doc(GROUP_ID).collection("messages");
+  await assertSucceeds(
+    msgCol.doc("msg_hd_img_1").set({
+      groupId: GROUP_ID,
+      senderUid: SERVANT_UID,
+      senderName: "مايكل",
+      type: "IMAGE",
+      text: "صورة عالية الجودة",
+      mediaBase64: "B".repeat(250000),
+      mediaMimeType: "image/jpeg",
+      imageWidth: 1440,
+      imageHeight: 1080,
+      isDeleted: false,
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertFails(
+    msgCol.doc("msg_hd_img_too_big").set({
+      groupId: GROUP_ID,
+      senderUid: SERVANT_UID,
+      senderName: "مايكل",
+      type: "IMAGE",
+      text: "صورة أكبر من الحد",
+      mediaBase64: "B".repeat(470000),
+      mediaMimeType: "image/jpeg",
+      imageWidth: 1440,
+      imageHeight: 1080,
+      isDeleted: false,
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+});
+
+test("14. Primary Admin can appoint Assistant Admin with full admin permissions while protecting primary admin", async () => {
+  await seedGroupWithMembers();
+  const now = new Date();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID).firestore();
+  const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
+  const groupRef = adminDb.collection("groups").doc(GROUP_ID);
+  const servantGroupRef = servantDb.collection("groups").doc(GROUP_ID);
+
+  // Regular servant cannot self-promote to assistantAdminIds
+  await assertFails(
+    servantGroupRef.update({
+      assistantAdminIds: [SERVANT_UID],
+      updatedAt: now,
+    })
+  );
+
+  // Regular servant cannot update group policies before appointment
+  await assertFails(
+    servantGroupRef.update({
+      allowServantUndo: true,
+      updatedAt: now,
+    })
+  );
+
+  // Primary admin appoints SERVANT_UID as Assistant Admin
+  await assertSucceeds(
+    groupRef.update({
+      assistantAdminIds: [SERVANT_UID],
+      updatedAt: now,
+    })
+  );
+
+  // Assistant Admin now has full admin permissions:
+  // 1) Update group policies
+  await assertSucceeds(
+    servantGroupRef.update({
+      allowServantUndo: true,
+      maxMonthlyPoints: 200,
+      updatedAt: now,
+    })
+  );
+
+  // 2) Create and delete a block
+  const assistantBlockRef = servantGroupRef.collection("blocks").doc("blk_by_assistant");
+  await assertSucceeds(
+    assistantBlockRef.set({
+      groupId: GROUP_ID,
+      servantId: SERVANT_UID,
+      servantName: "مايكل",
+      colorHex: "#6D28D9",
+      sortOrder: 5,
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(assistantBlockRef.delete());
+
+  // 3) Create and delete an invitation
+  const assistantInvRef = servantGroupRef.collection("invitations").doc("inv_by_assistant");
+  await assertSucceeds(
+    assistantInvRef.set({
+      groupId: GROUP_ID,
+      groupName: "أولى ابتدائي",
+      adminId: SERVANT_UID,
+      inviteCode: GROUP_ID,
+      inviteeName: "خادم جديد",
+      status: "PENDING",
+      acceptedByUid: "",
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(assistantInvRef.delete());
+
+  // 4) Assistant Admin CANNOT modify assistantAdminIds or ban the Primary Admin
+  await assertFails(
+    servantGroupRef.update({
+      assistantAdminIds: [],
+      updatedAt: now,
+    })
+  );
+  await assertFails(
+    servantGroupRef.update({
+      bannedUids: [ADMIN_UID],
+      updatedAt: now,
+    })
+  );
+
+  // 5) Primary Admin can revoke Assistant Admin status
+  await assertSucceeds(
+    groupRef.update({
+      assistantAdminIds: [],
+      updatedAt: now,
+    })
+  );
+
+  // Once revoked, servant can no longer update group policies
+  await assertFails(
+    servantGroupRef.update({
+      allowServantUndo: false,
+      updatedAt: now,
+    })
+  );
+});
+
+
+
 
 
 

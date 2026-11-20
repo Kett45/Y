@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
@@ -53,6 +54,10 @@ data class ChatUiState(
     val activeGroupName: String = "",
     val activeGroupAvatarBase64: String = "",
     val activeGroupAvatarHash: String = "",
+    val activeGroupAdminId: String = "",
+    val activeGroupAdminName: String = "",
+    val activeGroupAssistantAdminIds: List<String> = emptyList(),
+    val ownDisplayName: String = "",
     val groupMemberUids: List<String> = emptyList(),
     val fellowServants: List<GroupFellowServantItem> = emptyList(),
     val servantAliases: Map<String, String> = emptyMap(),
@@ -88,6 +93,7 @@ class ChatViewModel(
         val groupAvatarHash: String = "",
         val adminId: String = "",
         val adminName: String = "",
+        val assistantAdminIds: List<String> = emptyList(),
         val memberUids: List<String> = emptyList(),
         val memberProfiles: List<ServantMemberProfile> = emptyList(),
         val blocks: List<ServantBlock> = emptyList(),
@@ -288,6 +294,10 @@ class ChatViewModel(
             activeGroupName = ctx.groupName,
             activeGroupAvatarBase64 = ctx.groupAvatarBase64,
             activeGroupAvatarHash = ctx.groupAvatarHash,
+            activeGroupAdminId = ctx.adminId,
+            activeGroupAdminName = ctx.adminName,
+            activeGroupAssistantAdminIds = ctx.assistantAdminIds,
+            ownDisplayName = ctx.ownDisplayName,
             groupMemberUids = ctx.memberUids,
             fellowServants = fellowServants,
             servantAliases = ctx.servantAliases,
@@ -367,6 +377,7 @@ class ChatViewModel(
             groupAvatarHash = group?.avatarHash.orEmpty(),
             adminId = group?.adminId.orEmpty(),
             adminName = group?.adminName.orEmpty(),
+            assistantAdminIds = group?.assistantAdminIds.orEmpty(),
             memberUids = group?.memberUids.orEmpty(),
             memberProfiles = memberProfiles,
             blocks = blocks,
@@ -550,6 +561,40 @@ class ChatViewModel(
                 }
                 .onFailure { err ->
                     _mediaErrorMessage.value = err.message ?: "تعذّر ضغط وإرسال الصورة"
+                }
+            _isSendingMedia.value = false
+        }
+    }
+
+    /**
+     * Sends an already cropped/rotated Bitmap from the pre-send media editor with crisp high quality.
+     */
+    fun sendEditedImageMessage(context: Context, editedBitmap: Bitmap, captionText: String = "") {
+        val appContext = context.applicationContext
+        val ctx = _classroomContext.value
+        val room = _activeRoom.value ?: return
+        val senderName = ctx.ownDisplayName.ifBlank { "خادم" }
+
+        _mediaErrorMessage.value = null
+        _isSendingMedia.value = true
+
+        viewModelScope.launch(Dispatchers.IO) {
+            mediaStorage.prepareEditedImagePayload(editedBitmap, captionText)
+                .onSuccess { payload ->
+                    val label = captionText.trim().take(ChatMessage.MAX_TEXT_LENGTH)
+                        .ifBlank { ChatMessage.IMAGE_DEFAULT_LABEL }
+                    sendRoomMessageInternal(
+                        room = room,
+                        ctx = ctx,
+                        senderName = senderName,
+                        text = label,
+                        type = ChatMessageType.IMAGE,
+                        mediaPayload = payload,
+                        appContextForCache = appContext
+                    )
+                }
+                .onFailure { err ->
+                    _mediaErrorMessage.value = err.message ?: "تعذّر تجهيز وإرسال الصورة"
                 }
             _isSendingMedia.value = false
         }

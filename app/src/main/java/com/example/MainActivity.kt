@@ -8,6 +8,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -21,12 +23,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -36,25 +40,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.Email
-import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -75,6 +64,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalContext
@@ -95,12 +88,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.cache.LocalClassroomCache
-import com.example.data.model.ChatFormatHelper
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.KamRepository
 import com.example.data.sync.GitHubSmartSyncEngine
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.signOut
+import com.example.ui.components.KamFloatingBottomNavBar
 import com.example.ui.components.LocalStudentQuickPeekController
 import com.example.ui.components.ServantPhoneOnboardingWizardDialog
 import com.example.ui.components.StudentAvatarImageHelper
@@ -196,17 +189,17 @@ class MainActivity : ComponentActivity() {
     private fun setupStrictMode() {
         runCatching {
             KamPerformanceTracker.isStrictModeActive = true
-            android.os.StrictMode.setThreadPolicy(
-                android.os.StrictMode.ThreadPolicy.Builder()
-                    .detectDiskReads()
-                    .detectDiskWrites()
-                    .detectNetwork()
-                    .penaltyLog()
-                    .penaltyListener(mainExecutor) { violation ->
-                        KamPerformanceTracker.recordStrictModeViolation(violation)
-                    }
-                    .build()
-            )
+            val threadPolicyBuilder = android.os.StrictMode.ThreadPolicy.Builder()
+                .detectDiskReads()
+                .detectDiskWrites()
+                .detectNetwork()
+                .penaltyLog()
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                threadPolicyBuilder.penaltyListener(mainExecutor) { violation ->
+                    KamPerformanceTracker.recordStrictModeViolation(violation)
+                }
+            }
+            android.os.StrictMode.setThreadPolicy(threadPolicyBuilder.build())
             android.os.StrictMode.setVmPolicy(
                 android.os.StrictMode.VmPolicy.Builder()
                     .detectLeakedClosableObjects()
@@ -586,170 +579,84 @@ fun AuthenticatedKamApp(
         delay(600L)
         isInitialFrameSettled = true
     }
+    var isBottomBarVisibleByScroll by rememberSaveable(sessionKey) { mutableStateOf(true) }
     LaunchedEffect(currentTab) {
         quickPeekController.dismiss()
+        isBottomBarVisibleByScroll = true
+    }
+    val bottomBarScrollConnection = remember {
+        object : NestedScrollConnection {
+            private var accumulatedDelta = 0f
+
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val dy = available.y
+                if (dy < -1f) {
+                    // User scrolling down (content moving up) -> hide bottom bar smoothly
+                    accumulatedDelta = if (accumulatedDelta > 0f) dy else accumulatedDelta + dy
+                    if (accumulatedDelta <= -22f && isBottomBarVisibleByScroll) {
+                        isBottomBarVisibleByScroll = false
+                        accumulatedDelta = 0f
+                    }
+                } else if (dy > 1f) {
+                    // User scrolling up (content moving down) -> bring bottom bar smoothly back
+                    accumulatedDelta = if (accumulatedDelta < 0f) dy else accumulatedDelta + dy
+                    if (accumulatedDelta >= 14f && !isBottomBarVisibleByScroll) {
+                        isBottomBarVisibleByScroll = true
+                        accumulatedDelta = 0f
+                    }
+                }
+                return Offset.Zero
+            }
+        }
     }
     CompositionLocalProvider(LocalStudentQuickPeekController provides quickPeekController) {
         Box(modifier = Modifier.fillMaxSize()) {
-            val extColors = LocalKamExtendedColors.current
-            val navIndicatorColor = if (extColors.isDark) {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-            } else {
-                MaterialTheme.colorScheme.primaryContainer
+            val navChatState by chatViewModel.chatState.collectAsStateWithLifecycle()
+            val isInsideActiveChatRoom = currentTab == KamBottomTab.MESSAGES && navChatState.activeRoom != null
+            LaunchedEffect(isInsideActiveChatRoom) {
+                if (!isInsideActiveChatRoom) {
+                    isBottomBarVisibleByScroll = true
+                }
             }
-            val navItemColors = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.primary,
-                selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                indicatorColor = navIndicatorColor,
-                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                unselectedTextColor = extColors.mutedText
+            val showFloatingBottomBar = !isInsideActiveChatRoom && isBottomBarVisibleByScroll
+            val visitationBottomPadding by animateDpAsState(
+                targetValue = if (showFloatingBottomBar) 82.dp else 0.dp,
+                animationSpec = tween(durationMillis = 200),
+                label = "visitation_bottom_nav_clearance"
             )
 
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
                 containerColor = MaterialTheme.colorScheme.background,
-                contentWindowInsets = WindowInsets.safeDrawing,
-            bottomBar = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    HorizontalDivider(
-                        thickness = 1.dp,
-                        color = extColors.hairline
-                    )
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = MaterialTheme.colorScheme.onSurface,
-                        tonalElevation = 0.dp
-                    ) {
-                        NavigationBarItem(
-                            selected = currentTab == KamBottomTab.HOME,
-                            onClick = { selectTab(KamBottomTab.HOME) },
-                            colors = navItemColors,
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentTab == KamBottomTab.HOME) Icons.Filled.Home else Icons.Outlined.Home,
-                                    contentDescription = stringResource(R.string.tab_home)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.tab_home),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (currentTab == KamBottomTab.HOME) FontWeight.Bold else FontWeight.Medium
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_tab_home")
-                        )
-                        NavigationBarItem(
-                            selected = currentTab == KamBottomTab.VISITATION,
-                            onClick = { selectTab(KamBottomTab.VISITATION) },
-                            colors = navItemColors,
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentTab == KamBottomTab.VISITATION) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                                    contentDescription = stringResource(R.string.tab_visitation)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.tab_visitation),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (currentTab == KamBottomTab.VISITATION) FontWeight.Bold else FontWeight.Medium
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_tab_visitation")
-                        )
-                        NavigationBarItem(
-                            selected = currentTab == KamBottomTab.MESSAGES,
-                            onClick = { selectTab(KamBottomTab.MESSAGES) },
-                            colors = navItemColors,
-                            icon = {
-                                MessagesNavTabIcon(
-                                    chatViewModel = chatViewModel,
-                                    selected = currentTab == KamBottomTab.MESSAGES
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.tab_messages),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (currentTab == KamBottomTab.MESSAGES) FontWeight.Bold else FontWeight.Medium
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_tab_messages")
-                        )
-                        NavigationBarItem(
-                            selected = currentTab == KamBottomTab.GROUP,
-                            onClick = { selectTab(KamBottomTab.GROUP) },
-                            colors = navItemColors,
-                            icon = {
-                                Icon(
-                                    imageVector = Icons.Filled.Groups,
-                                    contentDescription = stringResource(R.string.tab_group)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.tab_group),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (currentTab == KamBottomTab.GROUP) FontWeight.Bold else FontWeight.Medium
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_tab_group")
-                        )
-                        NavigationBarItem(
-                            selected = currentTab == KamBottomTab.SETTINGS,
-                            onClick = { selectTab(KamBottomTab.SETTINGS) },
-                            colors = navItemColors,
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentTab == KamBottomTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
-                                    contentDescription = stringResource(R.string.tab_settings)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.tab_settings),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (currentTab == KamBottomTab.SETTINGS) FontWeight.Bold else FontWeight.Medium
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_tab_settings")
-                        )
-                    }
+                // Use systemBars (excluding IME) so ChatConversationView applies imePadding() cleanly ONCE without jumping
+                contentWindowInsets = WindowInsets.systemBars
+            ) { innerPadding ->
+                val onOpenPhoneWizardRemembered = remember { { showPhoneWizardModal = true } }
+                val onSendTextMessageRemembered: (String) -> Unit = remember(chatViewModel) {
+                    { text -> chatViewModel.sendMessage(text) }
                 }
-            }
-        ) { innerPadding ->
-            val onOpenPhoneWizardRemembered = remember { { showPhoneWizardModal = true } }
-            val onSendTextMessageRemembered: (String) -> Unit = remember(chatViewModel) {
-                { text -> chatViewModel.sendMessage(text) }
-            }
-            val onSendImageMessageRemembered: (android.net.Uri, String) -> Unit = remember(chatViewModel, context) {
-                { uri, caption -> chatViewModel.sendImageMessage(context, uri, caption) }
-            }
-            val onSendAudioMessageRemembered: (java.io.File, Int) -> Unit = remember(chatViewModel, context) {
-                { file, durationSec -> chatViewModel.sendAudioMessage(context, file, durationSec) }
-            }
-            val onSendInvitationRemembered: (String) -> Unit = remember(viewModel) {
-                { name -> viewModel.sendServantInvitation(name) }
-            }
+                val onSendImageMessageRemembered: (android.net.Uri, String) -> Unit = remember(chatViewModel, context) {
+                    { uri, caption -> chatViewModel.sendImageMessage(context, uri, caption) }
+                }
+                val onSendEditedImageMessageRemembered: (android.graphics.Bitmap, String) -> Unit = remember(chatViewModel, context) {
+                    { bmp, caption -> chatViewModel.sendEditedImageMessage(context, bmp, caption) }
+                }
+                val onSendAudioMessageRemembered: (java.io.File, Int) -> Unit = remember(chatViewModel, context) {
+                    { file, durationSec -> chatViewModel.sendAudioMessage(context, file, durationSec) }
+                }
+                val onSendInvitationRemembered: (String) -> Unit = remember(viewModel) {
+                    { name -> viewModel.sendServantInvitation(name) }
+                }
 
-            RetainedBottomTabContainer(
-                activeTab = currentTab,
-                visitedTabNames = visitedTabNames,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) { tab, isTabActive ->
+                RetainedBottomTabContainer(
+                    activeTab = currentTab,
+                    visitedTabNames = visitedTabNames,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .consumeWindowInsets(innerPadding)
+                        .nestedScroll(bottomBarScrollConnection)
+                ) { tab, isTabActive ->
                 val tabState = rememberFrozenWhileInactive(state, isTabActive)
                 when (tab) {
                     KamBottomTab.HOME -> {
@@ -789,7 +696,9 @@ fun AuthenticatedKamApp(
                             state = tabState,
                             currentUserId = user.uid,
                             onRecordVisitation = viewModel::recordVisitationNote,
-                            onDeleteNote = viewModel::deleteChildNote
+                            onUpdateStudent = viewModel::updateStudentDetails,
+                            onDeleteNote = viewModel::deleteChildNote,
+                            modifier = Modifier.padding(bottom = visitationBottomPadding)
                         )
                     }
 
@@ -809,6 +718,7 @@ fun AuthenticatedKamApp(
                             onCloseActiveChat = chatViewModel::closeActiveChat,
                             onSendMessage = onSendTextMessageRemembered,
                             onSendImageMessage = onSendImageMessageRemembered,
+                            onSendEditedImageMessage = onSendEditedImageMessageRemembered,
                             onSendAudioMessage = onSendAudioMessageRemembered,
                             onClearMediaError = chatViewModel::clearMediaError,
                             onDeleteOwnMessage = chatViewModel::deleteOwnMessage,
@@ -841,7 +751,8 @@ fun AuthenticatedKamApp(
                             onDeleteBlockKeepingChildren = viewModel::deleteBlockKeepingChildren,
                             onDeleteBlockWithChildren = viewModel::deleteBlockWithChildren,
                             onSavePersonalServantAlias = viewModel::savePersonalServantAlias,
-                            onEditOwnDisplayName = viewModel::editOwnDisplayName
+                            onEditOwnDisplayName = viewModel::editOwnDisplayName,
+                            onToggleAssistantAdmin = viewModel::toggleAssistantAdmin
                         )
                     }
 
@@ -867,6 +778,24 @@ fun AuthenticatedKamApp(
                 }
             }
         }
+
+        // Layer 1.5: Sleek Floating Animated Bottom Navigation Bar (scroll-aware & auto-hides inside chat rooms)
+        KamFloatingBottomNavBar(
+            visible = showFloatingBottomBar,
+            selectedIndex = currentTab.ordinal,
+            unreadMessagesCount = navChatState.totalUnreadCount,
+            onSelectIndex = { idx ->
+                val targetTab = KamBottomTab.entries.getOrElse(idx) { KamBottomTab.HOME }
+                isBottomBarVisibleByScroll = true
+                if (targetTab == KamBottomTab.MESSAGES) {
+                    chatViewModel.closeActiveChat()
+                }
+                selectTab(targetTab)
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(8f)
+        )
 
         // Layer 2: Floating Top Notification Overlay (renders ON TOP of the UI without pushing it down)
         FloatingNotificationsOverlay(
@@ -961,36 +890,6 @@ private fun RetainedBottomTabContainer(
         layout(constraints.maxWidth, constraints.maxHeight) {
             activePlaceable?.placeRelative(0, 0)
         }
-    }
-}
-
-@Composable
-private fun MessagesNavTabIcon(
-    chatViewModel: ChatViewModel,
-    selected: Boolean
-) {
-    val chatState by chatViewModel.chatState.collectAsStateWithLifecycle()
-    val badgeText = ChatFormatHelper.formatUnreadBadge(chatState.totalUnreadCount)
-    BadgedBox(
-        badge = {
-            if (badgeText.isNotBlank()) {
-                Badge(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                    modifier = Modifier.testTag("nav_messages_unread_badge")
-                ) {
-                    Text(
-                        text = badgeText,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-    ) {
-        Icon(
-            imageVector = if (selected) Icons.Filled.Email else Icons.Outlined.Email,
-            contentDescription = stringResource(R.string.tab_messages)
-        )
     }
 }
 

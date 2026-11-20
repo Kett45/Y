@@ -78,6 +78,7 @@ data class Group(
     val name: String = "",
     val adminId: String = "",
     val adminName: String = "",
+    val assistantAdminIds: List<String> = emptyList(),
     val memberUids: List<String> = emptyList(),
     val allowServantUndo: Boolean = true,
     val enforceWeeklyCardLimit: Boolean = false,
@@ -94,6 +95,11 @@ data class Group(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    fun isPrimaryAdmin(uid: String): Boolean = uid.isNotBlank() && adminId == uid
+
+    fun isAssistantAdmin(uid: String): Boolean = uid.isNotBlank() && uid in assistantAdminIds
+
+    fun isUserAdmin(uid: String): Boolean = isPrimaryAdmin(uid) || isAssistantAdmin(uid)
     val effectiveDailyToken: String
         get() = dailyInviteToken.ifBlank {
             computeFallbackDailyToken(inviteCode, inviteCodeUpdatedAtMillis)

@@ -162,8 +162,8 @@ data class ChatMessage(
         const val ATTENDANCE_REPORT_V2_PREFIX = "[ATTENDANCE_V2]"
         const val PAGE_SIZE = 30
         const val DELETED_MESSAGE_PLACEHOLDER = "تم حذف الرسالة"
-        const val MAX_IMAGE_DIMENSION_PX = 1024
-        const val MAX_IMAGE_BASE64_CHARS = 60_000
+        const val MAX_IMAGE_DIMENSION_PX = 1440
+        const val MAX_IMAGE_BASE64_CHARS = 450_000
         const val MAX_AUDIO_BASE64_CHARS = 100_000
         const val MAX_AUDIO_DURATION_SEC = 30
         const val IMAGE_DEFAULT_LABEL = "📷 صورة"
