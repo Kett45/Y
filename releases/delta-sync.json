@@ -2,10 +2,10 @@
   "targetVersionCode": 14,
   "targetVersionName": "1.14",
   "minCompatibleBaseVersion": 11,
-  "commitSha": "57a70b337386",
+  "commitSha": "bd586033dae5",
   "apkSha256": "57a70b337386f32f9c03768d2c8731f2f8ff38b1061ac37793a3573c778fc664",
-  "updatedAt": "2026-11-20T11:31:10Z",
-  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.14 (57a70b337386): الشريط السفلي المتحرك، مساعد الأمين، وإصلاح التحديث المباشر",
+  "updatedAt": "2026-11-20T11:48:49Z",
+  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.14 (bd586033dae5)",
   "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "changedModules": [
     "floating_animated_bottom_nav_bar",

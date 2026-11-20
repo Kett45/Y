@@ -4,10 +4,10 @@
   "minDeltaBaseVersionCode": 11,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
-  "commitSha": "57a70b337386",
+  "commitSha": "bd586033dae5",
   "apkSha256": "57a70b337386f32f9c03768d2c8731f2f8ff38b1061ac37793a3573c778fc664",
-  "updatedAt": "2026-11-20T11:31:10Z",
+  "updatedAt": "2026-11-20T11:48:49Z",
   "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.14 (نجم الكارت v1.14): شريط تنقل سفلي عائم متحرك، تعيين مساعد أمين بكامل الصلاحيات، حماية كود الدعوة للأمين ومساعده، وإصلاح التحديث المباشر داخل التطبيق (57a70b337386)."
+  "releaseNotesArabic": "الإصدار 1.14 (نجم الكارت v1.14): تحديث تلقائي مباشر بأحدث بصمة للـ APK (bd586033dae5)."
 }
