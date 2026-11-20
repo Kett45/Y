@@ -153,6 +153,7 @@ class MainActivity : ComponentActivity() {
             setupStrictMode()
         }
         super.onCreate(savedInstanceState)
+        GitHubSmartSyncEngine.attachActivity(this)
         runCatching {
             if (com.google.firebase.FirebaseApp.getApps(applicationContext).isEmpty()) {
                 com.google.firebase.FirebaseApp.initializeApp(applicationContext)
@@ -184,6 +185,11 @@ class MainActivity : ComponentActivity() {
             }
             GitHubSmartSyncEngine.initializeFromLocalCache(applicationContext)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        GitHubSmartSyncEngine.onActivityResumed(this)
     }
 
     private fun setupStrictMode() {

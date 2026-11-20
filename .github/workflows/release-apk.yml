@@ -1,4 +1,4 @@
-name: Auto-Sync Android APK Fingerprint + Delta Manifest
+name: Build & Publish Android APK + Auto-Update Manifest
 
 on:
   push:
@@ -16,8 +16,8 @@ permissions:
   contents: write
 
 jobs:
-  sync-prebuilt-apk-and-release:
-    name: Sync Ready APK Fingerprint & Update Release Manifests
+  build-and-publish-apk:
+    name: Build Fresh APK & Sync Release Manifests
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
 
@@ -27,6 +27,43 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect Whether APK Needs Rebuild
+        id: detect
+        run: |
+          CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD || true)
+          echo "Changed files in HEAD:"
+          echo "$CHANGED_FILES"
+          if echo "$CHANGED_FILES" | grep -q "^releases/kAM-Lite\.apk$"; then
+            echo "NEEDS_BUILD=false" >> "$GITHUB_OUTPUT"
+          elif echo "$CHANGED_FILES" | grep -qE "^(app/|build\.gradle\.kts|settings\.gradle\.kts|gradle/)"; then
+            echo "NEEDS_BUILD=true" >> "$GITHUB_OUTPUT"
+          elif [ ! -f "releases/kAM-Lite.apk" ]; then
+            echo "NEEDS_BUILD=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "NEEDS_BUILD=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up JDK 17
+        if: steps.detect.outputs.NEEDS_BUILD == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        if: steps.detect.outputs.NEEDS_BUILD == 'true'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Restore Debug Keystore & Build Updated APK
+        if: steps.detect.outputs.NEEDS_BUILD == 'true'
+        run: |
+          if [ ! -f "debug.keystore" ] && [ -f "debug.keystore.base64" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+          gradle :app:syncReleaseApk --no-daemon --stacktrace
+
       - name: Compute APK Fingerprint & Update Release Manifests
         env:
           REPO_SLUG: ${{ github.repository }}
@@ -34,18 +71,8 @@ jobs:
           FORCE_FULL: ${{ github.event.inputs.requires_full_install || 'true' }}
         run: |
           mkdir -p releases
-          if [ ! -f "releases/kAM-Lite.apk" ]; then
-            if [ -f ".build-outputs/app-optimized.apk" ]; then
-              cp -f .build-outputs/app-optimized.apk releases/kAM-Lite.apk
-            elif [ -f ".build-outputs/app-release.apk" ]; then
-              cp -f .build-outputs/app-release.apk releases/kAM-Lite.apk
-            elif [ -f ".build-outputs/app-debug.apk" ]; then
-              cp -f .build-outputs/app-debug.apk releases/kAM-Lite.apk
-            fi
-          fi
-
-          VERSION_NAME=$(grep -oP 'propVersionName\s*=.*"\K[^"]+' app/build.gradle.kts || echo "1.11")
-          VERSION_CODE=$(grep -oP 'propVersionCode\s*=.*:\s*\K[0-9]+' app/build.gradle.kts || echo "11")
+          VERSION_NAME=$(grep -oP 'propVersionName\s*=.*"\K[^"]+' app/build.gradle.kts || echo "1.14")
+          VERSION_CODE=$(grep -oP 'propVersionCode\s*=.*:\s*\K[0-9]+' app/build.gradle.kts || echo "14")
           MIN_DELTA_BASE=$((VERSION_CODE - 3))
           if [ "$MIN_DELTA_BASE" -lt 1 ]; then
             MIN_DELTA_BASE=1
@@ -61,9 +88,9 @@ jobs:
           SINGLE_AUTO_URL="https://github.com/${REPO_SLUG}/raw/${BRANCH_NAME}/releases/kAM-Lite.apk"
           DELTA_JSON_URL="https://raw.githubusercontent.com/${REPO_SLUG}/${BRANCH_NAME}/releases/delta-sync.json"
 
-          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
-          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
-          echo "APK_SHA256=$APK_SHA256" >> $GITHUB_ENV
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "APK_SHA256=$APK_SHA256" >> "$GITHUB_ENV"
 
           cat > releases/version.json <<EOF
           {
@@ -92,11 +119,10 @@ jobs:
             "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v${VERSION_NAME} (${SHORT_SHA})",
             "latestApkDirectUrl": "${SINGLE_AUTO_URL}",
             "changedModules": [
-              "dm_1on1_chat_rules_and_members_fix",
-              "group_servants_limit_expanded_to_50",
-              "visual_attendance_report_with_cached_child_photos",
-              "chat_media_save_to_device_button",
-              "github_auto_update_sha_fix_v111"
+              "floating_animated_bottom_nav_bar",
+              "assistant_admin_full_permissions",
+              "admin_only_group_invite_code",
+              "in_app_apk_updater_redirect_and_installer_fix"
             ],
             "dynamicConfig": {
               "maxStudentsPerGroup": 150,
@@ -109,12 +135,12 @@ jobs:
 
           ls -lh releases/kAM-Lite.apk releases/version.json releases/delta-sync.json
 
-      - name: Commit Updated Manifests to Repository
+      - name: Commit Updated APK & Manifests to Repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add releases/version.json releases/delta-sync.json
-          git diff --staged --quiet || git commit -m "chore(release): sync APK SHA-256 & manifest v${VERSION_NAME} [skip ci]"
+          git add releases/kAM-Lite.apk releases/version.json releases/delta-sync.json
+          git diff --staged --quiet || git commit -m "chore(release): publish APK v${VERSION_NAME} (${APK_SHA256:0:12}) [skip ci]"
           git push || true
 
       - name: Publish or Update Latest GitHub Release
@@ -124,8 +150,8 @@ jobs:
           name: "نجم الكارت v${{ env.VERSION_NAME }} - أحدث نسخة للأندرويد (APK)"
           body: |
             ## 📲 تحميل تطبيق نجم الكارت v${{ env.VERSION_NAME }} للأندرويد
-            - **🔗 الرابط الوحيد الدائم للتحميل المباشر (يتحدث تلقائياً مع كل إصدار):**
-              https://github.com/${{ github.repository }}/raw/${{ github.ref_name }}/releases/kAM-Lite.apk
+            - **🔗 الرابط المباشر للأحدث (GitHub Release):**
+              https://github.com/${{ github.repository }}/releases/latest/download/kAM-Lite.apk
             - **🔒 بصمة الملف الحالية (SHA-256):** `${{ env.APK_SHA256 }}`
           draft: false
           prerelease: false

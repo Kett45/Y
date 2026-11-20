@@ -1,6 +1,9 @@
 package com.example.data.sync
 
+import android.app.Activity
+import android.content.ClipData
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -23,6 +26,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStreamReader
+import java.lang.ref.WeakReference
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -135,6 +139,52 @@ object GitHubSmartSyncEngine {
     private const val APK_UPDATE_FILENAME = "kAM-Lite-update.apk"
 
     private val downloadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    @Volatile
+    private var hostActivityRef: WeakReference<Activity>? = null
+
+    @Volatile
+    private var pendingInstallAfterPermissionGrant: Boolean = false
+
+    fun attachActivity(activity: Activity) {
+        hostActivityRef = WeakReference(activity)
+    }
+
+    fun onActivityResumed(activity: Activity) {
+        hostActivityRef = WeakReference(activity)
+        if (pendingInstallAfterPermissionGrant) {
+            val canInstall = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                runCatching { activity.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+            } else {
+                true
+            }
+            if (canInstall) {
+                pendingInstallAfterPermissionGrant = false
+                installDownloadedApk(activity)
+            }
+        }
+    }
+
+    private fun extractActivity(context: Context): Activity? {
+        var current: Context? = context
+        var depth = 0
+        while (current is ContextWrapper && depth < 10) {
+            if (current is Activity) return current
+            current = current.baseContext
+            depth++
+        }
+        return current as? Activity
+    }
+
+    private fun resolveLaunchContext(context: Context): Context {
+        val fromArg = extractActivity(context)?.takeUnless { it.isFinishing || it.isDestroyed }
+        if (fromArg != null) {
+            hostActivityRef = WeakReference(fromArg)
+            return fromArg
+        }
+        val fromRef = hostActivityRef?.get()?.takeUnless { it.isFinishing || it.isDestroyed }
+        return fromRef ?: context.applicationContext
+    }
 
     /**
      * Fixed GitHub repository slug baked into BuildConfig.
@@ -514,20 +564,40 @@ object GitHubSmartSyncEngine {
      */
     fun triggerSmartUpdateCheckOrInstall(context: Context) {
         if (_syncState.value.isCheckingInBackground || _syncState.value.isDownloadingApk) return
+        extractActivity(context)?.let { attachActivity(it) }
         val appContext = context.applicationContext
         downloadScope.launch {
             val apkFile = getLocalApkUpdateFile(appContext)
             if (_syncState.value.downloadedApkReady &&
                 _syncState.value.majorUpdatePrompt != null &&
-                apkFile.exists() &&
-                apkFile.length() > 100_000L
+                isValidApkFile(appContext, apkFile)
             ) {
                 val launched = withContext(Dispatchers.Main) {
-                    installDownloadedApk(context)
+                    installDownloadedApk(resolveLaunchContext(context))
                 }
                 if (launched) return@launch
             }
-            checkAndSyncSilently(appContext, forceManualCheck = true)
+            checkAndSyncSilently(context, forceManualCheck = true)
+        }
+    }
+
+    /**
+     * Forces a fresh download of the latest APK from GitHub (clearing any cached APK file)
+     * and immediately launches the Android Package Installer once verified.
+     */
+    fun forceDownloadAndInstallLatestApk(context: Context) {
+        if (_syncState.value.isDownloadingApk) return
+        extractActivity(context)?.let { attachActivity(it) }
+        val appContext = context.applicationContext
+        downloadScope.launch {
+            runCatching { getLocalApkUpdateFile(appContext).delete() }
+            _syncState.value = _syncState.value.copy(
+                downloadedApkReady = false,
+                downloadErrorArabic = null,
+                isUpToDateConfirmed = false,
+                lastSyncSummaryArabic = "جاري تنزيل أحدث نسخة من GitHub..."
+            )
+            downloadAndInstallLatestApk(context, autoLaunchInstaller = true)
         }
     }
 
@@ -605,8 +675,7 @@ object GitHubSmartSyncEngine {
 
             val cachedApk = getLocalApkUpdateFile(appContext)
             val downloadedFileMatchesRemote = hasNewerApkBinary &&
-                cachedApk.exists() &&
-                cachedApk.length() > 100_000L &&
+                isValidApkFile(appContext, cachedApk) &&
                 (manifest.apkSha256.isBlank() ||
                     computeFileSha256(cachedApk).equals(manifest.apkSha256.trim(), ignoreCase = true))
 
@@ -748,6 +817,7 @@ object GitHubSmartSyncEngine {
                         isCheckingInBackground = false,
                         latestDirectApkUrl = singleCleanUrl,
                         backupApkUrl = singleCleanUrl,
+                        downloadedApkReady = downloadedFileMatchesRemote,
                         isUpToDateConfirmed = false,
                         lastSyncSummaryArabic = decision.reasonArabic,
                         majorUpdatePrompt = if (shouldShowBar) manifest else null,
@@ -755,7 +825,13 @@ object GitHubSmartSyncEngine {
                     )
 
                     if (shouldShowBar && hasNewerApkBinary) {
-                        startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
+                        if (downloadedFileMatchesRemote) {
+                            withContext(Dispatchers.Main) {
+                                installDownloadedApk(resolveLaunchContext(context))
+                            }
+                        } else {
+                            startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
+                        }
                     }
                 }
             }
@@ -794,25 +870,53 @@ object GitHubSmartSyncEngine {
         autoLaunchInstaller: Boolean = true
     ) {
         if (_syncState.value.isDownloadingApk) return
-        val appContext = context.applicationContext
+        extractActivity(context)?.let { attachActivity(it) }
         downloadScope.launch {
-            downloadAndInstallLatestApk(appContext, autoLaunchInstaller = autoLaunchInstaller)
+            downloadAndInstallLatestApk(context, autoLaunchInstaller = autoLaunchInstaller)
         }
     }
 
     /**
+     * Validates that [file] exists, has a realistic APK size (> 500 KB), begins with ZIP/APK magic
+     * bytes (`PK\u0003\u0004`), and parses cleanly as an APK matching this app's package name.
+     */
+    private fun isValidApkFile(context: Context, file: File): Boolean {
+        if (!file.exists() || !file.isFile || file.length() < 500_000L) return false
+        val hasZipHeader = runCatching {
+            FileInputStream(file).use { fis ->
+                val magic = ByteArray(4)
+                fis.read(magic) == 4 &&
+                    magic[0] == 0x50.toByte() &&
+                    magic[1] == 0x4B.toByte() &&
+                    magic[2] == 0x03.toByte() &&
+                    magic[3] == 0x04.toByte()
+            }
+        }.getOrDefault(false)
+        if (!hasZipHeader) return false
+
+        return runCatching {
+            val pm = context.applicationContext.packageManager
+            @Suppress("DEPRECATION")
+            val archiveInfo = pm.getPackageArchiveInfo(file.absolutePath, 0)
+            archiveInfo != null && archiveInfo.packageName == context.applicationContext.packageName
+        }.getOrDefault(false)
+    }
+
+    /**
      * Downloads the APK binary directly inside the app cache directory with live progress updates (0%..100%),
-     * records its SHA-256 fingerprint, and launches the native Android package installer via [FileProvider].
+     * validates APK integrity, records its SHA-256 fingerprint, and launches the native Android Package Installer.
      */
     suspend fun downloadAndInstallLatestApk(
         context: Context,
         autoLaunchInstaller: Boolean = true
     ): Boolean = withContext(Dispatchers.IO) {
         if (_syncState.value.isDownloadingApk) return@withContext false
+        extractActivity(context)?.let { attachActivity(it) }
         val appContext = context.applicationContext
         val state = _syncState.value
 
         val candidateUrls = listOf(
+            "https://github.com/$FIXED_GITHUB_REPO/releases/latest/download/kAM-Lite.apk",
             state.latestDirectApkUrl.ifBlank { defaultDirectApkUrl() },
             "https://raw.githubusercontent.com/$FIXED_GITHUB_REPO/main/releases/kAM-Lite.apk"
         ).distinct()
@@ -828,8 +932,9 @@ object GitHubSmartSyncEngine {
 
         var downloadedSuccess = false
         for (urlStr in candidateUrls) {
+            if (tempFile.exists()) runCatching { tempFile.delete() }
             if (downloadApkFromCandidateUrl(urlStr, tempFile)) {
-                if (tempFile.exists() && tempFile.length() > 100_000L) {
+                if (isValidApkFile(appContext, tempFile)) {
                     if (targetFile.exists()) targetFile.delete()
                     val renamed = tempFile.renameTo(targetFile)
                     if (!renamed) {
@@ -838,11 +943,13 @@ object GitHubSmartSyncEngine {
                     }
                     downloadedSuccess = true
                     break
+                } else {
+                    runCatching { tempFile.delete() }
                 }
             }
         }
 
-        if (downloadedSuccess && targetFile.exists() && targetFile.length() > 100_000L) {
+        if (downloadedSuccess && isValidApkFile(appContext, targetFile)) {
             val downloadedSha256 = computeFileSha256(targetFile)
             if (downloadedSha256.isNotBlank()) {
                 appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -860,16 +967,19 @@ object GitHubSmartSyncEngine {
             )
             if (autoLaunchInstaller) {
                 withContext(Dispatchers.Main) {
-                    installDownloadedApk(appContext)
+                    installDownloadedApk(resolveLaunchContext(context))
                 }
             }
             true
         } else {
             if (tempFile.exists()) tempFile.delete()
+            val errMsg = "تعذر تنزيل ملف التحديث الصحيح من GitHub؛ تأكد من الإنترنت وحاول مرة أخرى"
             _syncState.value = _syncState.value.copy(
                 isDownloadingApk = false,
                 downloadProgressPercent = 0,
-                downloadErrorArabic = "تعذر تنزيل ملف التحديث تلقائياً؛ يمكنك المحاولة مرة أخرى"
+                downloadedApkReady = false,
+                downloadErrorArabic = errMsg,
+                silentDeltaBannerMessage = errMsg
             )
             false
         }
@@ -878,17 +988,20 @@ object GitHubSmartSyncEngine {
     private fun downloadApkFromCandidateUrl(urlString: String, destinationFile: File): Boolean {
         var connection: HttpURLConnection? = null
         return try {
-            val cacheBustedUrl = appendHiddenCacheBuster(urlString)
-            val url = URL(cacheBustedUrl)
-            var activeConn: HttpURLConnection = (url.openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = true
+            // Only cache-bust the initial GitHub entry URL; NEVER mutate signed redirect URLs (S3/CDN)!
+            val initialUrl = if (urlString.contains("releases/latest/download")) {
+                urlString.trim()
+            } else {
+                appendHiddenCacheBuster(urlString)
+            }
+            var activeConn: HttpURLConnection = (URL(initialUrl).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
                 requestMethod = "GET"
-                connectTimeout = 12_000
-                readTimeout = 20_000
+                connectTimeout = 20_000
+                readTimeout = 45_000
                 useCaches = false
-                setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
-                setRequestProperty("Pragma", "no-cache")
-                setRequestProperty("Expires", "0")
+                setRequestProperty("User-Agent", "KamLite-Android/${BuildConfig.VERSION_NAME}")
+                setRequestProperty("Cache-Control", "no-cache")
                 setRequestProperty("Accept", "application/vnd.android.package-archive, application/octet-stream, */*")
             }
             connection = activeConn
@@ -901,19 +1014,19 @@ object GitHubSmartSyncEngine {
                     HttpURLConnection.HTTP_SEE_OTHER,
                     307,
                     308
-                ) && redirectCount < 5
+                ) && redirectCount < 8
             ) {
-                val newLocation = activeConn.getHeaderField("Location") ?: break
+                val rawLocation = activeConn.getHeaderField("Location") ?: break
+                val resolvedUrl = URL(activeConn.url, rawLocation)
                 activeConn.disconnect()
-                activeConn = (URL(appendHiddenCacheBuster(newLocation)).openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
+                activeConn = (resolvedUrl.openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = false
                     requestMethod = "GET"
-                    connectTimeout = 12_000
-                    readTimeout = 20_000
+                    connectTimeout = 20_000
+                    readTimeout = 45_000
                     useCaches = false
-                    setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
-                    setRequestProperty("Pragma", "no-cache")
-                    setRequestProperty("Expires", "0")
+                    setRequestProperty("User-Agent", "KamLite-Android/${BuildConfig.VERSION_NAME}")
+                    setRequestProperty("Accept", "application/vnd.android.package-archive, application/octet-stream, */*")
                 }
                 connection = activeConn
                 code = activeConn.responseCode
@@ -928,7 +1041,7 @@ object GitHubSmartSyncEngine {
 
             BufferedInputStream(activeConn.inputStream).use { input ->
                 FileOutputStream(destinationFile).use { output ->
-                    val buffer = ByteArray(16 * 1024)
+                    val buffer = ByteArray(32 * 1024)
                     var bytesRead: Int
                     while (input.read(buffer).also { bytesRead = it } != -1) {
                         output.write(buffer, 0, bytesRead)
@@ -939,7 +1052,7 @@ object GitHubSmartSyncEngine {
                             val percent = if (totalBytes > 0L) {
                                 ((downloadedBytes * 100L) / totalBytes).toInt().coerceIn(5, 99)
                             } else {
-                                ((downloadedBytes * 100L) / (17L * 1024L * 1024L)).toInt().coerceIn(5, 95)
+                                ((downloadedBytes * 100L) / (14L * 1024L * 1024L)).toInt().coerceIn(5, 95)
                             }
                             _syncState.value = _syncState.value.copy(
                                 isDownloadingApk = true,
@@ -950,7 +1063,7 @@ object GitHubSmartSyncEngine {
                     output.flush()
                 }
             }
-            destinationFile.exists() && destinationFile.length() > 100_000L
+            destinationFile.exists() && destinationFile.length() > 500_000L
         } catch (_: Exception) {
             false
         } finally {
@@ -960,48 +1073,106 @@ object GitHubSmartSyncEngine {
 
     /**
      * Launches the Android system Package Installer for the downloaded APK using [FileProvider].
+     * Uses the foreground [Activity] context when available so Android 10-16 never blocks the launch.
      */
     fun installDownloadedApk(context: Context): Boolean {
-        val appContext = context.applicationContext
+        val launchContext = resolveLaunchContext(context)
+        val appContext = launchContext.applicationContext
         val apkFile = getLocalApkUpdateFile(appContext)
-        if (!apkFile.exists() || apkFile.length() <= 100_000L) {
-            startInAppApkDownloadAndInstall(appContext, autoLaunchInstaller = true)
+        if (!isValidApkFile(appContext, apkFile)) {
+            runCatching { apkFile.delete() }
+            _syncState.value = _syncState.value.copy(downloadedApkReady = false)
+            startInAppApkDownloadAndInstall(launchContext, autoLaunchInstaller = true)
             return false
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val canInstall = runCatching { appContext.packageManager.canRequestPackageInstalls() }.getOrDefault(true)
+            val canInstall = runCatching { appContext.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
             if (!canInstall) {
+                pendingInstallAfterPermissionGrant = true
                 runCatching {
                     val settingsIntent = Intent(
                         Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                         Uri.parse("package:${appContext.packageName}")
                     ).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        if (launchContext !is Activity) {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
                     }
-                    context.startActivity(settingsIntent)
+                    launchContext.startActivity(settingsIntent)
                     _syncState.value = _syncState.value.copy(
-                        silentDeltaBannerMessage = "يرجى السماح بتثبيت التحديث من هذا المصدر ثم الضغط على 'تثبيت التحديث الآن'"
+                        downloadErrorArabic = null,
+                        silentDeltaBannerMessage = "يرجى تفعيل 'السماح من هذا المصدر' ثم الرجوع للتطبيق وسيبدأ التثبيت تلقائياً"
+                    )
+                }.onFailure { err ->
+                    pendingInstallAfterPermissionGrant = false
+                    val msg = "يرجى تفعيل إذن تثبيت التطبيقات من الإعدادات ثم المحاولة مجدداً (${err.localizedMessage.orEmpty()})"
+                    _syncState.value = _syncState.value.copy(
+                        downloadErrorArabic = msg,
+                        silentDeltaBannerMessage = msg
                     )
                 }
                 return false
             }
         }
 
-        return runCatching {
-            val apkUri = FileProvider.getUriForFile(
+        pendingInstallAfterPermissionGrant = false
+
+        val apkUri = runCatching {
+            FileProvider.getUriForFile(
                 appContext,
                 "${appContext.packageName}.fileprovider",
                 apkFile
             )
+        }.getOrElse { err ->
+            val msg = "تعذر تجهيز ملف التثبيت: ${err.localizedMessage ?: "خطأ في FileProvider"}"
+            _syncState.value = _syncState.value.copy(
+                downloadErrorArabic = msg,
+                silentDeltaBannerMessage = msg
+            )
+            return false
+        }
+
+        // Primary: ACTION_VIEW with ClipData + GRANT_READ_URI_PERMISSION
+        val viewLaunched = runCatching {
             val installIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(apkUri, "application/vnd.android.package-archive")
+                clipData = ClipData.newRawUri("KamLiteUpdate", apkUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (launchContext !is Activity) {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
             }
-            context.startActivity(installIntent)
+            launchContext.startActivity(installIntent)
             true
-        }.getOrElse {
+        }.getOrDefault(false)
+
+        if (viewLaunched) {
+            _syncState.value = _syncState.value.copy(downloadErrorArabic = null)
+            return true
+        }
+
+        // Fallback: ACTION_INSTALL_PACKAGE for OEM ROMs that reject ACTION_VIEW
+        return runCatching {
+            @Suppress("DEPRECATION")
+            val fallbackIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                data = apkUri
+                clipData = ClipData.newRawUri("KamLiteUpdate", apkUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+                if (launchContext !is Activity) {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            launchContext.startActivity(fallbackIntent)
+            _syncState.value = _syncState.value.copy(downloadErrorArabic = null)
+            true
+        }.getOrElse { err ->
+            val msg = "تعذر فتح شاشة التثبيت تلقائياً: ${err.localizedMessage ?: "حاول مرة أخرى"}"
+            _syncState.value = _syncState.value.copy(
+                downloadErrorArabic = msg,
+                silentDeltaBannerMessage = msg
+            )
             false
         }
     }
@@ -1010,10 +1181,11 @@ object GitHubSmartSyncEngine {
      * Triggers the in-app APK download & installer directly.
      */
     fun openLatestFullApkDownload(context: Context, useBackupLink: Boolean = false) {
+        extractActivity(context)?.let { attachActivity(it) }
         val appContext = context.applicationContext
         val apkFile = getLocalApkUpdateFile(appContext)
-        if (_syncState.value.downloadedApkReady && apkFile.exists() && apkFile.length() > 100_000L && !useBackupLink) {
-            if (installDownloadedApk(context)) return
+        if (_syncState.value.downloadedApkReady && isValidApkFile(appContext, apkFile) && !useBackupLink) {
+            if (installDownloadedApk(resolveLaunchContext(context))) return
         }
         startInAppApkDownloadAndInstall(context, autoLaunchInstaller = true)
     }

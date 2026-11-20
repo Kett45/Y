@@ -2552,14 +2552,7 @@ private fun GitHubAutoSyncSettingsCard() {
 
             Button(
                 onClick = {
-                    val apkFileReady = syncState.downloadedApkReady && syncState.majorUpdatePrompt != null
-                    if (apkFileReady) {
-                        GitHubSmartSyncEngine.triggerSmartUpdateCheckOrInstall(context)
-                    } else {
-                        scope.launch {
-                            GitHubSmartSyncEngine.checkAndSyncSilently(context, forceManualCheck = true)
-                        }
-                    }
+                    GitHubSmartSyncEngine.triggerSmartUpdateCheckOrInstall(context)
                 },
                 enabled = !syncState.isCheckingInBackground && !syncState.isDownloadingApk,
                 shape = RoundedCornerShape(12.dp),
@@ -2588,6 +2581,25 @@ private fun GitHubAutoSyncSettingsCard() {
                     },
                     maxLines = 1,
                     fontWeight = FontWeight.Bold
+                )
+            }
+
+            OutlinedButton(
+                onClick = {
+                    GitHubSmartSyncEngine.forceDownloadAndInstallLatestApk(context)
+                },
+                enabled = !syncState.isCheckingInBackground && !syncState.isDownloadingApk,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .testTag("github_force_redownload_apk_button")
+            ) {
+                Text(
+                    text = "تنزيل وتثبيت أحدث نسخة من GitHub مباشرة (v${syncState.installedBinaryVersionName})",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
                 )
             }
     }
