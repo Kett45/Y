@@ -33,6 +33,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -729,9 +731,13 @@ fun HomeScreen(
     }
 
     if (showMonthWeekTreeDialog) {
+        val monthsWithData = remember(state.allGroupCardEvents) {
+            state.allGroupCardEvents.mapNotNull { ev -> ev.monthKey.takeIf { it.isNotBlank() } }.toSet()
+        }
         YearMonthWeekTreeDialog(
             selectedMonthKey = state.selectedMonthKey,
             selectedWeekKey = state.selectedWeekKey,
+            monthsWithData = monthsWithData,
             onDismiss = { showMonthWeekTreeDialog = false },
             onSelectMonthAndWeek = onSelectMonthAndWeek
         )
@@ -824,7 +830,7 @@ private fun HomeTopControlCard(
     showLeaderboardExpanded: Boolean,
     onToggleLeaderboard: () -> Unit,
     onOpenSmartAttendance: () -> Unit = {},
-    @Suppress("UNUSED_PARAMETER") onMonthOffset: (Int) -> Unit,
+    onMonthOffset: (Int) -> Unit,
     onOpenMonthWeekTree: () -> Unit,
     onOpenDuplicateAlerts: () -> Unit,
     onSearchQueryChange: (String) -> Unit
@@ -833,8 +839,8 @@ private fun HomeTopControlCard(
     var isSearchExpanded by rememberSaveable { mutableStateOf(false) }
     val showSearchField = isSearchExpanded || state.searchQuery.isNotEmpty()
 
-    val compactPeriodLabel = remember(state.selectedMonthKey, state.selectedWeekKey) {
-        SaturdayCalendarHelper.formatCompactHeaderMonthWeek(state.selectedMonthKey, state.selectedWeekKey)
+    val fullPeriodLabel = remember(state.selectedMonthKey, state.selectedWeekKey) {
+        SaturdayCalendarHelper.formatSelectedMonthAndWeek(state.selectedMonthKey, state.selectedWeekKey)
     }
 
     val extColors = LocalKamExtendedColors.current
@@ -844,21 +850,21 @@ private fun HomeTopControlCard(
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
             .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
             .testTag("compact_home_header_bar"),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-            // Single 56dp Compact Row: Group Name + Month/Week Chip + Search Icon + Leaderboard Icon + Bell
+            // Row 1: Group Name + Version & Compact Action Icons Row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 44.dp),
+                    .heightIn(min = 42.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 1. Group Name + App Name & Version (compact header)
+                // 1. Group Name + App Name & Version
                 Column(
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text(
                         text = state.group?.name ?: "الفصل",
@@ -879,46 +885,7 @@ private fun HomeTopControlCard(
 
                 Spacer(modifier = Modifier.width(6.dp))
 
-                // 2. Compact Month & Week Selector Chip ("أكتوبر ٢٦ • أسبوع ٥ ▾")
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f)),
-                    modifier = Modifier
-                        .clickable(onClick = onOpenMonthWeekTree)
-                        .testTag("open_month_week_tree_button")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CalendarMonth,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = compactPeriodLabel,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Icon(
-                            imageVector = Icons.Default.ExpandMore,
-                            contentDescription = "فتح شجرة الشهور والأسابيع",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(4.dp))
-
-                // 3. Action Icons Row: Compact Swipe Button ("📋 سحب") + Search Icon + Leaderboard Icon + Bell + Badge
+                // 2. Action Icons Row: Compact Swipe Button ("📋 سحب") + Search Icon + Leaderboard Icon + Bell + Badge
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -1068,6 +1035,96 @@ private fun HomeTopControlCard(
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Row 2: Dedicated Uncrowded Calendar Strip (Prev Month | Full Month & Week Tree Trigger | Next Month)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, extColors.hairline),
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onMonthOffset(-1) }
+                        .testTag("calendar_prev_month_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = "الشهر السابق",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.42f)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onOpenMonthWeekTree)
+                        .testTag("open_month_week_tree_button")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CalendarMonth,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = fullPeriodLabel,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Default.ExpandMore,
+                            contentDescription = "فتح شجرة الشهور والأسابيع",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, extColors.hairline),
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onMonthOffset(1) }
+                        .testTag("calendar_next_month_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "الشهر التالي",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
                 }
             }

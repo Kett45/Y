@@ -548,14 +548,14 @@ data class YearTreeNode(
 
 /**
  * Local device calendar helper where:
- * - The first active month of the app is Month 11 (November 2026), and subsequent months/years are generated automatically.
+ * - Supports all 12 months of each year starting from January 2026 (and dynamically adapts to the device clock).
  * - Each week strictly starts on Saturday at 12:00 AM midnight (00:00:00).
  * - Computes exact Coptic Calendar (تقويم الشهداء) dates, Coptic months, Coptic weeks, and month-transition badges 100% offline.
  */
 object SaturdayCalendarHelper {
 
     const val APP_START_YEAR = 2026
-    const val APP_START_MONTH = 11 // November
+    const val APP_START_MONTH = 1 // January
 
     private val arabicMonths = listOf(
         "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
@@ -630,23 +630,20 @@ object SaturdayCalendarHelper {
     fun currentYearMonth(nowCal: java.util.Calendar = java.util.Calendar.getInstance()): String {
         val year = nowCal.get(java.util.Calendar.YEAR)
         val month = nowCal.get(java.util.Calendar.MONTH) + 1
-        if (year < APP_START_YEAR || (year == APP_START_YEAR && month < APP_START_MONTH)) {
-            return String.format(java.util.Locale.US, "%04d-%02d", APP_START_YEAR, APP_START_MONTH)
-        }
-        return String.format(java.util.Locale.US, "%04d-%02d", year, month)
+        return String.format(java.util.Locale.US, "%04d-%02d", year, month.coerceIn(1, 12))
     }
 
     /**
-     * Clamps any historical or legacy month key to strictly never precede November 2026 (Month 11).
+     * Validates and normalizes a month key (`YYYY-MM`), falling back to [currentYearMonth] if malformed.
      */
     fun clampMonthKey(monthKey: String): String {
         val parts = monthKey.trim().split("-")
-        val y = parts.getOrNull(0)?.toIntOrNull() ?: APP_START_YEAR
-        val m = parts.getOrNull(1)?.toIntOrNull() ?: APP_START_MONTH
-        if (y < APP_START_YEAR || (y == APP_START_YEAR && m < APP_START_MONTH)) {
-            return String.format(java.util.Locale.US, "%04d-%02d", APP_START_YEAR, APP_START_MONTH)
+        val y = parts.getOrNull(0)?.toIntOrNull()
+        val m = parts.getOrNull(1)?.toIntOrNull()
+        if (y == null || m == null || y !in 2020..2100 || m !in 1..12) {
+            return currentYearMonth()
         }
-        return String.format(java.util.Locale.US, "%04d-%02d", y, m.coerceIn(1, 12))
+        return String.format(java.util.Locale.US, "%04d-%02d", y, m)
     }
 
     /**
@@ -656,9 +653,6 @@ object SaturdayCalendarHelper {
     fun currentWeekKey(nowCal: java.util.Calendar = java.util.Calendar.getInstance()): String {
         val year = nowCal.get(java.util.Calendar.YEAR)
         val month = nowCal.get(java.util.Calendar.MONTH) + 1
-        if (year < APP_START_YEAR || (year == APP_START_YEAR && month < APP_START_MONTH)) {
-            return String.format(java.util.Locale.US, "%04d-%02d-W1", APP_START_YEAR, APP_START_MONTH)
-        }
         val dayOfMonth = nowCal.get(java.util.Calendar.DAY_OF_MONTH)
         val weeks = buildWeeksForMonth(year, month, nowCal)
         val matched = weeks.find { dayOfMonth in it.startDayOfMonth..it.endDayOfMonth }
@@ -667,11 +661,19 @@ object SaturdayCalendarHelper {
     }
 
     /**
-     * Starts from 2026 (where Month 11 is the first month) and automatically includes new years as time progresses.
+     * Includes the current device year, [APP_START_YEAR], and any additional years from saved data,
+     * sorted from newest to oldest.
      */
-    fun availableYears(nowCal: java.util.Calendar = java.util.Calendar.getInstance()): List<Int> {
-        val currentYear = nowCal.get(java.util.Calendar.YEAR).coerceAtLeast(APP_START_YEAR)
-        return (currentYear downTo APP_START_YEAR).toList()
+    fun availableYears(
+        nowCal: java.util.Calendar = java.util.Calendar.getInstance(),
+        extraYears: Set<Int> = emptySet()
+    ): List<Int> {
+        val currentYear = nowCal.get(java.util.Calendar.YEAR)
+        val minYear = (listOf(APP_START_YEAR, currentYear) + extraYears.filter { it in 2020..2100 }).minOrNull()
+            ?: APP_START_YEAR
+        val maxYear = (listOf(APP_START_YEAR, currentYear) + extraYears.filter { it in 2020..2100 }).maxOrNull()
+            ?: currentYear
+        return (maxYear downTo minYear).toList()
     }
 
     fun buildYearTree(
@@ -681,9 +683,7 @@ object SaturdayCalendarHelper {
         val nowYear = nowCal.get(java.util.Calendar.YEAR)
         val nowMonth = nowCal.get(java.util.Calendar.MONTH) + 1
 
-        // For 2026, start strictly from Month 11 (November) and remove old months 1..10.
-        // For subsequent years (2027+), include all months 1..12 automatically.
-        val startMonthForYear = if (year <= APP_START_YEAR) APP_START_MONTH else 1
+        val startMonthForYear = 1
 
         val months = (startMonthForYear..12).map { monthNum ->
             val monthKey = String.format(java.util.Locale.US, "%04d-%02d", year, monthNum)
@@ -1106,8 +1106,9 @@ object SaturdayCalendarHelper {
             val mKey = wKey.substringBefore("-W")
             val wNum = wKey.substringAfter("-W", "").toIntOrNull() ?: 1
             val parts = mKey.split("-")
-            val y = parts.getOrNull(0)?.toIntOrNull() ?: 2026
-            val m = parts.getOrNull(1)?.toIntOrNull() ?: 11
+            val fallbackCal = java.util.Calendar.getInstance()
+            val y = parts.getOrNull(0)?.toIntOrNull() ?: fallbackCal.get(java.util.Calendar.YEAR)
+            val m = parts.getOrNull(1)?.toIntOrNull() ?: (fallbackCal.get(java.util.Calendar.MONTH) + 1)
             val weeks = buildWeeksForMonth(y, m)
             val matched = weeks.find { it.weekNumberInMonth == wNum } ?: weeks.firstOrNull()
             if (matched != null) {

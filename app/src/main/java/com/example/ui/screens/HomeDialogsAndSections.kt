@@ -350,27 +350,44 @@ fun SearchResultsWithBlockOwnerSection(
 
 /**
  * Hierarchical Year ← Month ← Week Tree Dialog:
- * - Future months that haven't started yet are rendered gray and non-expandable ("رمادية ومش بتتفتح").
- * - Current and past months expand to show their Saturday-based weeks (starting Saturday 12:00 AM midnight).
- * - Works 100% offline from the device clock.
- * - Current week is marked ("الأسبوع الحالي ★"), and tapping any week displays that week's cards.
+ * - Shows all 12 months per year with Saturday-based weeks (starting Saturday 12:00 AM midnight)
+ *   and exact Coptic Calendar (تقويم الشهداء) dates & transition badges 100% offline.
+ * - Every month and week responds immediately to touch (including upcoming months, which are
+ *   styled with a subtle "قادم" badge while remaining expandable and selectable).
+ * - Includes quick-jump actions to return to the real current week or current full month in 1 tap.
  */
 @Composable
 fun YearMonthWeekTreeDialog(
     selectedMonthKey: String,
     selectedWeekKey: String?,
+    monthsWithData: Set<String> = emptySet(),
     onDismiss: () -> Unit,
     onSelectMonthAndWeek: (monthKey: String, weekKey: String?) -> Unit
 ) {
-    val availableYears = remember { SaturdayCalendarHelper.availableYears() }
-    val initialYear = remember(selectedMonthKey) {
-        selectedMonthKey.substringBefore("-").toIntOrNull()
-            ?: availableYears.firstOrNull()
-            ?: 2026
+    val normalizedSelectedMonth = remember(selectedMonthKey) {
+        SaturdayCalendarHelper.clampMonthKey(selectedMonthKey)
+    }
+    val realCurrentMonthKey = remember { SaturdayCalendarHelper.currentYearMonth() }
+    val realCurrentWeekKey = remember { SaturdayCalendarHelper.currentWeekKey() }
+
+    val availableYears = remember(normalizedSelectedMonth, monthsWithData) {
+        val extraYears = buildSet {
+            normalizedSelectedMonth.substringBefore("-").toIntOrNull()?.let { add(it) }
+            monthsWithData.forEach { mKey ->
+                mKey.substringBefore("-").toIntOrNull()?.let { add(it) }
+            }
+        }
+        SaturdayCalendarHelper.availableYears(extraYears = extraYears)
     }
 
-    var expandedYear by rememberSaveable { mutableIntStateOf(initialYear) }
-    var expandedMonthKey by rememberSaveable { mutableStateOf(selectedMonthKey) }
+    val initialYear = remember(normalizedSelectedMonth, availableYears) {
+        normalizedSelectedMonth.substringBefore("-").toIntOrNull()
+            ?: availableYears.firstOrNull()
+            ?: SaturdayCalendarHelper.APP_START_YEAR
+    }
+
+    var expandedYear by remember(normalizedSelectedMonth) { mutableIntStateOf(initialYear) }
+    var expandedMonthKey by remember(normalizedSelectedMonth) { mutableStateOf(normalizedSelectedMonth) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -384,13 +401,13 @@ fun YearMonthWeekTreeDialog(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "شجرة السنة والشهور والأسابيع",
-                        style = MaterialTheme.typography.titleLarge,
+                        text = "التقويم • السنة والشهور والأسابيع",
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                 }
                 Text(
-                    text = "بداية الأسبوع: السبت ١٢:٠٠ ص • يبدأ التقويم من شهر ١١ (نوفمبر ٢٠٢٦) مع الشهور القبطية",
+                    text = "بداية الأسبوع: السبت ١٢:٠٠ ص • مع التقويم القبطي (تقويم الشهداء)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -398,323 +415,409 @@ fun YearMonthWeekTreeDialog(
         },
         text = {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                val extColors = LocalKamExtendedColors.current
-                availableYears.forEach { year ->
-                    val yearTree = remember(year) { SaturdayCalendarHelper.buildYearTree(year) }
-                    val isYearExpanded = expandedYear == year
-
-                    Card(
+                // Quick-jump bar: Current Week | Full Current Month
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("tree_year_$year"),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = KamSemanticColors.elevatedSurface
-                        ),
-                        border = BorderStroke(1.dp, extColors.hairline)
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            // Level 1: Year Row
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        expandedYear = if (isYearExpanded) -1 else year
-                                    }
-                                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = yearTree.arabicYearLabel,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Icon(
-                                    imageVector = if (isYearExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
+                            .weight(1f)
+                            .heightIn(min = 42.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                onSelectMonthAndWeek(realCurrentMonthKey, realCurrentWeekKey)
+                                onDismiss()
                             }
+                            .testTag("calendar_jump_current_week_button")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = "الأسبوع الحالي ★",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
 
-                            // Level 2: Months under Year
-                            AnimatedVisibility(visible = isYearExpanded) {
-                                Column(
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 42.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                onSelectMonthAndWeek(realCurrentMonthKey, null)
+                                onDismiss()
+                            }
+                            .testTag("calendar_jump_current_month_button")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = "الشهر الحالي بالكامل",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider()
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val extColors = LocalKamExtendedColors.current
+                    availableYears.forEach { year ->
+                        val yearTree = remember(year) { SaturdayCalendarHelper.buildYearTree(year) }
+                        val isYearExpanded = expandedYear == year
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("tree_year_$year"),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = KamSemanticColors.elevatedSurface
+                            ),
+                            border = BorderStroke(1.dp, extColors.hairline)
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                // Level 1: Year Row
+                                Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        .heightIn(min = 48.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable {
+                                            expandedYear = if (isYearExpanded) -1 else year
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    yearTree.months.forEach { monthNode ->
-                                        val isMonthExpanded = expandedMonthKey == monthNode.monthKey && !monthNode.isFutureMonth
-                                        val isMonthSelected = selectedMonthKey == monthNode.monthKey
+                                    Text(
+                                        text = yearTree.arabicYearLabel,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Icon(
+                                        imageVector = if (isYearExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                        contentDescription = if (isYearExpanded) "طي السنة" else "فتح السنة",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
 
-                                        Surface(
-                                            shape = RoundedCornerShape(12.dp),
-                                            color = when {
-                                                monthNode.isFutureMonth -> MaterialTheme.colorScheme.surface.copy(alpha = 0.35f)
-                                                isMonthSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                                                else -> MaterialTheme.colorScheme.surface
-                                            },
-                                            border = BorderStroke(
-                                                width = 1.dp,
+                                // Level 2: Months under Year
+                                AnimatedVisibility(visible = isYearExpanded) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        yearTree.months.forEach { monthNode ->
+                                            val isMonthExpanded = expandedMonthKey == monthNode.monthKey
+                                            val isMonthSelected = normalizedSelectedMonth == monthNode.monthKey
+                                            val hasSavedData = monthNode.monthKey in monthsWithData
+
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
                                                 color = when {
-                                                    monthNode.isFutureMonth -> extColors.hairline.copy(alpha = 0.45f)
-                                                    isMonthSelected -> MaterialTheme.colorScheme.primary
-                                                    else -> extColors.hairline
-                                                }
-                                            ),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .then(
-                                                    if (monthNode.isFutureMonth) {
-                                                        // Future months: gray & non-expandable ("رمادية ومش بتتفتح")
-                                                        Modifier
-                                                    } else {
-                                                        Modifier.clickable {
-                                                            expandedMonthKey = if (isMonthExpanded) "" else monthNode.monthKey
-                                                        }
+                                                    isMonthSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                                    monthNode.isFutureMonth -> MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
+                                                    else -> MaterialTheme.colorScheme.surface
+                                                },
+                                                border = BorderStroke(
+                                                    width = if (isMonthSelected) 1.5.dp else 1.dp,
+                                                    color = when {
+                                                        isMonthSelected -> MaterialTheme.colorScheme.primary
+                                                        monthNode.isCurrentMonth -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                                        else -> extColors.hairline
                                                     }
-                                                )
-                                                .testTag("tree_month_${monthNode.monthKey}")
-                                        ) {
-                                            Column(modifier = Modifier.fillMaxWidth()) {
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Column(
-                                                        modifier = Modifier.weight(1f),
-                                                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                                                ),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .testTag("tree_month_${monthNode.monthKey}")
+                                            ) {
+                                                Column(modifier = Modifier.fillMaxWidth()) {
+                                                    // Month Header Row (clickable cleanly isolated from child weeks)
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .heightIn(min = 48.dp)
+                                                            .clip(RoundedCornerShape(12.dp))
+                                                            .clickable {
+                                                                expandedMonthKey = if (isMonthExpanded) "" else monthNode.monthKey
+                                                            }
+                                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
                                                     ) {
-                                                        Row(
-                                                            verticalAlignment = Alignment.CenterVertically,
-                                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                        Column(
+                                                            modifier = Modifier.weight(1f),
+                                                            verticalArrangement = Arrangement.spacedBy(3.dp)
                                                         ) {
-                                                            Text(
-                                                                text = "${SaturdayCalendarHelper.toArabicDigits(monthNode.monthNumber)}. ${monthNode.arabicMonthName}",
-                                                                style = MaterialTheme.typography.titleSmall,
-                                                                fontWeight = FontWeight.Bold,
-                                                                color = if (monthNode.isFutureMonth) {
-                                                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                                                                } else {
-                                                                    MaterialTheme.colorScheme.onSurface
-                                                                }
-                                                            )
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                            ) {
+                                                                Text(
+                                                                    text = "${SaturdayCalendarHelper.toArabicDigits(monthNode.monthNumber)}. ${monthNode.arabicMonthName}",
+                                                                    style = MaterialTheme.typography.titleSmall,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = if (monthNode.isFutureMonth && !isMonthSelected) {
+                                                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                                                    } else {
+                                                                        MaterialTheme.colorScheme.onSurface
+                                                                    }
+                                                                )
 
-                                                            if (monthNode.isCurrentMonth) {
-                                                                Surface(
-                                                                    shape = RoundedCornerShape(6.dp),
-                                                                    color = MaterialTheme.colorScheme.primary
-                                                                ) {
-                                                                    Text(
-                                                                        text = "الشهر الحالي",
-                                                                        style = MaterialTheme.typography.labelSmall,
-                                                                        color = MaterialTheme.colorScheme.onPrimary,
-                                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                                    )
+                                                                if (monthNode.isCurrentMonth) {
+                                                                    Surface(
+                                                                        shape = RoundedCornerShape(6.dp),
+                                                                        color = MaterialTheme.colorScheme.primary
+                                                                    ) {
+                                                                        Text(
+                                                                            text = "الشهر الحالي",
+                                                                            style = MaterialTheme.typography.labelSmall,
+                                                                            color = MaterialTheme.colorScheme.onPrimary,
+                                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                        )
+                                                                    }
+                                                                } else if (monthNode.isFutureMonth) {
+                                                                    Surface(
+                                                                        shape = RoundedCornerShape(6.dp),
+                                                                        color = MaterialTheme.colorScheme.surfaceVariant
+                                                                    ) {
+                                                                        Text(
+                                                                            text = "قادم",
+                                                                            style = MaterialTheme.typography.labelSmall,
+                                                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                        )
+                                                                    }
                                                                 }
+
+                                                                if (hasSavedData) {
+                                                                    Surface(
+                                                                        shape = RoundedCornerShape(6.dp),
+                                                                        color = MaterialTheme.colorScheme.secondaryContainer
+                                                                    ) {
+                                                                        Text(
+                                                                            text = "به كروت",
+                                                                            style = MaterialTheme.typography.labelSmall,
+                                                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                                            fontWeight = FontWeight.SemiBold,
+                                                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            if (monthNode.copticMonthsLabel.isNotBlank()) {
+                                                                Text(
+                                                                    text = "يقابله قبطياً: ${monthNode.copticMonthsLabel}",
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    color = if (monthNode.isFutureMonth && !isMonthSelected) {
+                                                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)
+                                                                    } else {
+                                                                        MaterialTheme.colorScheme.primary
+                                                                    },
+                                                                    fontWeight = FontWeight.SemiBold
+                                                                )
                                                             }
                                                         }
 
-                                                        if (monthNode.copticMonthsLabel.isNotBlank()) {
-                                                            Text(
-                                                                text = "يقابله قبطياً: ${monthNode.copticMonthsLabel}",
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                color = if (monthNode.isFutureMonth) {
-                                                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                                                                } else {
-                                                                    MaterialTheme.colorScheme.primary
-                                                                },
-                                                                fontWeight = FontWeight.SemiBold
-                                                            )
-                                                        }
-                                                    }
-
-                                                    if (monthNode.isFutureMonth) {
-                                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                                            Text(
-                                                                text = "لم يبدأ",
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                                                            )
-                                                            Spacer(modifier = Modifier.width(4.dp))
-                                                            Icon(
-                                                                imageVector = Icons.Default.Lock,
-                                                                contentDescription = "شهر قادم مقفول",
-                                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-                                                                modifier = Modifier.size(16.dp)
-                                                            )
-                                                        }
-                                                    } else {
                                                         Icon(
                                                             imageVector = if (isMonthExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                                            contentDescription = null,
+                                                            contentDescription = if (isMonthExpanded) "طي الشهر" else "عرض أسابيع الشهر",
                                                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                                                         )
                                                     }
-                                                }
 
-                                                // Level 3: Weeks inside expanded Month
-                                                AnimatedVisibility(visible = isMonthExpanded && !monthNode.isFutureMonth) {
-                                                    Column(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(start = 14.dp, end = 10.dp, bottom = 10.dp),
-                                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                                    ) {
-                                                        HorizontalDivider()
-
-                                                        // Option to view all weeks of this month combined
-                                                        val isAllWeeksSelected = isMonthSelected && selectedWeekKey.isNullOrBlank()
-                                                        Surface(
-                                                            shape = RoundedCornerShape(10.dp),
-                                                            color = if (isAllWeeksSelected) {
-                                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                                                            } else {
-                                                                MaterialTheme.colorScheme.surfaceVariant
-                                                            },
-                                                            border = if (isAllWeeksSelected) {
-                                                                BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-                                                            } else {
-                                                                null
-                                                            },
+                                                    // Level 3: Weeks inside expanded Month
+                                                    AnimatedVisibility(visible = isMonthExpanded) {
+                                                        Column(
                                                             modifier = Modifier
                                                                 .fillMaxWidth()
-                                                                .clickable {
-                                                                    onSelectMonthAndWeek(monthNode.monthKey, null)
-                                                                    onDismiss()
-                                                                }
-                                                                .testTag("tree_all_weeks_${monthNode.monthKey}")
+                                                                .padding(start = 12.dp, end = 10.dp, bottom = 10.dp),
+                                                            verticalArrangement = Arrangement.spacedBy(6.dp)
                                                         ) {
-                                                            Row(
-                                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                                verticalAlignment = Alignment.CenterVertically
-                                                            ) {
-                                                                Text(
-                                                                    text = "كل أسابيع شهر ${monthNode.arabicMonthName} (إجمالي الشهر)",
-                                                                    style = MaterialTheme.typography.labelLarge,
-                                                                    fontWeight = FontWeight.SemiBold,
-                                                                    color = MaterialTheme.colorScheme.onSurface
-                                                                )
-                                                                if (isAllWeeksSelected) {
-                                                                    Icon(
-                                                                        imageVector = Icons.Default.CheckCircle,
-                                                                        contentDescription = null,
-                                                                        tint = MaterialTheme.colorScheme.primary,
-                                                                        modifier = Modifier.size(18.dp)
-                                                                    )
-                                                                }
-                                                            }
-                                                        }
+                                                            HorizontalDivider()
 
-                                                        monthNode.weeks.forEach { weekNode ->
-                                                            val isWeekSelected = isMonthSelected && selectedWeekKey == weekNode.weekKey
+                                                            // Option to view all weeks of this month combined
+                                                            val isAllWeeksSelected = isMonthSelected && selectedWeekKey.isNullOrBlank()
                                                             Surface(
                                                                 shape = RoundedCornerShape(10.dp),
-                                                                color = when {
-                                                                    isWeekSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                                                                    weekNode.isCurrentWeek -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
-                                                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                                                color = if (isAllWeeksSelected) {
+                                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                                                } else {
+                                                                    MaterialTheme.colorScheme.surfaceVariant
                                                                 },
-                                                                border = when {
-                                                                    isWeekSelected -> BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-                                                                    weekNode.isCurrentWeek -> BorderStroke(1.dp, MaterialTheme.colorScheme.secondary)
-                                                                    else -> null
+                                                                border = if (isAllWeeksSelected) {
+                                                                    BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                                                                } else {
+                                                                    null
                                                                 },
                                                                 modifier = Modifier
                                                                     .fillMaxWidth()
+                                                                    .heightIn(min = 44.dp)
+                                                                    .clip(RoundedCornerShape(10.dp))
                                                                     .clickable {
-                                                                        onSelectMonthAndWeek(monthNode.monthKey, weekNode.weekKey)
+                                                                        onSelectMonthAndWeek(monthNode.monthKey, null)
                                                                         onDismiss()
                                                                     }
-                                                                    .testTag("tree_week_${weekNode.weekKey}")
+                                                                    .testTag("tree_all_weeks_${monthNode.monthKey}")
                                                             ) {
                                                                 Row(
                                                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                                                                     horizontalArrangement = Arrangement.SpaceBetween,
                                                                     verticalAlignment = Alignment.CenterVertically
                                                                 ) {
-                                                                    Column(
-                                                                        modifier = Modifier.weight(1f),
-                                                                        verticalArrangement = Arrangement.spacedBy(3.dp)
-                                                                    ) {
-                                                                        Row(
-                                                                            verticalAlignment = Alignment.CenterVertically,
-                                                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                                                        ) {
-                                                                            Text(
-                                                                                text = "↳ ${weekNode.arabicTitle}",
-                                                                                style = MaterialTheme.typography.labelLarge,
-                                                                                fontWeight = FontWeight.Bold,
-                                                                                color = MaterialTheme.colorScheme.onSurface
-                                                                            )
-                                                                            if (weekNode.isCurrentWeek) {
-                                                                                Surface(
-                                                                                    shape = RoundedCornerShape(6.dp),
-                                                                                    color = MaterialTheme.colorScheme.secondary
-                                                                                ) {
-                                                                                    Text(
-                                                                                        text = "الأسبوع الحالي ★",
-                                                                                        style = MaterialTheme.typography.labelSmall,
-                                                                                        color = MaterialTheme.colorScheme.onSecondary,
-                                                                                        fontWeight = FontWeight.Bold,
-                                                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                                                    )
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        Text(
-                                                                            text = "ميلادي: السبت ١٢:٠٠ ص (${weekNode.dateRangeLabel})",
-                                                                            style = MaterialTheme.typography.bodySmall,
-                                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                                        )
-                                                                        if (weekNode.copticWeekLabel.isNotBlank()) {
-                                                                            Text(
-                                                                                text = "قبطي: ${weekNode.copticWeekLabel}",
-                                                                                style = MaterialTheme.typography.bodySmall,
-                                                                                color = MaterialTheme.colorScheme.primary,
-                                                                                fontWeight = FontWeight.SemiBold
-                                                                            )
-                                                                        }
-                                                                        // Distinctive Coptic Month Transition Badge when a new Coptic month starts mid-week
-                                                                        weekNode.copticTransitionBadge?.let { transitionBadgeText ->
-                                                                            Surface(
-                                                                                shape = RoundedCornerShape(8.dp),
-                                                                                color = MaterialTheme.colorScheme.primaryContainer,
-                                                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
-                                                                                modifier = Modifier
-                                                                                    .padding(top = 2.dp)
-                                                                                    .testTag("coptic_transition_badge_${weekNode.weekKey}")
-                                                                            ) {
-                                                                                Text(
-                                                                                    text = transitionBadgeText,
-                                                                                    style = MaterialTheme.typography.labelSmall,
-                                                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                                                    fontWeight = FontWeight.Bold,
-                                                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                                                )
-                                                                            }
-                                                                        }
-                                                                    }
-
-                                                                    if (isWeekSelected) {
+                                                                    Text(
+                                                                        text = "كل أسابيع شهر ${monthNode.arabicMonthName} (إجمالي الشهر)",
+                                                                        style = MaterialTheme.typography.labelLarge,
+                                                                        fontWeight = FontWeight.SemiBold,
+                                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                                        modifier = Modifier.weight(1f)
+                                                                    )
+                                                                    if (isAllWeeksSelected) {
                                                                         Icon(
                                                                             imageVector = Icons.Default.CheckCircle,
                                                                             contentDescription = "محدد حالياً",
                                                                             tint = MaterialTheme.colorScheme.primary,
                                                                             modifier = Modifier.size(18.dp)
                                                                         )
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            monthNode.weeks.forEach { weekNode ->
+                                                                val isWeekSelected = isMonthSelected && selectedWeekKey == weekNode.weekKey
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(10.dp),
+                                                                    color = when {
+                                                                        isWeekSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                                                        weekNode.isCurrentWeek -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                                                                        else -> MaterialTheme.colorScheme.surfaceVariant
+                                                                    },
+                                                                    border = when {
+                                                                        isWeekSelected -> BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                                                                        weekNode.isCurrentWeek -> BorderStroke(1.dp, MaterialTheme.colorScheme.secondary)
+                                                                        else -> null
+                                                                    },
+                                                                    modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .heightIn(min = 48.dp)
+                                                                        .clip(RoundedCornerShape(10.dp))
+                                                                        .clickable {
+                                                                            onSelectMonthAndWeek(monthNode.monthKey, weekNode.weekKey)
+                                                                            onDismiss()
+                                                                        }
+                                                                        .testTag("tree_week_${weekNode.weekKey}")
+                                                                ) {
+                                                                    Row(
+                                                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                                        verticalAlignment = Alignment.CenterVertically
+                                                                    ) {
+                                                                        Column(
+                                                                            modifier = Modifier.weight(1f),
+                                                                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                                                                        ) {
+                                                                            Row(
+                                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                                            ) {
+                                                                                Text(
+                                                                                    text = "↳ ${weekNode.arabicTitle}",
+                                                                                    style = MaterialTheme.typography.labelLarge,
+                                                                                    fontWeight = FontWeight.Bold,
+                                                                                    color = MaterialTheme.colorScheme.onSurface
+                                                                                )
+                                                                                if (weekNode.isCurrentWeek) {
+                                                                                    Surface(
+                                                                                        shape = RoundedCornerShape(6.dp),
+                                                                                        color = MaterialTheme.colorScheme.secondary
+                                                                                    ) {
+                                                                                        Text(
+                                                                                            text = "الأسبوع الحالي ★",
+                                                                                            style = MaterialTheme.typography.labelSmall,
+                                                                                            color = MaterialTheme.colorScheme.onSecondary,
+                                                                                            fontWeight = FontWeight.Bold,
+                                                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                                                        )
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            Text(
+                                                                                text = "ميلادي: السبت ١٢:٠٠ ص (${weekNode.dateRangeLabel})",
+                                                                                style = MaterialTheme.typography.bodySmall,
+                                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                            )
+                                                                            if (weekNode.copticWeekLabel.isNotBlank()) {
+                                                                                Text(
+                                                                                    text = "قبطي: ${weekNode.copticWeekLabel}",
+                                                                                    style = MaterialTheme.typography.bodySmall,
+                                                                                    color = MaterialTheme.colorScheme.primary,
+                                                                                    fontWeight = FontWeight.SemiBold
+                                                                                )
+                                                                            }
+                                                                            // Distinctive Coptic Month Transition Badge when a new Coptic month starts mid-week
+                                                                            weekNode.copticTransitionBadge?.let { transitionBadgeText ->
+                                                                                Surface(
+                                                                                    shape = RoundedCornerShape(8.dp),
+                                                                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                                                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                                                                    modifier = Modifier
+                                                                                        .padding(top = 2.dp)
+                                                                                        .testTag("coptic_transition_badge_${weekNode.weekKey}")
+                                                                                ) {
+                                                                                    Text(
+                                                                                        text = transitionBadgeText,
+                                                                                        style = MaterialTheme.typography.labelSmall,
+                                                                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                                                        fontWeight = FontWeight.Bold,
+                                                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                                                    )
+                                                                                }
+                                                                            }
+                                                                        }
+
+                                                                        if (isWeekSelected) {
+                                                                            Icon(
+                                                                                imageVector = Icons.Default.CheckCircle,
+                                                                                contentDescription = "محدد حالياً",
+                                                                                tint = MaterialTheme.colorScheme.primary,
+                                                                                modifier = Modifier.size(18.dp)
+                                                                            )
+                                                                        }
                                                                     }
                                                                 }
                                                             }

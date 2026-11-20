@@ -64,18 +64,31 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun saturdayCalendarHelper_startsFromNovember2026WithCopticMonthsWeeksAndTransitionBadge() {
+    fun saturdayCalendarHelper_supportsAllMonthsWithCopticMonthsWeeksAndTransitionBadge() {
+        // Real device date: April 15, 2026 (must NOT lock out April or force November!)
+        val aprilCal = Calendar.getInstance().apply {
+            set(2026, Calendar.APRIL, 15, 10, 0, 0)
+        }
+        assertEquals("2026-04", SaturdayCalendarHelper.currentYearMonth(aprilCal))
+        assertTrue(SaturdayCalendarHelper.currentWeekKey(aprilCal).startsWith("2026-04-W"))
+        val aprilTree = SaturdayCalendarHelper.buildYearTree(2026, aprilCal)
+        assertEquals(12, aprilTree.months.size)
+        val aprilNode = aprilTree.months[3]
+        assertEquals(4, aprilNode.monthNumber)
+        assertTrue(aprilNode.isCurrentMonth)
+        assertFalse(aprilNode.isFutureMonth)
+
         // Sunday Nov 1, 2026
         val nowCal = Calendar.getInstance().apply {
             set(2026, Calendar.NOVEMBER, 1, 10, 0, 0)
         }
         val tree2026 = SaturdayCalendarHelper.buildYearTree(2026, nowCal)
-        // Only November (11) and December (12) exist in 2026; older months 1..10 are removed
-        assertEquals(2, tree2026.months.size)
-        assertEquals(11, tree2026.months[0].monthNumber)
-        assertEquals(12, tree2026.months[1].monthNumber)
+        assertEquals(12, tree2026.months.size)
+        assertEquals(1, tree2026.months[0].monthNumber)
+        assertEquals(11, tree2026.months[10].monthNumber)
+        assertEquals(12, tree2026.months[11].monthNumber)
 
-        val november = tree2026.months[0]
+        val november = tree2026.months[10]
         assertTrue(november.isCurrentMonth)
         assertFalse(november.isFutureMonth)
         assertTrue(november.copticMonthsLabel.contains("بابه"))
@@ -95,7 +108,7 @@ class ExampleUnitTest {
         assertTrue(week2.copticTransitionBadge!!.contains("هاتور"))
 
         // December 2026 is a future month relative to Nov 1, 2026 -> marked as future with future weeks
-        val december = tree2026.months[1]
+        val december = tree2026.months[11]
         assertTrue(december.isFutureMonth)
         assertTrue(december.weeks.all { it.isFutureWeek })
     }

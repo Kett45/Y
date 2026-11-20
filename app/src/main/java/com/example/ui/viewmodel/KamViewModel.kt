@@ -610,7 +610,7 @@ data class KamScreenState(
         val targetMonths = selectedMonthKeys.filter { it.isNotBlank() }.toSortedSet()
         val targetWeeks = selectedWeekKeys.filter { it.isNotBlank() }.toSortedSet()
         val effectiveMonths = if (targetMonths.isEmpty() && targetWeeks.isEmpty()) {
-            sortedSetOf(selectedMonthKey.ifBlank { "2026-11" })
+            sortedSetOf(selectedMonthKey.ifBlank { SaturdayCalendarHelper.currentYearMonth() })
         } else {
             targetMonths
         }
@@ -1564,27 +1564,13 @@ class KamViewModel(
     }
 
     fun selectMonthAndWeek(monthKey: String, weekKey: String?) {
-        val minStartMonth = String.format(
-            Locale.US,
-            "%04d-%02d",
-            SaturdayCalendarHelper.APP_START_YEAR,
-            SaturdayCalendarHelper.APP_START_MONTH
-        )
-        if (monthKey < minStartMonth) {
-            showBanner("شهر نوفمبر ٢٠٢٦ هو بداية التقويم في التطبيق")
-            return
-        }
-        val nowMonth = currentYearMonth()
-        if (monthKey > nowMonth) {
-            showBanner("لا يمكن فتح الشهور التي لم تبدأ بعد")
-            return
-        }
-        _selectedMonthKey.value = SaturdayCalendarHelper.clampMonthKey(monthKey)
-        _selectedWeekKey.value = weekKey
+        val normalizedMonth = SaturdayCalendarHelper.clampMonthKey(monthKey)
+        _selectedMonthKey.value = normalizedMonth
+        _selectedWeekKey.value = weekKey?.takeIf { it.isNotBlank() }
     }
 
     fun selectMonthOffset(deltaMonths: Int) {
-        val current = _selectedMonthKey.value
+        val current = SaturdayCalendarHelper.clampMonthKey(_selectedMonthKey.value)
         val parts = current.split("-")
         if (parts.size != 2) return
         val year = parts[0].toIntOrNull() ?: return
@@ -1595,23 +1581,16 @@ class KamViewModel(
             set(Calendar.DAY_OF_MONTH, 1)
             add(Calendar.MONTH, deltaMonths)
         }
+        val targetYear = cal.get(Calendar.YEAR)
+        val nowYear = Calendar.getInstance().get(Calendar.YEAR)
+        val minAllowedYear = minOf(SaturdayCalendarHelper.APP_START_YEAR, nowYear) - 1
+        val maxAllowedYear = maxOf(SaturdayCalendarHelper.APP_START_YEAR, nowYear) + 2
+        if (targetYear < minAllowedYear || targetYear > maxAllowedYear) {
+            return
+        }
         val sdf = SimpleDateFormat("yyyy-MM", Locale.US)
         val newMonthKey = sdf.format(cal.time)
-        val minStartMonth = String.format(
-            Locale.US,
-            "%04d-%02d",
-            SaturdayCalendarHelper.APP_START_YEAR,
-            SaturdayCalendarHelper.APP_START_MONTH
-        )
-        if (newMonthKey < minStartMonth) {
-            showBanner("شهر نوفمبر ٢٠٢٦ هو أول شهر في التطبيق")
-            return
-        }
         val nowMonthKey = currentYearMonth()
-        if (newMonthKey > nowMonthKey) {
-            showBanner("الشهر القادم لم يبدأ بعد")
-            return
-        }
         _selectedMonthKey.value = newMonthKey
         _selectedWeekKey.value = if (newMonthKey == nowMonthKey) {
             currentYearWeek()

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -118,7 +119,9 @@ fun FullClassLeaderboardScreen(
         KamPerformanceTracker.setInteractionContext(KamPerformanceTracker.CTX_LEADERBOARD, scrolling = false)
     }
 
-    val initialMonth = SaturdayCalendarHelper.clampMonthKey(state.selectedMonthKey.ifBlank { "2026-11" })
+    val initialMonth = SaturdayCalendarHelper.clampMonthKey(
+        state.selectedMonthKey.ifBlank { SaturdayCalendarHelper.currentYearMonth() }
+    )
 
     var selectedMonthKeys by rememberSaveable { mutableStateOf(setOf(initialMonth)) }
     var selectedWeekKeys by rememberSaveable { mutableStateOf(emptySet<String>()) }
@@ -367,18 +370,20 @@ fun FullClassLeaderboardScreen(
                         color = MaterialTheme.colorScheme.primaryContainer,
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)),
                         modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(10.dp))
                             .clickable { showCalendarTreeDialog = true }
                             .testTag("toggle_leaderboard_period_selector_button")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
                                 imageVector = Icons.Default.CalendarMonth,
                                 contentDescription = "اختيار الفترة",
                                 tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
@@ -386,7 +391,8 @@ fun FullClassLeaderboardScreen(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 fontWeight = FontWeight.Bold,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -941,18 +947,25 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
     onDismiss: () -> Unit,
     onConfirm: (selectedMonths: Set<String>, selectedWeeks: Set<String>) -> Unit
 ) {
-    val availableYears = remember { SaturdayCalendarHelper.availableYears() }
-    val initialYear = remember(currentMonthKey) {
+    val availableYears = remember(currentMonthKey, initialMonthKeys, initialWeekKeys) {
+        val extraYears = buildSet {
+            currentMonthKey.substringBefore("-").toIntOrNull()?.let { add(it) }
+            initialMonthKeys.forEach { it.substringBefore("-").toIntOrNull()?.let { y -> add(y) } }
+            initialWeekKeys.forEach { it.substringBefore("-").toIntOrNull()?.let { y -> add(y) } }
+        }
+        SaturdayCalendarHelper.availableYears(extraYears = extraYears)
+    }
+    val initialYear = remember(currentMonthKey, availableYears) {
         currentMonthKey.substringBefore("-").toIntOrNull()
             ?: availableYears.firstOrNull()
-            ?: 2026
+            ?: SaturdayCalendarHelper.APP_START_YEAR
     }
 
-    var expandedYear by rememberSaveable { mutableIntStateOf(initialYear) }
-    var expandedMonthKey by rememberSaveable { mutableStateOf<String?>(currentMonthKey) }
+    var expandedYear by remember(currentMonthKey) { mutableIntStateOf(initialYear) }
+    var expandedMonthKey by remember(currentMonthKey) { mutableStateOf<String?>(currentMonthKey) }
 
-    var draftMonthKeys by remember { mutableStateOf(initialMonthKeys.toMutableSet()) }
-    var draftWeekKeys by remember { mutableStateOf(initialWeekKeys.toMutableSet()) }
+    var draftMonthKeys by remember { mutableStateOf(initialMonthKeys.toSet()) }
+    var draftWeekKeys by remember { mutableStateOf(initialWeekKeys.toSet()) }
 
     val yearTrees = remember(availableYears) {
         availableYears.associateWith { year -> SaturdayCalendarHelper.buildYearTree(year) }
@@ -963,6 +976,7 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
             .filter { !it.isFutureMonth || it.isCurrentMonth }
             .map { it.monthKey }
             .toSet()
+            .ifEmpty { setOf(currentMonthKey) }
     }
 
     val selectedCount = draftMonthKeys.size + draftWeekKeys.size
@@ -1008,21 +1022,24 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
                         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
                         modifier = Modifier
                             .weight(1.2f)
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(8.dp))
                             .clickable {
-                                draftMonthKeys = allPastAndCurrentMonths.toMutableSet()
-                                draftWeekKeys = mutableSetOf()
+                                draftMonthKeys = allPastAndCurrentMonths
+                                draftWeekKeys = emptySet()
                             }
                             .testTag("select_all_past_months_button")
                     ) {
-                        Text(
-                            text = "كل الشهور السابقة",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                            maxLines = 1
-                        )
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)) {
+                            Text(
+                                text = "كل الشهور السابقة",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1
+                            )
+                        }
                     }
 
                     Surface(
@@ -1030,21 +1047,24 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
                         color = MaterialTheme.colorScheme.primaryContainer,
                         modifier = Modifier
                             .weight(1f)
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(8.dp))
                             .clickable {
-                                draftMonthKeys = mutableSetOf(currentMonthKey)
-                                draftWeekKeys = mutableSetOf()
+                                draftMonthKeys = setOf(currentMonthKey)
+                                draftWeekKeys = emptySet()
                             }
                             .testTag("select_current_month_only_button")
                     ) {
-                        Text(
-                            text = "الشهر الحالي",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                            maxLines = 1
-                        )
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)) {
+                            Text(
+                                text = "الشهر الحالي",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1
+                            )
+                        }
                     }
 
                     Surface(
@@ -1052,21 +1072,24 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         modifier = Modifier
                             .weight(0.8f)
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(8.dp))
                             .clickable {
-                                draftMonthKeys = mutableSetOf()
-                                draftWeekKeys = mutableSetOf()
+                                draftMonthKeys = emptySet()
+                                draftWeekKeys = emptySet()
                             }
                             .testTag("clear_all_calendar_selection_button")
                     ) {
-                        Text(
-                            text = "مسح الكل",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                            maxLines = 1
-                        )
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)) {
+                            Text(
+                                text = "مسح الكل",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
 
@@ -1154,28 +1177,23 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
                                                         verticalAlignment = Alignment.CenterVertically,
                                                         modifier = Modifier
                                                             .weight(1f)
+                                                            .heightIn(min = 44.dp)
+                                                            .clip(RoundedCornerShape(8.dp))
                                                             .clickable {
+                                                                val monthWeekKeys = monthNode.weeks.map { it.weekKey }.toSet()
                                                                 if (isFullySelected) {
-                                                                    draftMonthKeys = (draftMonthKeys - monthNode.monthKey).toMutableSet()
-                                                                    draftWeekKeys = (draftWeekKeys - monthNode.weeks.map { it.weekKey }.toSet()).toMutableSet()
+                                                                    draftMonthKeys = draftMonthKeys - monthNode.monthKey
+                                                                    draftWeekKeys = draftWeekKeys - monthWeekKeys
                                                                 } else {
-                                                                    draftMonthKeys = (draftMonthKeys + monthNode.monthKey).toMutableSet()
-                                                                    draftWeekKeys = (draftWeekKeys - monthNode.weeks.map { it.weekKey }.toSet()).toMutableSet()
+                                                                    draftMonthKeys = draftMonthKeys + monthNode.monthKey
+                                                                    draftWeekKeys = draftWeekKeys - monthWeekKeys
                                                                 }
                                                             }
+                                                            .padding(end = 6.dp)
                                                     ) {
                                                         Checkbox(
                                                             checked = isFullySelected,
-                                                            onCheckedChange = { checked ->
-                                                                if (checked) {
-                                                                    draftMonthKeys = (draftMonthKeys + monthNode.monthKey).toMutableSet()
-                                                                    draftWeekKeys = (draftWeekKeys - monthNode.weeks.map { it.weekKey }.toSet()).toMutableSet()
-                                                                } else {
-                                                                    draftMonthKeys = (draftMonthKeys - monthNode.monthKey).toMutableSet()
-                                                                    draftWeekKeys = (draftWeekKeys - monthNode.weeks.map { it.weekKey }.toSet()).toMutableSet()
-                                                                }
-                                                            },
-                                                            modifier = Modifier.size(24.dp)
+                                                            onCheckedChange = null
                                                         )
                                                         Spacer(modifier = Modifier.width(8.dp))
                                                         Column {
@@ -1224,7 +1242,7 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
                                                         onClick = {
                                                             expandedMonthKey = if (isMonthExpanded) null else monthNode.monthKey
                                                         },
-                                                        modifier = Modifier.size(36.dp)
+                                                        modifier = Modifier.size(44.dp)
                                                     ) {
                                                         Icon(
                                                             imageVector = if (isMonthExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -1260,21 +1278,24 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
                                                                 },
                                                                 modifier = Modifier
                                                                     .fillMaxWidth()
+                                                                    .heightIn(min = 44.dp)
+                                                                    .clip(RoundedCornerShape(8.dp))
                                                                     .clickable {
                                                                         if (isFullySelected) {
-                                                                            draftMonthKeys = (draftMonthKeys - monthNode.monthKey).toMutableSet()
+                                                                            draftMonthKeys = draftMonthKeys - monthNode.monthKey
                                                                             val otherWeeks = monthNode.weeks
                                                                                 .filter { it.weekKey != weekNode.weekKey }
                                                                                 .map { it.weekKey }
-                                                                            draftWeekKeys = (draftWeekKeys + otherWeeks).toMutableSet()
+                                                                                .toSet()
+                                                                            draftWeekKeys = draftWeekKeys + otherWeeks
                                                                         } else if (draftWeekKeys.contains(weekNode.weekKey)) {
-                                                                            draftWeekKeys = (draftWeekKeys - weekNode.weekKey).toMutableSet()
+                                                                            draftWeekKeys = draftWeekKeys - weekNode.weekKey
                                                                         } else {
-                                                                            val newWeeks = (draftWeekKeys + weekNode.weekKey).toMutableSet()
+                                                                            val newWeeks = draftWeekKeys + weekNode.weekKey
                                                                             val allMonthWeeks = monthNode.weeks.map { it.weekKey }.toSet()
                                                                             if (allMonthWeeks.all { newWeeks.contains(it) }) {
-                                                                                draftMonthKeys = (draftMonthKeys + monthNode.monthKey).toMutableSet()
-                                                                                draftWeekKeys = (newWeeks - allMonthWeeks).toMutableSet()
+                                                                                draftMonthKeys = draftMonthKeys + monthNode.monthKey
+                                                                                draftWeekKeys = newWeeks - allMonthWeeks
                                                                             } else {
                                                                                 draftWeekKeys = newWeeks
                                                                             }
@@ -1291,31 +1312,7 @@ fun LeaderboardMultiSelectCalendarTreeDialog(
                                                                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                                                         Checkbox(
                                                                             checked = isWeekSelected,
-                                                                            onCheckedChange = { checked ->
-                                                                                if (checked) {
-                                                                                    if (!isFullySelected) {
-                                                                                        val newWeeks = (draftWeekKeys + weekNode.weekKey).toMutableSet()
-                                                                                        val allMonthWeeks = monthNode.weeks.map { it.weekKey }.toSet()
-                                                                                        if (allMonthWeeks.all { newWeeks.contains(it) }) {
-                                                                                            draftMonthKeys = (draftMonthKeys + monthNode.monthKey).toMutableSet()
-                                                                                            draftWeekKeys = (newWeeks - allMonthWeeks).toMutableSet()
-                                                                                        } else {
-                                                                                            draftWeekKeys = newWeeks
-                                                                                        }
-                                                                                    }
-                                                                                } else {
-                                                                                    if (isFullySelected) {
-                                                                                        draftMonthKeys = (draftMonthKeys - monthNode.monthKey).toMutableSet()
-                                                                                        val otherWeeks = monthNode.weeks
-                                                                                            .filter { it.weekKey != weekNode.weekKey }
-                                                                                            .map { it.weekKey }
-                                                                                        draftWeekKeys = (draftWeekKeys + otherWeeks).toMutableSet()
-                                                                                    } else {
-                                                                                        draftWeekKeys = (draftWeekKeys - weekNode.weekKey).toMutableSet()
-                                                                                    }
-                                                                                }
-                                                                            },
-                                                                            modifier = Modifier.size(22.dp)
+                                                                            onCheckedChange = null
                                                                         )
                                                                         Spacer(modifier = Modifier.width(6.dp))
                                                                         Column {
