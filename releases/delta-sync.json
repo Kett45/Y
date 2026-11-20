@@ -2,10 +2,10 @@
   "targetVersionCode": 13,
   "targetVersionName": "1.13",
   "minCompatibleBaseVersion": 10,
-  "commitSha": "deae3d614bb6",
+  "commitSha": "8b65e588994d",
   "apkSha256": "14f5eb9140a14e5a665be3f5c2255ecd693f562116c1712b5c3b92b3cb1f6501",
-  "updatedAt": "2026-11-18T23:37:15Z",
-  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.13 (deae3d614bb6)",
+  "updatedAt": "2026-11-20T11:13:44Z",
+  "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v1.13 (8b65e588994d)",
   "latestApkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "changedModules": [
     "dm_1on1_chat_rules_and_members_fix",
