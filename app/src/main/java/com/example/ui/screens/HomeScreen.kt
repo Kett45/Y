@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -71,6 +72,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -90,6 +92,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -97,7 +100,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.BuildConfig
+import com.example.data.model.ArabicInitialsHelper
 import com.example.data.model.AttendanceStatus
+import kotlinx.coroutines.delay
 import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
@@ -179,15 +184,42 @@ fun HomeScreen(
     var studentForQuickComment by remember { mutableStateOf<Student?>(null) }
     var studentForMemorizationSheet by remember { mutableStateOf<Student?>(null) }
 
-    val query = state.searchQuery.trim()
-    val searchMatchedStudents = remember(state.students, query) {
+    // Keep Arabic search input strictly synchronous on the Main thread (zero async ViewModel StateFlow loop)
+    // and debounce list filtering lightly (180ms) so Android's Arabic IME never drops or jumps the cursor.
+    var localSearchDraft by rememberSaveable { mutableStateOf(state.searchQuery) }
+    var debouncedSearchQuery by rememberSaveable { mutableStateOf(state.searchQuery.trim()) }
+    LaunchedEffect(localSearchDraft) {
+        val trimmed = localSearchDraft.trim()
+        if (trimmed.isEmpty()) {
+            debouncedSearchQuery = ""
+        } else {
+            delay(180L)
+            debouncedSearchQuery = trimmed
+        }
+    }
+
+    val normalizedStudentSearchIndex = remember(state.students) {
+        state.students.map { stu ->
+            Triple(
+                stu,
+                ArabicInitialsHelper.normalizeArabicName(stu.name),
+                stu.studentNumber.toString()
+            )
+        }
+    }
+
+    val query = debouncedSearchQuery
+    val searchMatchedStudents = remember(normalizedStudentSearchIndex, query) {
         if (query.isBlank()) {
             emptyList()
         } else {
-            state.students.filter {
-                it.name.contains(query, ignoreCase = true) ||
-                    it.studentNumber.toString().contains(query)
-            }
+            val normalizedQuery = ArabicInitialsHelper.normalizeArabicName(query)
+            normalizedStudentSearchIndex
+                .filter { (_, normName, numberStr) ->
+                    normName.contains(normalizedQuery, ignoreCase = true) ||
+                        numberStr.contains(query)
+                }
+                .map { it.first }
         }
     }
 
@@ -281,6 +313,8 @@ fun HomeScreen(
             studentForMoveSheet = null
             studentForQuickComment = null
             studentForMemorizationSheet = null
+            localSearchDraft = ""
+            debouncedSearchQuery = ""
             if (!wasInSubPage) {
                 runCatching { listState.animateScrollToItem(0) }
             }
@@ -322,13 +356,19 @@ fun HomeScreen(
                 item(key = "header_controls", contentType = "header_controls") {
                     HomeTopControlCard(
                         state = state,
+                        searchQueryDraft = localSearchDraft,
                         showLeaderboardExpanded = showLeaderboardExpanded,
                         onToggleLeaderboard = { showLeaderboardExpanded = true },
                         onOpenSmartAttendance = { showSmartAttendanceScreen = true },
                         onMonthOffset = onMonthOffset,
                         onOpenMonthWeekTree = { showMonthWeekTreeDialog = true },
                         onOpenDuplicateAlerts = { showDuplicateAlertsDialog = true },
-                        onSearchQueryChange = onSearchQueryChange
+                        onSearchQueryChange = { newText ->
+                            localSearchDraft = newText
+                            if (newText.isEmpty()) {
+                                debouncedSearchQuery = ""
+                            }
+                        }
                     )
                 }
 
@@ -394,7 +434,11 @@ fun HomeScreen(
                             blocks = state.blocks,
                             enabledCards = state.enabledCardTypes,
                             state = state,
-                            onClearSearch = { onSearchQueryChange("") },
+                            onClearSearch = {
+                                localSearchDraft = ""
+                                debouncedSearchQuery = ""
+                                onSearchQueryChange("")
+                            },
                             onAwardCard = onHomeCardTapRemembered,
                             onOpenMoveDialog = { studentForMoveSheet = it },
                             onOpenDetailsDialog = { studentForDetailsSheet = it },
@@ -864,6 +908,7 @@ fun HomeScreen(
 @Composable
 private fun HomeTopControlCard(
     state: KamScreenState,
+    searchQueryDraft: String,
     showLeaderboardExpanded: Boolean,
     onToggleLeaderboard: () -> Unit,
     onOpenSmartAttendance: () -> Unit = {},
@@ -874,7 +919,8 @@ private fun HomeTopControlCard(
 ) {
     val duplicateCount = state.duplicateAlerts.size
     var isSearchExpanded by rememberSaveable { mutableStateOf(false) }
-    val showSearchField = isSearchExpanded || state.searchQuery.isNotEmpty()
+    val showSearchField = isSearchExpanded || searchQueryDraft.isNotEmpty()
+    val focusManager = LocalFocusManager.current
 
     val fullPeriodLabel = remember(state.selectedMonthKey, state.selectedWeekKey) {
         SaturdayCalendarHelper.formatSelectedMonthAndWeek(state.selectedMonthKey, state.selectedWeekKey)
@@ -1166,11 +1212,11 @@ private fun HomeTopControlCard(
                 }
             }
 
-            // Expandable Search Field when Search Icon is tapped
+            // Expandable Search Field when Search Icon is tapped (strictly synchronous local draft state for smooth Arabic IME)
             AnimatedVisibility(visible = showSearchField) {
                 OutlinedTextField(
-                    value = state.searchQuery,
-                    onValueChange = onSearchQueryChange,
+                    value = searchQueryDraft,
+                    onValueChange = { if (it.length <= 80) onSearchQueryChange(it) },
                     placeholder = { Text("ابحث باسم الطفل أو رقمه...") },
                     leadingIcon = {
                         Icon(Icons.Default.Search, contentDescription = "بحث")
@@ -1180,6 +1226,7 @@ private fun HomeTopControlCard(
                             onClick = {
                                 onSearchQueryChange("")
                                 isSearchExpanded = false
+                                focusManager.clearFocus()
                             },
                             modifier = Modifier.testTag("close_search_field_button")
                         ) {
@@ -1187,6 +1234,8 @@ private fun HomeTopControlCard(
                         }
                     },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()

@@ -1980,11 +1980,11 @@ class KamRepository(private val db: FirebaseFirestore) {
             val task = docRef.update(
                 mapOf(
                     "name" to cleanName,
-                    "studentNumber" to newStudentNumber.toLong().coerceIn(1L, 9999L),
-                    "blockId" to newBlockId.take(128),
-                    "sortOrder" to newSortOrder.coerceIn(0L, 100000L),
+                    "studentNumber" to newStudentNumber.toLong().coerceIn(1L, 2000L),
+                    "blockId" to newBlockId.trim().take(80),
+                    "sortOrder" to newSortOrder.coerceIn(0L, 5000L),
                     "position" to safePosition,
-                    "avatarInitials" to ArabicInitialsHelper.extractInitials(cleanName),
+                    "avatarInitials" to ArabicInitialsHelper.extractInitials(cleanName).take(10),
                     "memberUids" to memberUids.distinct().take(MAX_SERVANTS_PER_GROUP),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )

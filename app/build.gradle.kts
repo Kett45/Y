@@ -157,7 +157,7 @@ tasks.register<Copy>("syncReleaseApk") {
         "updatedAt": "$nowIsoUtc",
         "apkDirectUrl": "$singleAutoUrl",
         "deltaSyncUrl": "$deltaUrl",
-        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): تحديث ومزامنة السحابة بالسحب والضغط المزدوج على الرئيسية، لمبة الحضور بجانب كل طفل، فلاتر التقارير المتعددة وملخص الفترة، كارت القمداء القابل للتخصيص، وتقارير المراسلة المتمايزة ($shortCommit)."
+        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): تحديث الرئيسية بالسحب والضغط المزدوج، لمبة الحضور، فلاتر التقارير وملخص الفترة، كارت القمداء، إشعارات المراسلة المتمايزة، تعديل اسم وبلوك الطفل، إصلاح البحث العربي، ومنع تجمّد التطبيق بعد قفل الشاشة ($shortCommit)."
       }
       """.trimIndent() + "\n"
     )
@@ -171,14 +171,17 @@ tasks.register<Copy>("syncReleaseApk") {
         "commitSha": "$shortCommit",
         "apkSha256": "$apkSha256",
         "updatedAt": "$nowIsoUtc",
-        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): تحديث الرئيسية، لمبة الحضور، تقارير متعددة وملخص الفترة، كارت القمداء، وإشعارات المراسلة المتمايزة",
+        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): كل مميزات v1.15 + تعديل اسم وبلوك الطفل، إصلاح البحث العربي، واستقرار قفل الشاشة",
         "latestApkDirectUrl": "$singleAutoUrl",
         "changedModules": [
           "home_double_tap_and_pull_to_refresh_cloud_sync",
           "student_attendance_indicator_lamp",
           "reports_multi_filters_and_period_summary",
           "custom_elder_card_settings_and_analytics",
-          "differentiated_attendance_v3_chat_reports"
+          "differentiated_attendance_v3_chat_reports",
+          "student_edit_name_and_block_picker",
+          "smooth_arabic_search_ime_debounce",
+          "screen_lock_lifecycle_freeze_fix"
         ],
         "dynamicConfig": {
           "maxStudentsPerGroup": 150,

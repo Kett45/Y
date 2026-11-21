@@ -320,7 +320,7 @@ class ChatViewModel(
         .flowOn(Dispatchers.Default)
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
+            started = SharingStarted.Lazily,
             initialValue = ChatUiState()
         )
 

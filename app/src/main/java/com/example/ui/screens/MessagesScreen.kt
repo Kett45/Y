@@ -343,18 +343,30 @@ private fun ConversationsListView(
         memberProfiles.associateBy { it.effectiveUid }
     }
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var debouncedSearch by rememberSaveable { mutableStateOf("") }
     var isSearchExpanded by rememberSaveable { mutableStateOf(false) }
     var showGroupPhotoDialog by rememberSaveable { mutableStateOf(false) }
 
-    val cleanSearch = searchQuery.trim()
+    LaunchedEffect(searchQuery) {
+        val trimmed = searchQuery.trim()
+        if (trimmed.isEmpty()) {
+            debouncedSearch = ""
+        } else {
+            kotlinx.coroutines.delay(180L)
+            debouncedSearch = trimmed
+        }
+    }
+
+    val cleanSearch = debouncedSearch
     val filteredDms = remember(chatState.dmConversations, cleanSearch, memberProfiles, chatState.servantAliases, currentUserId) {
         if (cleanSearch.isBlank()) {
             chatState.dmConversations
         } else {
+            val normQuery = ArabicInitialsHelper.normalizeArabicName(cleanSearch)
             chatState.dmConversations.filter { dm ->
                 val pName = dm.peerDisplayName(currentUserId, memberProfiles, chatState.servantAliases)
-                pName.contains(cleanSearch, ignoreCase = true) ||
-                    dm.lastMessageText.contains(cleanSearch, ignoreCase = true)
+                ArabicInitialsHelper.normalizeArabicName(pName).contains(normQuery, ignoreCase = true) ||
+                    ArabicInitialsHelper.normalizeArabicName(dm.lastMessageText).contains(normQuery, ignoreCase = true)
             }
         }
     }
@@ -363,9 +375,12 @@ private fun ConversationsListView(
         if (cleanSearch.isBlank()) {
             true
         } else {
-            chatState.activeGroupName.contains(cleanSearch, ignoreCase = true) ||
-                "جروب الفصل".contains(cleanSearch, ignoreCase = true) ||
-                (chatState.groupChatMeta?.lastMessageText?.contains(cleanSearch, ignoreCase = true) == true)
+            val normQuery = ArabicInitialsHelper.normalizeArabicName(cleanSearch)
+            ArabicInitialsHelper.normalizeArabicName(chatState.activeGroupName).contains(normQuery, ignoreCase = true) ||
+                ArabicInitialsHelper.normalizeArabicName("جروب الفصل").contains(normQuery, ignoreCase = true) ||
+                (chatState.groupChatMeta?.lastMessageText?.let {
+                    ArabicInitialsHelper.normalizeArabicName(it).contains(normQuery, ignoreCase = true)
+                } == true)
         }
     }
 

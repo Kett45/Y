@@ -429,7 +429,7 @@ fun AuthenticatedKamApp(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, state.group?.inviteCode) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_STOP) {
+            if (event == Lifecycle.Event.ON_START) {
                 chatViewModel.touchOwnLastSeenThrottled()
             }
         }
@@ -477,12 +477,16 @@ fun AuthenticatedKamApp(
         )
     }
 
-    // Silent background GitHub Delta Sync:
-    // Checks `releases/version.json` & `releases/delta-sync.json` when online without interrupting the user.
+    // Silent background GitHub Delta Sync (throttled across screen lock/unlock radio flickers):
+    var lastSilentGitHubCheckAtMillis by remember(sessionKey) { mutableStateOf(0L) }
     LaunchedEffect(sessionKey, state.isOnline) {
         if (state.isOnline) {
-            delay(900L)
-            GitHubSmartSyncEngine.checkAndSyncSilently(context, forceManualCheck = false)
+            val now = System.currentTimeMillis()
+            if (now - lastSilentGitHubCheckAtMillis >= 10 * 60 * 1000L) {
+                delay(1200L)
+                lastSilentGitHubCheckAtMillis = System.currentTimeMillis()
+                GitHubSmartSyncEngine.checkAndSyncSilently(context, forceManualCheck = false)
+            }
         }
     }
 

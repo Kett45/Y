@@ -549,8 +549,11 @@ object ArabicInitialsHelper {
         return if (second.isNotEmpty()) "$first $second" else first
     }
 
+    private val ARABIC_DIACRITICS_REGEX = Regex("[\\u064B-\\u065F\\u0670\\u0640]")
+
     fun normalizeArabicName(raw: String): String {
         return raw.trim()
+            .replace(ARABIC_DIACRITICS_REGEX, "")
             .replace(WHITESPACE_REGEX, " ")
             .replace('أ', 'ا')
             .replace('إ', 'ا')

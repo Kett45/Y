@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -44,6 +47,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -386,6 +390,7 @@ fun MemorizationNotesSheet(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChildProfileFullSheet(
     student: Student,
@@ -411,11 +416,20 @@ fun ChildProfileFullSheet(
     onOpenMemorizationSheet: () -> Unit
 ) {
     var isEditing by rememberSaveable(student.id) { mutableStateOf(false) }
-    var editedName by rememberSaveable(student.id, student.name) { mutableStateOf(student.name) }
-    var editedNumber by rememberSaveable(student.id, student.studentNumber) { mutableStateOf(student.studentNumber.toString()) }
-    var editedBlockId by rememberSaveable(student.id, student.blockId) { mutableStateOf(student.blockId) }
+    var editedName by rememberSaveable(student.id) { mutableStateOf(student.name) }
+    var editedNumber by rememberSaveable(student.id) { mutableStateOf(student.studentNumber.toString()) }
+    var editedBlockId by rememberSaveable(student.id) { mutableStateOf(student.blockId) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var commentInput by rememberSaveable(student.id) { mutableStateOf("") }
+
+    // Sync draft fields from student ONLY when not actively editing so live Firestore snapshots never interrupt typing
+    LaunchedEffect(student.id, student.name, student.studentNumber, student.blockId, isEditing) {
+        if (!isEditing) {
+            editedName = student.name
+            editedNumber = student.studentNumber.toString()
+            editedBlockId = student.blockId
+        }
+    }
 
     val timeFormatter = remember { SimpleDateFormat("dd/MM hh:mm a", Locale.getDefault()) }
     val ownerBlock = blocks.firstOrNull { it.id == student.blockId }
@@ -556,36 +570,145 @@ fun ChildProfileFullSheet(
                                     )
                                     OutlinedTextField(
                                         value = editedName,
-                                        onValueChange = { editedName = it },
+                                        onValueChange = { if (it.length <= 100) editedName = it },
                                         label = { Text("اسم الطفل") },
                                         singleLine = true,
-                                        modifier = Modifier.fillMaxWidth()
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("edit_student_name_input")
                                     )
                                     OutlinedTextField(
                                         value = editedNumber,
-                                        onValueChange = { editedNumber = it.filter { ch -> ch.isDigit() } },
+                                        onValueChange = { raw ->
+                                            val digits = raw.filter { ch -> ch.isDigit() }.take(4)
+                                            editedNumber = digits
+                                        },
                                         label = { Text("رقم الطفل") },
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                         singleLine = true,
-                                        modifier = Modifier.fillMaxWidth()
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("edit_student_number_input")
                                     )
+
+                                    // Block / Group Position Picker (Existing Blocks or Unassigned)
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "البلوك (مكان الطفل في المجموعات):",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            blocks.forEach { blk ->
+                                                val blkColor = KamSemanticColors.blockColor(blk.colorHex)
+                                                val isPicked = editedBlockId == blk.id
+                                                Surface(
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    color = if (isPicked) blkColor.copy(alpha = 0.24f) else MaterialTheme.colorScheme.surface,
+                                                    border = BorderStroke(
+                                                        width = if (isPicked) 2.dp else 1.dp,
+                                                        color = if (isPicked) blkColor else extColors.hairline
+                                                    ),
+                                                    modifier = Modifier
+                                                        .heightIn(min = 44.dp)
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .clickable { editedBlockId = blk.id }
+                                                        .testTag("edit_student_block_option_${blk.id}")
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(10.dp)
+                                                                .clip(CircleShape)
+                                                                .background(blkColor)
+                                                        )
+                                                        Text(
+                                                            text = "${if (isPicked) "✓ " else ""}${resolvedServantName(blk)}",
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            fontWeight = if (isPicked) FontWeight.ExtraBold else FontWeight.Medium,
+                                                            color = if (isPicked) blkColor else MaterialTheme.colorScheme.onSurface
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            val isUnassignedPicked = editedBlockId.isBlank()
+                                            val unassignedColor = KamSemanticColors.unassignedBlock
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = if (isUnassignedPicked) unassignedColor.copy(alpha = 0.24f) else MaterialTheme.colorScheme.surface,
+                                                border = BorderStroke(
+                                                    width = if (isUnassignedPicked) 2.dp else 1.dp,
+                                                    color = if (isUnassignedPicked) unassignedColor else extColors.hairline
+                                                ),
+                                                modifier = Modifier
+                                                    .heightIn(min = 44.dp)
+                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .clickable { editedBlockId = "" }
+                                                    .testTag("edit_student_block_option_unassigned")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(10.dp)
+                                                            .clip(CircleShape)
+                                                            .background(unassignedColor)
+                                                    )
+                                                    Text(
+                                                        text = "${if (isUnassignedPicked) "✓ " else ""}بدون بلوك",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        fontWeight = if (isUnassignedPicked) FontWeight.ExtraBold else FontWeight.Medium,
+                                                        color = if (isUnassignedPicked) unassignedColor else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Button(
                                             onClick = {
-                                                val num = editedNumber.toIntOrNull() ?: student.studentNumber.toInt()
-                                                onSaveEdits(editedName, num, editedBlockId)
-                                                isEditing = false
+                                                val cleanName = editedName.trim()
+                                                if (cleanName.isNotEmpty()) {
+                                                    val num = (editedNumber.toIntOrNull() ?: student.studentNumber.toInt())
+                                                        .coerceIn(1, 2000)
+                                                    onSaveEdits(cleanName, num, editedBlockId)
+                                                    isEditing = false
+                                                }
                                             },
-                                            modifier = Modifier.weight(1f)
+                                            enabled = editedName.trim().isNotEmpty(),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 48.dp)
+                                                .testTag("save_student_edits_button")
                                         ) {
                                             Text("حفظ التعديلات")
                                         }
                                         OutlinedButton(
-                                            onClick = { isEditing = false },
-                                            modifier = Modifier.weight(1f)
+                                            onClick = {
+                                                editedName = student.name
+                                                editedNumber = student.studentNumber.toString()
+                                                editedBlockId = student.blockId
+                                                isEditing = false
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 48.dp)
                                         ) {
                                             Text("إلغاء")
                                         }

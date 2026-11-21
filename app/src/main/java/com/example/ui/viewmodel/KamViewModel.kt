@@ -1600,7 +1600,7 @@ class KamViewModel(
         .flowOn(Dispatchers.Default)
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000L),
+            started = SharingStarted.Lazily,
             initialValue = buildInitialStateFromCache(
                 cached = initialCachedSnapshot,
                 localPrefs = _localPrefsOverride.value,
@@ -2375,29 +2375,60 @@ class KamViewModel(
     fun updateStudentDetails(student: Student, newName: String, newNumber: Int, newBlockId: String) {
         val state = uiState.value
         val group = state.group ?: return
-        val newPosition = if (newBlockId != student.blockId) {
+        val cleanName = newName.trim().take(100)
+        if (cleanName.isBlank()) {
+            _operationError.value = "اسم الطفل لا يمكن أن يكون فارغاً"
+            return
+        }
+        val safeNumber = newNumber.coerceIn(1, 2000)
+        val safeBlockId = newBlockId.trim().take(80)
+        val movedToNewBlock = safeBlockId != student.blockId
+        val newPosition = if (movedToNewBlock) {
             val targetMax = state.students
-                .filter { it.blockId == newBlockId && it.id != student.id }
+                .filter { it.blockId == safeBlockId && it.id != student.id }
                 .maxOfOrNull { it.effectivePosition } ?: 0.0
             targetMax + 1000.0
         } else {
             student.effectivePosition
         }
+        val safeSortOrder = student.sortOrder.coerceIn(0L, 5000L)
+        val updatedStudent = student.copy(
+            name = cleanName,
+            studentNumber = safeNumber.toLong(),
+            blockId = safeBlockId,
+            sortOrder = safeSortOrder,
+            position = newPosition,
+            avatarInitials = ArabicInitialsHelper.extractInitials(cleanName).take(10)
+        )
+        _optimisticStudentOverrides.update { it + (student.id to updatedStudent) }
+
+        val targetBlockName = if (movedToNewBlock) {
+            state.blocks.firstOrNull { it.id == safeBlockId }?.let { state.resolvedBlockOwnerName(it) } ?: "بدون بلوك"
+        } else {
+            null
+        }
+
         viewModelScope.launch {
             repository.updateStudent(
                 groupId = group.inviteCode,
                 studentId = student.id,
-                newName = newName,
-                newStudentNumber = newNumber,
-                newBlockId = newBlockId,
-                newSortOrder = student.sortOrder,
+                newName = cleanName,
+                newStudentNumber = safeNumber,
+                newBlockId = safeBlockId,
+                newSortOrder = safeSortOrder,
                 newPosition = newPosition,
                 memberUids = group.memberUids,
-                waitForServerAck = false
+                waitForServerAck = state.isOnline
             ).onSuccess {
-                showBanner("تم حفظ تعديلات '${newName.trim()}'")
-            }.onFailure {
-                _operationError.value = it.localizedMessage ?: "تعذر تعديل بيانات الطفل"
+                _optimisticStudentOverrides.update { it - student.id }
+                if (targetBlockName != null) {
+                    showBanner("تم حفظ '$cleanName' ونقله إلى «$targetBlockName»")
+                } else {
+                    showBanner("تم حفظ تعديلات '$cleanName'")
+                }
+            }.onFailure { err ->
+                _optimisticStudentOverrides.update { it - student.id }
+                _operationError.value = err.localizedMessage ?: "تعذر تعديل بيانات الطفل"
             }
         }
     }

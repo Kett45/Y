@@ -63,6 +63,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -145,6 +146,16 @@ fun FullClassLeaderboardScreen(
     var attendanceOnlyMode by rememberSaveable { mutableStateOf(false) }
     var showStudentPickerDialog by rememberSaveable { mutableStateOf(false) }
     var localSearchQuery by rememberSaveable { mutableStateOf("") }
+    var debouncedLocalSearchQuery by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(localSearchQuery) {
+        val trimmed = localSearchQuery.trim()
+        if (trimmed.isEmpty()) {
+            debouncedLocalSearchQuery = ""
+        } else {
+            delay(180L)
+            debouncedLocalSearchQuery = trimmed
+        }
+    }
 
     val isCustomSelection = selectedMonthKeys != setOf(initialMonth) || selectedWeekKeys.isNotEmpty()
     val hasActiveMultiFilters = selectedBlockFilterIds.isNotEmpty() ||
@@ -277,7 +288,7 @@ fun FullClassLeaderboardScreen(
         cardProjectedEntries,
         selectedBlockFilterIds,
         selectedStudentIds,
-        localSearchQuery
+        debouncedLocalSearchQuery
     ) {
         val byBlocks = if (selectedBlockFilterIds.isEmpty()) {
             cardProjectedEntries
@@ -292,12 +303,13 @@ fun FullClassLeaderboardScreen(
         } else {
             byBlocks.filter { it.student.id in selectedStudentIds }
         }
-        val query = localSearchQuery.trim()
+        val query = debouncedLocalSearchQuery.trim()
         if (query.isBlank()) {
             byStudents
         } else {
+            val normQuery = ArabicInitialsHelper.normalizeArabicName(query)
             byStudents.filter {
-                it.student.name.contains(query, ignoreCase = true) ||
+                ArabicInitialsHelper.normalizeArabicName(it.student.name).contains(normQuery, ignoreCase = true) ||
                     it.student.studentNumber.toString().contains(query)
             }
         }

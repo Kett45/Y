@@ -547,17 +547,19 @@ object StudentAvatarImageHelper {
      */
     fun syncAllStudentPhotosToLocalDisk(context: Context?, students: List<Student>) {
         if (context == null || students.isEmpty()) return
-        val targets = students.filter { it.effectiveHasAvatar || it.avatarBase64.isNotBlank() }
-        if (targets.isEmpty()) return
-        val signature = targets.joinToString("|") { "${it.id}:${it.effectiveAvatarKey}" }
-        if (signature == lastDiskSyncSignature) return
-
         val appCtx = context.applicationContext ?: context
-        synchronized(diskSyncLock) {
-            if (signature == lastDiskSyncSignature) return
-            diskSyncJob?.cancel()
-            diskSyncJob = avatarIoScope.launch {
-                for ((index, stu) in targets.withIndex()) {
+        val studentsSnapshot = students.toList()
+        avatarIoScope.launch {
+            val targets = studentsSnapshot.filter { it.effectiveHasAvatar || it.avatarBase64.isNotBlank() }
+            if (targets.isEmpty()) return@launch
+            val signature = targets.joinToString("|") { "${it.id}:${it.effectiveAvatarKey}" }
+            if (signature == lastDiskSyncSignature) return@launch
+
+            synchronized(diskSyncLock) {
+                if (signature == lastDiskSyncSignature) return@launch
+                diskSyncJob?.cancel()
+                diskSyncJob = avatarIoScope.launch {
+                    for ((index, stu) in targets.withIndex()) {
                     if (isScrollActive) awaitScrollSettled()
                     val keyAlias = "student_${stu.id}_${stu.effectiveAvatarKey}".hashCode()
                     val packed = if (stu.avatarBase64.isNotBlank()) {
@@ -615,6 +617,7 @@ object StudentAvatarImageHelper {
                     yield()
                 }
                 lastDiskSyncSignature = signature
+                }
             }
         }
     }
