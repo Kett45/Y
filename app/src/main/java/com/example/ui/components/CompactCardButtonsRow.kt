@@ -80,6 +80,7 @@ private val DarkCardTokenSet = CardVisualTokenSet(isDark = true) { cardType ->
         CardType.GOLD -> CardGoldDark
         CardType.MEMORIZATION -> CardMemorizationDark
         CardType.CONFESSION -> CardConfessionDark
+        CardType.CUSTOM_ELDER -> CardGoldDark
     }
 }
 
@@ -92,11 +93,12 @@ private val LightCardTokenSet = CardVisualTokenSet(isDark = false) { cardType ->
         CardType.GOLD -> CardGoldLight
         CardType.MEMORIZATION -> CardMemorizationLight
         CardType.CONFESSION -> CardConfessionLight
+        CardType.CUSTOM_ELDER -> CardGoldLight
     }
 }
 
 /**
- * Backward-compatible overload that extracts the packed 64-bit card counts and 7-bit enabled mask
+ * Backward-compatible overload that extracts the packed 64-bit card counts and 8-bit enabled mask
  * for [studentId] and delegates to the primitive-parameter [CompactCardButtonsRow].
  */
 @Composable
@@ -111,6 +113,7 @@ fun CompactCardButtonsRow(
         studentId = studentId,
         enabledCardsMask = KamScreenState.packEnabledCardsMask(enabledCards),
         packedCardCounts = state.packedCardCountsForStudent(studentId),
+        customCardConfig = state.customCardConfig,
         tagPrefix = tagPrefix,
         onCardClick = onCardClick
     )
@@ -124,6 +127,7 @@ fun CompactCardButtonsRow(
     studentId: String,
     enabledCards: List<CardType>,
     packedCardCounts: Long,
+    customCardConfig: com.example.data.model.CustomCardConfig = com.example.data.model.CustomCardConfig.DEFAULT,
     tagPrefix: String = "card_btn",
     onCardClick: (CardType) -> Unit
 ) {
@@ -131,6 +135,7 @@ fun CompactCardButtonsRow(
         studentId = studentId,
         enabledCardsMask = KamScreenState.packEnabledCardsMask(enabledCards),
         packedCardCounts = packedCardCounts,
+        customCardConfig = customCardConfig,
         tagPrefix = tagPrefix,
         onCardClick = onCardClick
     )
@@ -139,6 +144,7 @@ fun CompactCardButtonsRow(
 /**
  * Ultra-fast, 100% Compose-skippable card buttons row displayed under each child:
  * - Uses pre-allocated Dark & Light token sets with zero runtime object allocations during scrolling.
+ * - Dynamically resolves custom name, icon, points, and color for [CardType.CUSTOM_ELDER].
  * - Preserves 60fps scrolling across 150+ student rows.
  */
 @Composable
@@ -146,13 +152,21 @@ fun CompactCardButtonsRow(
     studentId: String,
     enabledCardsMask: Int,
     packedCardCounts: Long,
+    customCardConfig: com.example.data.model.CustomCardConfig = com.example.data.model.CustomCardConfig.DEFAULT,
     tagPrefix: String = "card_btn",
     onCardClick: (CardType) -> Unit
 ) {
     val isCompactMobile = LocalUiScaleController.current.isCompactMobile
     val isDark = LocalKamExtendedColors.current.isDark
     val tokenSet = if (isDark) DarkCardTokenSet else LightCardTokenSet
-    val buttonSize = if (isCompactMobile) 38.dp else 42.dp
+    val enabledCount = Integer.bitCount(enabledCardsMask)
+    val buttonSize = when {
+        enabledCount >= 8 && isCompactMobile -> 34.dp
+        enabledCount >= 8 -> 38.dp
+        isCompactMobile -> 38.dp
+        else -> 42.dp
+    }
+    val itemSpacing = if (enabledCount >= 8) 4.dp else 5.dp
     val typographyStyle = MaterialTheme.typography.titleMedium
     val currentOnCardClick by rememberUpdatedState(onCardClick)
     val cachedClicks = remember {
@@ -163,19 +177,45 @@ fun CompactCardButtonsRow(
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(itemSpacing),
         verticalAlignment = Alignment.CenterVertically
     ) {
         for (ordinal in 0 until AllCardTypesArray.size) {
             if ((enabledCardsMask and (1 shl ordinal)) == 0) continue
             val card = AllCardTypesArray[ordinal]
-            val cardColor = tokenSet.baseColors[ordinal]
+            val isCustom = card == CardType.CUSTOM_ELDER
+            val cardColor = if (isCustom) {
+                com.example.ui.theme.KamSemanticColors.cardColorByKey(customCardConfig.colorKey)
+            } else {
+                tokenSet.baseColors[ordinal]
+            }
             val countInScope = KamScreenState.unpackCardCount(packedCardCounts, card)
             val isAwarded = countInScope > 0
+            val basePoints = card.displayPoints(customCardConfig)
             val displayedPoints = if (countInScope > 1) {
-                card.points * countInScope
+                basePoints * countInScope
             } else {
-                card.points
+                basePoints
+            }
+            val cardTitle = card.displayTitle(customCardConfig)
+            val cardSymbol = card.displaySymbol(customCardConfig)
+            val bgColor = if (isAwarded) {
+                cardColor
+            } else if (isCustom) {
+                cardColor.copy(alpha = if (isDark) 0.14f else 0.12f)
+            } else {
+                tokenSet.unawardedBg[ordinal]
+            }
+            val borderStroke = if (isCustom) {
+                if (isAwarded) BorderStroke(1.5.dp, cardColor)
+                else BorderStroke(1.dp, cardColor.copy(alpha = if (isDark) 0.48f else 0.54f))
+            } else {
+                if (isAwarded) tokenSet.awardedBorders[ordinal] else tokenSet.unawardedBorders[ordinal]
+            }
+            val awardedTextColor = if (isCustom) {
+                if (cardColor.luminance() > 0.34f) KamBackgroundDark else Color.White
+            } else {
+                tokenSet.awardedTextColors[ordinal]
             }
 
             Box(
@@ -183,19 +223,19 @@ fun CompactCardButtonsRow(
                 modifier = Modifier
                     .size(buttonSize)
                     .background(
-                        color = if (isAwarded) cardColor else tokenSet.unawardedBg[ordinal],
+                        color = bgColor,
                         shape = CardButtonCornerShape
                     )
                     .border(
-                        border = if (isAwarded) tokenSet.awardedBorders[ordinal] else tokenSet.unawardedBorders[ordinal],
+                        border = borderStroke,
                         shape = CardButtonCornerShape
                     )
                     .clickable(onClick = cachedClicks[ordinal])
                     .semantics {
                         contentDescription = if (isAwarded) {
-                            "${card.arabicTitle} مسجل $displayedPoints نقطة"
+                            "$cardTitle مسجل $displayedPoints نقطة"
                         } else {
-                            card.arabicTitle
+                            cardTitle
                         }
                     }
                     .testTag("${tagPrefix}_${studentId}_${card.id}")
@@ -204,14 +244,14 @@ fun CompactCardButtonsRow(
                     Text(
                         text = "$displayedPoints",
                         style = typographyStyle,
-                        color = tokenSet.awardedTextColors[ordinal],
+                        color = awardedTextColor,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         softWrap = false
                     )
                 } else {
                     Text(
-                        text = card.badgeSymbol,
+                        text = cardSymbol,
                         style = typographyStyle,
                         color = cardColor,
                         fontWeight = FontWeight.SemiBold,

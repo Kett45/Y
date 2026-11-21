@@ -212,18 +212,31 @@ class ChatRepository(
         }
         require(cleanText.isNotBlank()) { "نص الرسالة فارغ" }
 
-        val previewText = if (cleanText.startsWith(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX)) {
-            cleanText
-                .removePrefix(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX)
-                .trim()
-                .lineSequence()
-                .firstOrNull()
-                ?.trim()
-                ?.take(200)
-                ?.ifBlank { "📋 تقرير تحضير الفصل" }
-                ?: "📋 تقرير تحضير الفصل"
-        } else {
-            cleanText.take(200)
+        val previewText = when {
+            cleanText.startsWith(ChatMessage.ATTENDANCE_REPORT_V3_PREFIX) -> {
+                val lines = cleanText
+                    .removePrefix(ChatMessage.ATTENDANCE_REPORT_V3_PREFIX)
+                    .trim()
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .toList()
+                val header = lines.firstOrNull { it.startsWith("H|") }?.removePrefix("H|")?.trim()
+                header?.take(200)?.ifBlank { "📋 تقرير حضور ومتابعة الفصل" }
+                    ?: "📋 تقرير حضور ومتابعة الفصل"
+            }
+            cleanText.startsWith(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX) -> {
+                cleanText
+                    .removePrefix(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX)
+                    .trim()
+                    .lineSequence()
+                    .firstOrNull()
+                    ?.trim()
+                    ?.take(200)
+                    ?.ifBlank { "📋 تقرير تحضير الفصل" }
+                    ?: "📋 تقرير تحضير الفصل"
+            }
+            else -> cleanText.take(200)
         }
 
         val safeSenderName = senderName.trim().ifBlank { "خادم" }.take(100)

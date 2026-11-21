@@ -31,10 +31,12 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -72,9 +74,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.ArabicInitialsHelper
-import com.example.data.model.SaturdayCalendarHelper
+import com.example.data.model.AttendanceRecord
+import com.example.data.model.AttendanceStatus
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
+import com.example.data.model.CustomCardConfig
+import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.model.ServantBlock
 import com.example.data.model.Student
 import com.example.ui.components.StudentAvatarCircle
@@ -123,17 +128,32 @@ fun FullClassLeaderboardScreen(
         state.selectedMonthKey.ifBlank { SaturdayCalendarHelper.currentYearMonth() }
     )
 
+    val customCardConfig = state.customCardConfig
+    val thisWeekKey = remember { SaturdayCalendarHelper.weekKeyWeeksAgo(0) }
+    val lastWeekKey = remember { SaturdayCalendarHelper.weekKeyWeeksAgo(1) }
+    val twoWeeksAgoKey = remember { SaturdayCalendarHelper.weekKeyWeeksAgo(2) }
+
     var selectedMonthKeys by rememberSaveable { mutableStateOf(setOf(initialMonth)) }
     var selectedWeekKeys by rememberSaveable { mutableStateOf(emptySet<String>()) }
     var showCalendarTreeDialog by rememberSaveable { mutableStateOf(false) }
 
     var sortFilter by rememberSaveable { mutableStateOf(LeaderboardSortFilter.HIGHEST_TO_LOWEST) }
-    var selectedBlockFilterId by rememberSaveable { mutableStateOf<String?>("ALL") }
+    // Multi-select filters: empty set = All
+    var selectedBlockFilterIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var selectedStudentIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var selectedCardTypeIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var attendanceOnlyMode by rememberSaveable { mutableStateOf(false) }
+    var showStudentPickerDialog by rememberSaveable { mutableStateOf(false) }
     var localSearchQuery by rememberSaveable { mutableStateOf("") }
 
     val isCustomSelection = selectedMonthKeys != setOf(initialMonth) || selectedWeekKeys.isNotEmpty()
+    val hasActiveMultiFilters = selectedBlockFilterIds.isNotEmpty() ||
+        selectedStudentIds.isNotEmpty() ||
+        selectedCardTypeIds.isNotEmpty() ||
+        attendanceOnlyMode
     val isWithinCurrentMonth = remember(selectedMonthKeys, selectedWeekKeys, initialMonth) {
-        selectedMonthKeys == setOf(initialMonth) && (selectedWeekKeys.isEmpty() || selectedWeekKeys.all { it.startsWith(initialMonth) })
+        (selectedMonthKeys.isEmpty() || selectedMonthKeys == setOf(initialMonth)) &&
+            (selectedWeekKeys.isEmpty() || selectedWeekKeys.all { it.startsWith(initialMonth) })
     }
 
     // Fetch out-of-month historical events via a single one-shot get() (cached locally) ONLY when selection exits current month
@@ -179,6 +199,7 @@ fun FullClassLeaderboardScreen(
         state.students,
         state.effectiveAllCardEvents,
         state.enabledCardTypes,
+        customCardConfig,
         selectedMonthKeys,
         selectedWeekKeys,
         historicalExtraEvents
@@ -202,51 +223,190 @@ fun FullClassLeaderboardScreen(
         }
     }
 
-    // Classroom-wide summary counts (merged directly into the 4 filter buttons)
-    val totalStudentsCount = allRankedEntries.size
-    val activeStudentsCount by remember(allRankedEntries) { derivedStateOf { allRankedEntries.count { it.totalPoints > 0L } } }
-    val absentStudentsCount by remember(allRankedEntries) { derivedStateOf { allRankedEntries.count { it.attendanceCount == 0 } } }
-    val zeroPointStudentsCount by remember(allRankedEntries) { derivedStateOf { allRankedEntries.count { it.totalPoints == 0L } } }
+    // Actual AttendanceRecords in the selected period (separate from the Attendance Card)
+    val periodAttendanceRecords = remember(state.allAttendanceRecords, selectedMonthKeys, selectedWeekKeys) {
+        state.attendanceRecordsForSelection(selectedMonthKeys, selectedWeekKeys)
+    }
+    val attendanceByStudentId = remember(periodAttendanceRecords) {
+        periodAttendanceRecords.groupBy { it.studentId }
+    }
 
-    // Apply servant filters with tie-breaking: attendanceCount DESC -> attendancePoints DESC -> Arabic name ASC
-    val filteredEntries = remember(
-        allRankedEntries,
-        sortFilter,
-        selectedBlockFilterId,
+    // Available card types for the multi-card filter bar (includes CUSTOM_ELDER when enabled or has events)
+    val availableFilterCardTypes = remember(state.enabledCardTypes, customCardConfig, allRankedEntries) {
+        val hasCustomEvents = allRankedEntries.any { entry ->
+            entry.breakdownByCard.any { it.cardType == CardType.CUSTOM_ELDER && it.count > 0 }
+        }
+        CardType.entries.filter { card ->
+            if (card == CardType.CUSTOM_ELDER) {
+                customCardConfig.enabled || hasCustomEvents
+            } else {
+                true
+            }
+        }
+    }
+
+    // Entries projected by selectedCardTypeIds (when multi-card filter is active)
+    val cardProjectedEntries = remember(allRankedEntries, selectedCardTypeIds, attendanceOnlyMode) {
+        if (selectedCardTypeIds.isEmpty() || attendanceOnlyMode) {
+            allRankedEntries
+        } else {
+            allRankedEntries
+                .map { entry ->
+                    val filteredBreakdown = entry.breakdownByCard.filter { it.cardType.id in selectedCardTypeIds }
+                    val pts = filteredBreakdown.sumOf { it.points }
+                    val cnt = filteredBreakdown.sumOf { it.count }
+                    entry.copy(
+                        totalPoints = pts,
+                        totalCardsCount = cnt,
+                        breakdownByCard = filteredBreakdown
+                    )
+                }
+                .sortedWith(
+                    compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                        .thenByDescending { it.totalCardsCount }
+                        .thenByDescending { it.attendanceCount }
+                        .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
+                        .thenBy { it.student.studentNumber }
+                )
+                .mapIndexed { idx, entry -> entry.copy(rank = idx + 1) }
+        }
+    }
+
+    // Scope before sortFilter (blocks + selected students + search) — used for bottom summary accuracy
+    val scopedEntries = remember(
+        cardProjectedEntries,
+        selectedBlockFilterIds,
+        selectedStudentIds,
         localSearchQuery
     ) {
-        val byBlock = when (selectedBlockFilterId) {
-            null, "ALL" -> allRankedEntries
-            "UNASSIGNED" -> allRankedEntries.filter { it.student.blockId.isBlank() }
-            else -> allRankedEntries.filter { it.student.blockId == selectedBlockFilterId }
+        val byBlocks = if (selectedBlockFilterIds.isEmpty()) {
+            cardProjectedEntries
+        } else {
+            cardProjectedEntries.filter { entry ->
+                val blkKey = entry.student.blockId.ifBlank { "UNASSIGNED" }
+                blkKey in selectedBlockFilterIds
+            }
+        }
+        val byStudents = if (selectedStudentIds.isEmpty()) {
+            byBlocks
+        } else {
+            byBlocks.filter { it.student.id in selectedStudentIds }
         }
         val query = localSearchQuery.trim()
-        val bySearch = if (query.isBlank()) {
-            byBlock
+        if (query.isBlank()) {
+            byStudents
         } else {
-            byBlock.filter {
+            byStudents.filter {
                 it.student.name.contains(query, ignoreCase = true) ||
                     it.student.studentNumber.toString().contains(query)
             }
         }
-        when (sortFilter) {
-            LeaderboardSortFilter.HIGHEST_TO_LOWEST -> bySearch
-            LeaderboardSortFilter.ACTIVE_ONLY -> bySearch.filter { it.totalPoints > 0L }
-            LeaderboardSortFilter.ABSENT_ZERO_ATTENDANCE -> bySearch
-                .filter { it.attendanceCount == 0 }
-                .sortedWith(
-                    compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
+    }
+
+    // Classroom-wide summary counts (merged directly into the 4 filter buttons)
+    val totalStudentsCount = scopedEntries.size
+    val activeStudentsCount by remember(scopedEntries, attendanceOnlyMode, attendanceByStudentId) {
+        derivedStateOf {
+            if (attendanceOnlyMode) {
+                scopedEntries.count { entry ->
+                    attendanceByStudentId[entry.student.id].orEmpty().any { it.attendanceStatus == AttendanceStatus.PRESENT }
+                }
+            } else {
+                scopedEntries.count { it.totalPoints > 0L }
+            }
+        }
+    }
+    val absentStudentsCount by remember(scopedEntries, attendanceOnlyMode, attendanceByStudentId) {
+        derivedStateOf {
+            if (attendanceOnlyMode) {
+                scopedEntries.count { entry ->
+                    val recs = attendanceByStudentId[entry.student.id].orEmpty()
+                    recs.none { it.attendanceStatus == AttendanceStatus.PRESENT }
+                }
+            } else {
+                scopedEntries.count { it.attendanceCount == 0 }
+            }
+        }
+    }
+    val zeroPointStudentsCount by remember(scopedEntries) {
+        derivedStateOf { scopedEntries.count { it.totalPoints == 0L } }
+    }
+
+    // Apply servant filters with tie-breaking
+    val filteredEntries = remember(
+        scopedEntries,
+        sortFilter,
+        attendanceOnlyMode,
+        attendanceByStudentId
+    ) {
+        if (attendanceOnlyMode) {
+            val base = when (sortFilter) {
+                LeaderboardSortFilter.HIGHEST_TO_LOWEST -> scopedEntries
+                LeaderboardSortFilter.ACTIVE_ONLY -> scopedEntries.filter { entry ->
+                    attendanceByStudentId[entry.student.id].orEmpty().any { it.attendanceStatus == AttendanceStatus.PRESENT }
+                }
+                LeaderboardSortFilter.ABSENT_ZERO_ATTENDANCE -> scopedEntries.filter { entry ->
+                    attendanceByStudentId[entry.student.id].orEmpty().none { it.attendanceStatus == AttendanceStatus.PRESENT }
+                }
+                LeaderboardSortFilter.WEAKEST_FIRST -> scopedEntries
+            }
+            base.sortedWith(
+                if (sortFilter == LeaderboardSortFilter.WEAKEST_FIRST) {
+                    compareBy<StudentDetailedLeaderboardEntry> { entry ->
+                        attendanceByStudentId[entry.student.id].orEmpty().count { it.attendanceStatus == AttendanceStatus.PRESENT }
+                    }.thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
+                } else {
+                    compareByDescending<StudentDetailedLeaderboardEntry> { entry ->
+                        attendanceByStudentId[entry.student.id].orEmpty().count { it.attendanceStatus == AttendanceStatus.PRESENT }
+                    }.thenBy { entry ->
+                        attendanceByStudentId[entry.student.id].orEmpty().count { it.attendanceStatus != AttendanceStatus.PRESENT }
+                    }.thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
+                }
+            ).mapIndexed { idx, entry -> entry.copy(rank = idx + 1) }
+        } else {
+            when (sortFilter) {
+                LeaderboardSortFilter.HIGHEST_TO_LOWEST -> scopedEntries
+                LeaderboardSortFilter.ACTIVE_ONLY -> scopedEntries.filter { it.totalPoints > 0L }
+                LeaderboardSortFilter.ABSENT_ZERO_ATTENDANCE -> scopedEntries
+                    .filter { it.attendanceCount == 0 }
+                    .sortedWith(
+                        compareByDescending<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                            .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
+                            .thenBy { it.student.studentNumber }
+                    )
+                LeaderboardSortFilter.WEAKEST_FIRST -> scopedEntries.sortedWith(
+                    compareBy<StudentDetailedLeaderboardEntry> { it.totalPoints }
+                        .thenBy { it.attendanceCount }
+                        .thenBy { it.attendancePoints }
                         .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
                         .thenBy { it.student.studentNumber }
                 )
-            LeaderboardSortFilter.WEAKEST_FIRST -> bySearch.sortedWith(
-                compareBy<StudentDetailedLeaderboardEntry> { it.totalPoints }
-                    .thenBy { it.attendanceCount }
-                    .thenBy { it.attendancePoints }
-                    .thenBy { ArabicInitialsHelper.normalizeArabicName(it.student.name) }
-                    .thenBy { it.student.studentNumber }
-            )
+            }
         }
+    }
+
+    // Bottom Period Summary Metrics
+    val summaryPresentCount by remember(scopedEntries, attendanceByStudentId) {
+        derivedStateOf {
+            scopedEntries.count { entry ->
+                attendanceByStudentId[entry.student.id].orEmpty().any { it.attendanceStatus == AttendanceStatus.PRESENT }
+            }
+        }
+    }
+    val summaryAbsentCount by remember(scopedEntries, attendanceByStudentId) {
+        derivedStateOf {
+            scopedEntries.count { entry ->
+                val recs = attendanceByStudentId[entry.student.id].orEmpty()
+                recs.isNotEmpty() && recs.none { it.attendanceStatus == AttendanceStatus.PRESENT }
+            }
+        }
+    }
+    val summaryUnrecordedCount = (scopedEntries.size - summaryPresentCount - summaryAbsentCount).coerceAtLeast(0)
+    val summaryFilteredPeriodPoints by remember(filteredEntries) {
+        derivedStateOf { filteredEntries.sumOf { it.totalPoints } }
+    }
+    val summaryAppTotalPeriodPoints by remember(allRankedEntries) {
+        derivedStateOf { allRankedEntries.sumOf { it.totalPoints } }
     }
 
     val formattedSelectionLabel = remember(selectedMonthKeys, selectedWeekKeys) {
@@ -255,7 +415,7 @@ fun FullClassLeaderboardScreen(
 
     val blockById = remember(state.blocks) { state.blocks.associateBy { it.id } }
 
-    // Multi-Select Calendar Tree Modal Dialog
+    // Multi-Select Calendar Tree Modal Dialog (UNTOUCHED)
     if (showCalendarTreeDialog) {
         LeaderboardMultiSelectCalendarTreeDialog(
             initialMonthKeys = selectedMonthKeys,
@@ -266,6 +426,20 @@ fun FullClassLeaderboardScreen(
                 selectedMonthKeys = if (pickedMonths.isEmpty() && pickedWeeks.isEmpty()) setOf(initialMonth) else pickedMonths
                 selectedWeekKeys = pickedWeeks
                 showCalendarTreeDialog = false
+            }
+        )
+    }
+
+    // Multi-Select Students Picker Dialog
+    if (showStudentPickerDialog) {
+        ReportMultiSelectStudentsDialog(
+            students = state.students,
+            blockById = blockById,
+            initialSelectedIds = selectedStudentIds,
+            onDismiss = { showStudentPickerDialog = false },
+            onConfirm = { pickedIds ->
+                selectedStudentIds = pickedIds
+                showStudentPickerDialog = false
             }
         )
     }
@@ -410,16 +584,71 @@ fun FullClassLeaderboardScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 10.dp),
-            contentPadding = PaddingValues(vertical = 8.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 92.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // A. Merged 4 Filter/Counter Pills + 1-Row Horizontal Block Filter + Compact Search Bar
+            // A. Quick Week Presets + Merged Filter/Counter Pills + Multi-Block + Multi-Student + Multi-Card/Attendance Filters
             item(key = "compact_filters_and_search") {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Row 1: Merged Stats & Sort/Filter Pills (No duplicate row below!)
+                    // Row 0: Quick Period Presets ("الأسبوع ده", "الأسبوع اللي فات", "الأسبوع اللي قبله", "الشهر الحالي")
+                    val isThisWeek = selectedMonthKeys.isEmpty() && selectedWeekKeys == setOf(thisWeekKey)
+                    val isLastWeek = selectedMonthKeys.isEmpty() && selectedWeekKeys == setOf(lastWeekKey)
+                    val isTwoWeeksAgo = selectedMonthKeys.isEmpty() && selectedWeekKeys == setOf(twoWeeksAgoKey)
+                    val isCurrentMonthDefault = selectedMonthKeys == setOf(initialMonth) && selectedWeekKeys.isEmpty()
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        BlockFilterChip(
+                            label = "الأسبوع ده",
+                            selected = isThisWeek,
+                            accentColor = MaterialTheme.colorScheme.primary,
+                            onClick = {
+                                selectedMonthKeys = emptySet()
+                                selectedWeekKeys = setOf(thisWeekKey)
+                            },
+                            testTag = "quick_period_this_week"
+                        )
+                        BlockFilterChip(
+                            label = "الأسبوع اللي فات",
+                            selected = isLastWeek,
+                            accentColor = MaterialTheme.colorScheme.primary,
+                            onClick = {
+                                selectedMonthKeys = emptySet()
+                                selectedWeekKeys = setOf(lastWeekKey)
+                            },
+                            testTag = "quick_period_last_week"
+                        )
+                        BlockFilterChip(
+                            label = "الأسبوع اللي قبله",
+                            selected = isTwoWeeksAgo,
+                            accentColor = MaterialTheme.colorScheme.primary,
+                            onClick = {
+                                selectedMonthKeys = emptySet()
+                                selectedWeekKeys = setOf(twoWeeksAgoKey)
+                            },
+                            testTag = "quick_period_two_weeks_ago"
+                        )
+                        BlockFilterChip(
+                            label = "الشهر الحالي",
+                            selected = isCurrentMonthDefault,
+                            accentColor = extColors.rankGold,
+                            onClick = {
+                                selectedMonthKeys = setOf(initialMonth)
+                                selectedWeekKeys = emptySet()
+                            },
+                            testTag = "quick_period_current_month"
+                        )
+                    }
+
+                    // Row 1: Merged Stats & Sort/Filter Pills
                     ClassroomHealthSummaryCard(
                         totalStudents = totalStudentsCount,
                         activeStudents = activeStudentsCount,
@@ -429,7 +658,7 @@ fun FullClassLeaderboardScreen(
                         onSelectSortFilter = { sortFilter = it }
                     )
 
-                    // Row 2: Single-Row Horizontal Scroll for Servant Blocks
+                    // Row 2: Multi-Select Servant Blocks + Multi-Select Students Picker
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -438,33 +667,150 @@ fun FullClassLeaderboardScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         BlockFilterChip(
-                            label = "الفصل (${allRankedEntries.size})",
-                            selected = selectedBlockFilterId == "ALL",
+                            label = if (selectedStudentIds.isEmpty()) {
+                                "👥 تحديد أطفال"
+                            } else {
+                                "👥 أطفال (${selectedStudentIds.size})"
+                            },
+                            selected = selectedStudentIds.isNotEmpty(),
+                            accentColor = MaterialTheme.colorScheme.tertiary,
+                            onClick = { showStudentPickerDialog = true },
+                            testTag = "report_multi_student_picker_chip"
+                        )
+                        BlockFilterChip(
+                            label = "كل البلوكات (${allRankedEntries.size})",
+                            selected = selectedBlockFilterIds.isEmpty(),
                             accentColor = MaterialTheme.colorScheme.primary,
-                            onClick = { selectedBlockFilterId = "ALL" }
+                            onClick = { selectedBlockFilterIds = emptySet() },
+                            testTag = "report_block_all_chip"
                         )
                         state.blocks.forEach { block ->
                             val blockColor = KamSemanticColors.blockColor(block.colorHex)
                             val countInBlock = allRankedEntries.count { it.student.blockId == block.id }
+                            val isBlockPicked = block.id in selectedBlockFilterIds
                             BlockFilterChip(
-                                label = "${block.servantName} ($countInBlock)",
-                                selected = selectedBlockFilterId == block.id,
+                                label = "${if (isBlockPicked) "✓ " else ""}${block.servantName} ($countInBlock)",
+                                selected = isBlockPicked,
                                 accentColor = blockColor,
-                                onClick = { selectedBlockFilterId = block.id }
+                                onClick = {
+                                    selectedBlockFilterIds = if (isBlockPicked) {
+                                        selectedBlockFilterIds - block.id
+                                    } else {
+                                        selectedBlockFilterIds + block.id
+                                    }
+                                },
+                                testTag = "report_block_chip_${block.id}"
                             )
                         }
                         val unassignedCount = allRankedEntries.count { it.student.blockId.isBlank() }
                         if (unassignedCount > 0) {
+                            val isUnassignedPicked = "UNASSIGNED" in selectedBlockFilterIds
                             BlockFilterChip(
-                                label = "بدون بلوك ($unassignedCount)",
-                                selected = selectedBlockFilterId == "UNASSIGNED",
+                                label = "${if (isUnassignedPicked) "✓ " else ""}بدون بلوك ($unassignedCount)",
+                                selected = isUnassignedPicked,
                                 accentColor = KamSemanticColors.unassignedBlock,
-                                onClick = { selectedBlockFilterId = "UNASSIGNED" }
+                                onClick = {
+                                    selectedBlockFilterIds = if (isUnassignedPicked) {
+                                        selectedBlockFilterIds - "UNASSIGNED"
+                                    } else {
+                                        selectedBlockFilterIds + "UNASSIGNED"
+                                    }
+                                },
+                                testTag = "report_block_chip_unassigned"
                             )
                         }
                     }
 
-                    // Row 3: Compact 38.dp Search Field
+                    // Row 3: Multi-Select Card Types + "الحضور لوحده" (Attendance Only)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        BlockFilterChip(
+                            label = "${if (attendanceOnlyMode) "✓ " else ""}📋 الحضور لوحده",
+                            selected = attendanceOnlyMode,
+                            accentColor = extColors.onlineGreen,
+                            onClick = {
+                                val next = !attendanceOnlyMode
+                                attendanceOnlyMode = next
+                                if (next) selectedCardTypeIds = emptySet()
+                            },
+                            testTag = "report_attendance_only_chip"
+                        )
+                        BlockFilterChip(
+                            label = "كل الكروت",
+                            selected = !attendanceOnlyMode && selectedCardTypeIds.isEmpty(),
+                            accentColor = MaterialTheme.colorScheme.primary,
+                            onClick = {
+                                attendanceOnlyMode = false
+                                selectedCardTypeIds = emptySet()
+                            },
+                            testTag = "report_all_cards_chip"
+                        )
+                        availableFilterCardTypes.forEach { card ->
+                            val isCardSelected = !attendanceOnlyMode && card.id in selectedCardTypeIds
+                            val cardAccent = KamSemanticColors.cardColor(card, customCardConfig)
+                            val cardIcon = card.displaySymbol(customCardConfig)
+                            val cardTitle = card.displayTitle(customCardConfig)
+                            BlockFilterChip(
+                                label = "${if (isCardSelected) "✓ " else ""}$cardIcon $cardTitle",
+                                selected = isCardSelected,
+                                accentColor = cardAccent,
+                                onClick = {
+                                    attendanceOnlyMode = false
+                                    selectedCardTypeIds = if (isCardSelected) {
+                                        selectedCardTypeIds - card.id
+                                    } else {
+                                        selectedCardTypeIds + card.id
+                                    }
+                                },
+                                testTag = "report_card_filter_${card.id}"
+                            )
+                        }
+                    }
+
+                    // Active multi-filter clear strip when any advanced filter is engaged
+                    if (hasActiveMultiFilters) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val parts = buildList {
+                                if (selectedBlockFilterIds.isNotEmpty()) add("${selectedBlockFilterIds.size} بلوك")
+                                if (selectedStudentIds.isNotEmpty()) add("${selectedStudentIds.size} طفل")
+                                if (attendanceOnlyMode) add("الحضور لوحده")
+                                else if (selectedCardTypeIds.isNotEmpty()) add("${selectedCardTypeIds.size} كارت")
+                            }
+                            Text(
+                                text = "فلاتر نشطة: ${parts.joinToString(" • ")}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "مسح الفلاتر",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        selectedBlockFilterIds = emptySet()
+                                        selectedStudentIds = emptySet()
+                                        selectedCardTypeIds = emptySet()
+                                        attendanceOnlyMode = false
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .testTag("clear_report_multi_filters_button")
+                            )
+                        }
+                    }
+
+                    // Row 4: Compact 38.dp Search Field
                     CompactLeaderboardSearchBar(
                         query = localSearchQuery,
                         onQueryChange = { localSearchQuery = it }
@@ -472,7 +818,7 @@ fun FullClassLeaderboardScreen(
                 }
             }
 
-            // B. Full Student List with Detailed Per-Card Points & Counts Breakdown
+            // B. Full Student List with Detailed Per-Card Points & Counts Breakdown (or Attendance-Only View)
             if (filteredEntries.isEmpty()) {
                 item(key = "empty_leaderboard_state") {
                     Card(
@@ -503,12 +849,28 @@ fun FullClassLeaderboardScreen(
                     contentType = { "leaderboard_student_card" }
                 ) { entry ->
                     val ownerBlock = blockById[entry.student.blockId]
+                    val studentAttendance = attendanceByStudentId[entry.student.id].orEmpty()
                     StudentDetailedRankCard(
                         entry = entry,
                         ownerBlock = ownerBlock,
+                        customCardConfig = customCardConfig,
+                        attendanceOnlyMode = attendanceOnlyMode,
+                        studentAttendanceRecords = studentAttendance,
                         onClick = { onOpenStudentDetails(entry.student) }
                     )
                 }
+            }
+
+            // C. Bottom Period Summary Card (Present, Absent, Filtered Period Points, App Total Period Points)
+            item(key = "report_period_bottom_summary") {
+                ReportPeriodBottomSummaryCard(
+                    periodLabel = formattedSelectionLabel,
+                    presentCount = summaryPresentCount,
+                    absentCount = summaryAbsentCount,
+                    unrecordedCount = summaryUnrecordedCount,
+                    filteredPeriodPoints = summaryFilteredPeriodPoints,
+                    appTotalPeriodPoints = summaryAppTotalPeriodPoints
+                )
             }
         }
     }
@@ -585,7 +947,8 @@ private fun BlockFilterChip(
     label: String,
     selected: Boolean,
     accentColor: Color,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    testTag: String = ""
 ) {
     val extColors = LocalKamExtendedColors.current
     Surface(
@@ -595,7 +958,9 @@ private fun BlockFilterChip(
             width = if (selected) 1.5.dp else 1.dp,
             color = if (selected) accentColor else extColors.hairline
         ),
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .let { if (testTag.isNotBlank()) it.testTag(testTag) else it }
     ) {
         Text(
             text = label,
@@ -714,6 +1079,9 @@ private fun SummaryStatPill(
 private fun StudentDetailedRankCard(
     entry: StudentDetailedLeaderboardEntry,
     ownerBlock: ServantBlock?,
+    customCardConfig: CustomCardConfig,
+    attendanceOnlyMode: Boolean,
+    studentAttendanceRecords: List<AttendanceRecord>,
     onClick: () -> Unit
 ) {
     val extColors = LocalKamExtendedColors.current
@@ -724,14 +1092,17 @@ private fun StudentDetailedRankCard(
         KamSemanticColors.unassignedBlock
     }
 
-    val isAbsent = entry.attendanceCount == 0
+    val presentRecCount = studentAttendanceRecords.count { it.attendanceStatus == AttendanceStatus.PRESENT }
+    val absentRecCount = studentAttendanceRecords.count { it.attendanceStatus == AttendanceStatus.ABSENT }
+    val issueRecCount = studentAttendanceRecords.count { it.attendanceStatus == AttendanceStatus.ISSUE }
+    val isAbsent = if (attendanceOnlyMode) presentRecCount == 0 else entry.attendanceCount == 0
     val isZeroPoints = entry.totalPoints == 0L
 
     val rankColor = when (entry.rank) {
         1 -> extColors.rankGold
         2 -> extColors.rankSilver
         3 -> extColors.rankBronze
-        else -> if (isZeroPoints) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+        else -> if (isZeroPoints && !attendanceOnlyMode) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     }
 
     val rankBadgeText = when (entry.rank) {
@@ -749,9 +1120,9 @@ private fun StudentDetailedRankCard(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(
-            width = if (entry.rank <= 3 && entry.totalPoints > 0L) 1.5.dp else 1.dp,
+            width = if (entry.rank <= 3 && (entry.totalPoints > 0L || presentRecCount > 0)) 1.5.dp else 1.dp,
             color = when {
-                entry.rank == 1 && entry.totalPoints > 0L -> extColors.rankGold.copy(alpha = 0.72f)
+                entry.rank == 1 && (entry.totalPoints > 0L || presentRecCount > 0) -> extColors.rankGold.copy(alpha = 0.72f)
                 isAbsent -> MaterialTheme.colorScheme.error.copy(alpha = 0.45f)
                 else -> blockAccent.copy(alpha = 0.35f)
             }
@@ -763,7 +1134,7 @@ private fun StudentDetailedRankCard(
                 .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Top Row: Rank + Avatar + Student Name & Block + Total Points Badge
+            // Top Row: Rank + Avatar + Student Name & Block + Total Points (or Attendance Count) Pill
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -773,7 +1144,6 @@ private fun StudentDetailedRankCard(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
-                    // Rank Badge
                     Surface(
                         shape = RoundedCornerShape(9.dp),
                         color = rankColor.copy(alpha = 0.18f),
@@ -838,48 +1208,114 @@ private fun StudentDetailedRankCard(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Total Points Pill on the side
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (isZeroPoints) {
-                        MaterialTheme.colorScheme.error.copy(alpha = 0.14f)
-                    } else {
-                        extColors.rankGold.copy(alpha = 0.16f)
-                    },
-                    border = BorderStroke(
-                        width = 1.dp,
-                        color = if (isZeroPoints) MaterialTheme.colorScheme.error else extColors.rankGold
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                if (attendanceOnlyMode) {
+                    val attAccent = when {
+                        presentRecCount > 0 -> extColors.onlineGreen
+                        absentRecCount > 0 || issueRecCount > 0 -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = attAccent.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, attAccent.copy(alpha = 0.65f))
                     ) {
-                        Text(
-                            text = "${entry.totalPoints} نقطة",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (isZeroPoints) MaterialTheme.colorScheme.error else extColors.rankGold,
-                            fontWeight = FontWeight.ExtraBold
+                        Column(
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = when {
+                                    presentRecCount > 0 -> "حضر ($presentRecCount)"
+                                    absentRecCount > 0 || issueRecCount > 0 -> "غائب"
+                                    else -> "لم يُسجل"
+                                },
+                                style = MaterialTheme.typography.labelLarge,
+                                color = attAccent,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = "الحضور الفعلي",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isZeroPoints) {
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.14f)
+                        } else {
+                            extColors.rankGold.copy(alpha = 0.16f)
+                        },
+                        border = BorderStroke(
+                            width = 1.dp,
+                            color = if (isZeroPoints) MaterialTheme.colorScheme.error else extColors.rankGold
                         )
-                        Text(
-                            text = "${entry.totalCardsCount} كارت",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "${entry.totalPoints} نقطة",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (isZeroPoints) MaterialTheme.colorScheme.error else extColors.rankGold,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = "${entry.totalCardsCount} كارت",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
 
             HorizontalDivider(color = extColors.hairline)
 
-            // Bottom Section: Detailed Points & Count for Every Card Type
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                entry.breakdownByCard.forEach { item ->
-                    CardBreakdownChip(item = item)
+            if (attendanceOnlyMode) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    AttendanceStatusChip(
+                        label = "✓ حضر: $presentRecCount",
+                        accentColor = extColors.onlineGreen,
+                        highlighted = presentRecCount > 0
+                    )
+                    AttendanceStatusChip(
+                        label = "✕ غاب: $absentRecCount",
+                        accentColor = MaterialTheme.colorScheme.error,
+                        highlighted = absentRecCount > 0
+                    )
+                    if (issueRecCount > 0) {
+                        AttendanceStatusChip(
+                            label = "⚠ مشكلة: $issueRecCount",
+                            accentColor = extColors.offlineAmber,
+                            highlighted = true
+                        )
+                    }
+                    if (studentAttendanceRecords.isEmpty()) {
+                        AttendanceStatusChip(
+                            label = "لم يُسجل حضوره في الفترة",
+                            accentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            highlighted = false
+                        )
+                    }
+                }
+            } else {
+                // Detailed Points & Count for Every Card Type (including Custom Elder Card)
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    entry.breakdownByCard.forEach { item ->
+                        CardBreakdownChip(item = item, customCardConfig = customCardConfig)
+                    }
                 }
             }
         }
@@ -887,9 +1323,36 @@ private fun StudentDetailedRankCard(
 }
 
 @Composable
-private fun CardBreakdownChip(item: StudentCardTypeBreakdown) {
+private fun AttendanceStatusChip(
+    label: String,
+    accentColor: Color,
+    highlighted: Boolean
+) {
     val extColors = LocalKamExtendedColors.current
-    val cardColor = KamSemanticColors.cardColor(item.cardType)
+    Surface(
+        shape = RoundedCornerShape(7.dp),
+        color = if (highlighted) accentColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        border = BorderStroke(1.dp, if (highlighted) accentColor.copy(alpha = 0.55f) else extColors.hairline)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (highlighted) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        )
+    }
+}
+
+@Composable
+private fun CardBreakdownChip(
+    item: StudentCardTypeBreakdown,
+    customCardConfig: CustomCardConfig
+) {
+    val extColors = LocalKamExtendedColors.current
+    val cardColor = KamSemanticColors.cardColor(item.cardType, customCardConfig)
+    val cardIcon = item.cardType.displaySymbol(customCardConfig)
+    val cardTitle = item.cardType.displayTitle(customCardConfig)
     val isAttendanceZero = item.cardType == CardType.ATTENDANCE && item.count == 0
     val hasPoints = item.points > 0L
 
@@ -910,11 +1373,11 @@ private fun CardBreakdownChip(item: StudentCardTypeBreakdown) {
     }
 
     val detailText = if (isAttendanceZero) {
-        "${item.cardType.badgeSymbol} ${item.cardType.arabicTitle}: 0 (غائب)"
+        "$cardIcon $cardTitle: 0 (غائب)"
     } else if (item.count == 0) {
-        "${item.cardType.badgeSymbol} ${item.cardType.arabicTitle}: 0 (0)"
+        "$cardIcon $cardTitle: 0 (0)"
     } else {
-        "${item.cardType.badgeSymbol} ${item.cardType.arabicTitle}: ${item.points} نقطة (${item.count})"
+        "$cardIcon $cardTitle: ${item.points} نقطة (${item.count})"
     }
 
     Surface(
@@ -930,6 +1393,263 @@ private fun CardBreakdownChip(item: StudentCardTypeBreakdown) {
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
         )
     }
+}
+
+@Composable
+private fun ReportPeriodBottomSummaryCard(
+    periodLabel: String,
+    presentCount: Int,
+    absentCount: Int,
+    unrecordedCount: Int,
+    filteredPeriodPoints: Long,
+    appTotalPeriodPoints: Long
+) {
+    val extColors = LocalKamExtendedColors.current
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp)
+            .testTag("report_period_bottom_summary_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "📊 ملخص الفترة المختارة",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        text = periodLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            HorizontalDivider(color = extColors.hairline)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ReportSummaryMetricTile(
+                    label = "عدد الحاضرين",
+                    value = "$presentCount",
+                    accentColor = extColors.onlineGreen,
+                    testTag = "summary_present_count",
+                    modifier = Modifier.weight(1f)
+                )
+                ReportSummaryMetricTile(
+                    label = "عدد الغايبين",
+                    value = "$absentCount",
+                    accentColor = MaterialTheme.colorScheme.error,
+                    testTag = "summary_absent_count",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ReportSummaryMetricTile(
+                    label = "نقاط الفلتر في الفترة",
+                    value = "$filteredPeriodPoints",
+                    accentColor = MaterialTheme.colorScheme.primary,
+                    testTag = "summary_filtered_points",
+                    modifier = Modifier.weight(1f)
+                )
+                ReportSummaryMetricTile(
+                    label = "مجموع نقاط التطبيق كله",
+                    value = "$appTotalPeriodPoints",
+                    accentColor = extColors.rankGold,
+                    testTag = "summary_app_total_points",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            if (unrecordedCount > 0) {
+                Text(
+                    text = "• لم يُسجل حضورهم أو غيابهم بعد في هذه الفترة: $unrecordedCount طفل",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReportSummaryMetricTile(
+    label: String,
+    value: String,
+    accentColor: Color,
+    testTag: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = accentColor.copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.42f)),
+        modifier = modifier.testTag(testTag)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.ExtraBold,
+                color = accentColor
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                maxLines = 2
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReportMultiSelectStudentsDialog(
+    students: List<Student>,
+    blockById: Map<String, ServantBlock>,
+    initialSelectedIds: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<String>) -> Unit
+) {
+    var draftIds by remember { mutableStateOf(initialSelectedIds) }
+    var search by remember { mutableStateOf("") }
+
+    val sortedFiltered = remember(students, search) {
+        val q = search.trim()
+        students
+            .filter {
+                q.isBlank() ||
+                    it.name.contains(q, ignoreCase = true) ||
+                    it.studentNumber.toString().contains(q)
+            }
+            .sortedBy { ArabicInitialsHelper.normalizeArabicName(it.name) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "تحديد أطفال (${draftIds.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                if (draftIds.isNotEmpty()) {
+                    TextButton(onClick = { draftIds = emptySet() }) {
+                        Text("مسح الكل", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CompactLeaderboardSearchBar(
+                    query = search,
+                    onQueryChange = { search = it }
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(sortedFiltered, key = { it.id }) { stu ->
+                        val isChecked = stu.id in draftIds
+                        val blockName = blockById[stu.blockId]?.servantName ?: "بدون بلوك"
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    draftIds = if (isChecked) draftIds - stu.id else draftIds + stu.id
+                                }
+                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isChecked,
+                                onCheckedChange = { checked ->
+                                    draftIds = if (checked) draftIds + stu.id else draftIds - stu.id
+                                }
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "${stu.name} (#${stu.studentNumber})",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = blockName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(draftIds) },
+                modifier = Modifier.testTag("confirm_multi_student_picker_button")
+            ) {
+                Text("تطبيق (${draftIds.size})")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إلغاء")
+            }
+        }
+    )
 }
 
 /**

@@ -586,6 +586,8 @@ fun AuthenticatedKamApp(
         isInitialFrameSettled = true
     }
     var isBottomBarVisibleByScroll by rememberSaveable(sessionKey) { mutableStateOf(true) }
+    var homeResetSignal by remember(sessionKey) { mutableStateOf(0) }
+    var lastHomeTapTimeMs by remember(sessionKey) { mutableStateOf(0L) }
     LaunchedEffect(currentTab) {
         quickPeekController.dismiss()
         isBottomBarVisibleByScroll = true
@@ -693,7 +695,9 @@ fun AuthenticatedKamApp(
                             onAddMemorizationNote = viewModel::addMemorizationNote,
                             onAddChildComment = viewModel::addChildComment,
                             onDeleteChildNote = viewModel::deleteChildNote,
-                            onPostChildGroupNotification = viewModel::postChildGroupNotification
+                            onPostChildGroupNotification = viewModel::postChildGroupNotification,
+                            homeResetSignal = homeResetSignal,
+                            onRefresh = viewModel::forceFullCloudSync
                         )
                     }
 
@@ -778,7 +782,8 @@ fun AuthenticatedKamApp(
                             onOpenPhoneWizard = onOpenPhoneWizardRemembered,
                             onUpdateOwnServantAvatar = viewModel::updateOwnServantAvatar,
                             onDeleteOwnPhones = viewModel::deleteOwnPhoneNumbers,
-                            onEditOwnDisplayName = viewModel::editOwnDisplayName
+                            onEditOwnDisplayName = viewModel::editOwnDisplayName,
+                            onSaveCustomCardSettings = viewModel::updateCustomCardSettings
                         )
                     }
                 }
@@ -793,10 +798,29 @@ fun AuthenticatedKamApp(
             onSelectIndex = { idx ->
                 val targetTab = KamBottomTab.entries.getOrElse(idx) { KamBottomTab.HOME }
                 isBottomBarVisibleByScroll = true
-                if (targetTab == KamBottomTab.MESSAGES) {
-                    chatViewModel.closeActiveChat()
+                if (targetTab == KamBottomTab.HOME) {
+                    val nowMs = System.currentTimeMillis()
+                    if (currentTab == KamBottomTab.HOME) {
+                        if (nowMs - lastHomeTapTimeMs in 1L..450L) {
+                            lastHomeTapTimeMs = 0L
+                            homeResetSignal += 1
+                            viewModel.forceFullCloudSync()
+                        } else {
+                            lastHomeTapTimeMs = nowMs
+                            homeResetSignal += 1
+                        }
+                    } else {
+                        lastHomeTapTimeMs = nowMs
+                        homeResetSignal += 1
+                        selectTab(KamBottomTab.HOME)
+                    }
+                } else {
+                    lastHomeTapTimeMs = 0L
+                    if (targetTab == KamBottomTab.MESSAGES) {
+                        chatViewModel.closeActiveChat()
+                    }
+                    selectTab(targetTab)
                 }
-                selectTab(targetTab)
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)

@@ -159,6 +159,31 @@
           "type": "string",
           "description": "Optional fingerprint hash of the group avatar for local cache invalidation."
         },
+        "customCardEnabled": {
+          "type": "boolean",
+          "description": "Optional flag enabling the configurable custom card (كارت القمداء) for this group."
+        },
+        "customCardName": {
+          "type": "string",
+          "description": "Optional custom Arabic/English name for the extra card (<= 40 chars)."
+        },
+        "customCardPoints": {
+          "type": "integer",
+          "description": "Optional configurable points for the extra card (0..100)."
+        },
+        "customCardIcon": {
+          "type": "string",
+          "description": "Optional emoji/symbol for the extra card."
+        },
+        "customCardColorKey": {
+          "type": "string",
+          "description": "Optional semantic color key for the extra card."
+        },
+        "customCardFrequency": {
+          "type": "string",
+          "enum": ["WEEKLY", "MONTHLY", "ONCE_EVER"],
+          "description": "Optional frequency rule for awarding the extra card."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -462,13 +487,14 @@
             "PRAISE",
             "GOLD",
             "MEMORIZATION",
-            "CONFESSION"
+            "CONFESSION",
+            "CUSTOM_ELDER"
           ],
-          "description": "One of the 7 approved card types."
+          "description": "One of the approved card types including the optional custom elder card."
         },
         "points": {
           "type": "integer",
-          "description": "Points value awarded (3, 5, 2, 10, 20, 6, or 4)."
+          "description": "Points value awarded (fixed per standard card, or 0..100 for CUSTOM_ELDER)."
         },
         "servantId": {
           "type": "string",

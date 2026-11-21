@@ -6,6 +6,56 @@ import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.IgnoreExtraProperties
 import com.google.firebase.firestore.ServerTimestamp
 
+enum class CustomCardFrequency(
+    val id: String,
+    val arabicLabel: String,
+    val shortArabicLabel: String
+) {
+    WEEKLY("WEEKLY", "مرة في الأسبوع", "أسبوعياً"),
+    MONTHLY("MONTHLY", "مرة في الشهر", "شهرياً"),
+    ONCE_EVER("ONCE_EVER", "مرة واحدة فقط ولا يتكرر", "مرة واحدة فقط");
+
+    companion object {
+        fun fromId(raw: String?): CustomCardFrequency {
+            return entries.firstOrNull { it.id.equals(raw?.trim(), ignoreCase = true) } ?: WEEKLY
+        }
+    }
+}
+
+@Immutable
+data class CustomCardConfig(
+    val enabled: Boolean = false,
+    val name: String = "كارت القمداء",
+    val points: Int = 15,
+    val icon: String = "🏅",
+    val colorKey: String = "GOLD",
+    val frequency: CustomCardFrequency = CustomCardFrequency.WEEKLY
+) {
+    val effectiveName: String
+        get() = name.trim().ifBlank { "كارت القمداء" }
+
+    val effectiveIcon: String
+        get() = icon.trim().ifBlank { "🏅" }
+
+    val effectivePoints: Int
+        get() = points.coerceIn(0, 100)
+
+    companion object {
+        val DEFAULT = CustomCardConfig()
+        val ICON_PRESETS = listOf("🏅", "👑", "💎", "🌟", "🔥", "🎯", "🛡️", "🕊️", "🏆", "✨")
+        val COLOR_PRESETS = listOf(
+            "GOLD" to "ذهبي",
+            "EMERALD" to "أخضر",
+            "SKY" to "سماوي",
+            "VIOLET" to "بنفسجي",
+            "INDIGO" to "نيلي",
+            "TEAL" to "فيروزي",
+            "ROSE" to "وردي",
+            "ORANGE" to "برتقالي"
+        )
+    }
+}
+
 enum class CardType(
     val id: String,
     val arabicTitle: String,
@@ -19,7 +69,24 @@ enum class CardType(
     PRAISE("PRAISE", "التسبحة", 10, "🎵", "INDIGO"),
     GOLD("GOLD", "الذهب", 20, "⭐", "GOLD"),
     MEMORIZATION("MEMORIZATION", "المحفوظات", 6, "📖", "TEAL"),
-    CONFESSION("CONFESSION", "الاعتراف", 4, "🕊️", "ROSE");
+    CONFESSION("CONFESSION", "الاعتراف", 4, "🕊️", "ROSE"),
+    CUSTOM_ELDER("CUSTOM_ELDER", "كارت القمداء", 15, "🏅", "GOLD");
+
+    fun displayTitle(customConfig: CustomCardConfig? = null): String {
+        return if (this == CUSTOM_ELDER && customConfig != null) customConfig.effectiveName else arabicTitle
+    }
+
+    fun displayPoints(customConfig: CustomCardConfig? = null): Int {
+        return if (this == CUSTOM_ELDER && customConfig != null) customConfig.effectivePoints else points
+    }
+
+    fun displaySymbol(customConfig: CustomCardConfig? = null): String {
+        return if (this == CUSTOM_ELDER && customConfig != null) customConfig.effectiveIcon else badgeSymbol
+    }
+
+    fun displayColorKey(customConfig: CustomCardConfig? = null): String {
+        return if (this == CUSTOM_ELDER && customConfig != null) customConfig.colorKey else colorKey
+    }
 
     companion object {
         fun fromId(id: String): CardType? = entries.find { it.id == id }
@@ -92,9 +159,25 @@ data class Group(
     val inviteCodeUpdatedAtMillis: Long = 0L,
     val avatarBase64: String = "",
     val avatarHash: String = "",
+    val customCardEnabled: Boolean = false,
+    val customCardName: String = "كارت القمداء",
+    val customCardPoints: Long = 15L,
+    val customCardIcon: String = "🏅",
+    val customCardColorKey: String = "GOLD",
+    val customCardFrequency: String = CustomCardFrequency.WEEKLY.id,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    val customCardConfig: CustomCardConfig
+        get() = CustomCardConfig(
+            enabled = customCardEnabled,
+            name = customCardName.trim().ifBlank { "كارت القمداء" },
+            points = customCardPoints.toInt().coerceIn(0, 100),
+            icon = customCardIcon.trim().ifBlank { "🏅" },
+            colorKey = customCardColorKey.trim().ifBlank { "GOLD" },
+            frequency = CustomCardFrequency.fromId(customCardFrequency)
+        )
+
     fun isPrimaryAdmin(uid: String): Boolean = uid.isNotBlank() && adminId == uid
 
     fun isAssistantAdmin(uid: String): Boolean = uid.isNotBlank() && uid in assistantAdminIds
@@ -658,6 +741,42 @@ object SaturdayCalendarHelper {
         val matched = weeks.find { dayOfMonth in it.startDayOfMonth..it.endDayOfMonth }
             ?: weeks.lastOrNull()
         return matched?.weekKey ?: String.format(java.util.Locale.US, "%04d-%02d-W1", year, month)
+    }
+
+    /**
+     * Returns the Saturday-based week key [weeksAgo] weeks before [nowCal]
+     * (0 = هذا الأسبوع, 1 = الأسبوع اللي فات, 2 = الأسبوع اللي قبله).
+     * Walks back sequentially through generated Saturday weeks so month boundaries are exact.
+     */
+    fun weekKeyWeeksAgo(
+        weeksAgo: Int,
+        nowCal: java.util.Calendar = java.util.Calendar.getInstance()
+    ): String {
+        val safeOffset = weeksAgo.coerceAtLeast(0)
+        val currentKey = currentWeekKey(nowCal)
+        if (safeOffset == 0) return currentKey
+
+        // Collect weeks across current month and previous 2 months in chronological order
+        val allWeeks = mutableListOf<WeekTreeNode>()
+        val probe = (nowCal.clone() as java.util.Calendar).apply {
+            set(java.util.Calendar.DAY_OF_MONTH, 1)
+            add(java.util.Calendar.MONTH, -2)
+        }
+        repeat(3) {
+            val y = probe.get(java.util.Calendar.YEAR)
+            val m = probe.get(java.util.Calendar.MONTH) + 1
+            allWeeks.addAll(buildWeeksForMonth(y, m, nowCal))
+            probe.add(java.util.Calendar.MONTH, 1)
+        }
+        val currentIdx = allWeeks.indexOfLast { it.weekKey == currentKey }
+        if (currentIdx >= 0) {
+            val targetIdx = (currentIdx - safeOffset).coerceAtLeast(0)
+            return allWeeks[targetIdx].weekKey
+        }
+        val fallbackCal = (nowCal.clone() as java.util.Calendar).apply {
+            add(java.util.Calendar.DAY_OF_YEAR, -7 * safeOffset)
+        }
+        return currentWeekKey(fallbackCal)
     }
 
     /**

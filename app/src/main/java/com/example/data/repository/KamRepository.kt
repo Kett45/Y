@@ -35,6 +35,8 @@ import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.snapshots
 import java.util.Date
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -327,7 +329,7 @@ class KamRepository(private val db: FirebaseFirestore) {
             val safeGroupId = (existingSnap?.getString("groupId") ?: "").take(40)
             @Suppress("UNCHECKED_CAST")
             val safeEnabledCards = (existingSnap?.get("enabledCards") as? List<String>)
-                ?.distinct()?.take(7) ?: CardType.defaultEnabledIds
+                ?.distinct()?.take(8) ?: CardType.defaultEnabledIds
             val createdAtVal: Any = existingSnap?.getTimestamp("createdAt") ?: FieldValue.serverTimestamp()
 
             val fullMergePayload = mutableMapOf<String, Any>(
@@ -351,7 +353,7 @@ class KamRepository(private val db: FirebaseFirestore) {
             safeUpsertUserProfileFields(
                 uid = uid,
                 docRef = docRef,
-                fields = mapOf("enabledCards" to enabledCards.distinct().take(7))
+                fields = mapOf("enabledCards" to enabledCards.distinct().take(8))
             )
         } catch (e: CancellationException) {
             throw e
@@ -852,6 +854,68 @@ class KamRepository(private val db: FirebaseFirestore) {
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.UPDATE, groupRef.path)
             throw e
+        }
+    }
+
+    suspend fun updateCustomCardSettings(
+        groupId: String,
+        config: com.example.data.model.CustomCardConfig
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        val groupRef = db.collection("groups").document(groupId)
+        try {
+            groupRef.update(
+                mapOf(
+                    "customCardEnabled" to config.enabled,
+                    "customCardName" to config.effectiveName.take(40),
+                    "customCardPoints" to config.effectivePoints.toLong(),
+                    "customCardIcon" to config.effectiveIcon.take(12),
+                    "customCardColorKey" to config.colorKey.trim().ifBlank { "GOLD" }.take(24),
+                    "customCardFrequency" to config.frequency.id,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, groupRef.path)
+            throw e
+        }
+    }
+
+    /**
+     * Forces a fresh network read (`Source.SERVER`) across the active group's collections so
+     * Firestore updates its local cache and pushes any changes made by other servants directly
+     * into active snapshot listeners.
+     */
+    suspend fun forceRefreshFromServer(
+        groupId: String,
+        userId: String
+    ): Result<Unit> = runCatching {
+        val safeGroupId = groupId.trim()
+        val safeUserId = userId.trim()
+        if (safeUserId.isNotBlank()) {
+            runCatching {
+                db.collection("users").document(safeUserId)
+                    .get(com.google.firebase.firestore.Source.SERVER).await()
+            }
+        }
+        if (safeGroupId.isBlank()) return@runCatching
+        val groupRef = db.collection("groups").document(safeGroupId)
+        val server = com.google.firebase.firestore.Source.SERVER
+        // Primary group doc must succeed to verify connectivity
+        groupRef.get(server).await()
+        // Refresh subcollections concurrently in best-effort batches
+        coroutineScope {
+            val jobs = listOf(
+                async { runCatching { groupRef.collection("blocks").whereEqualTo("groupId", safeGroupId).get(server).await() } },
+                async { runCatching { groupRef.collection("students").whereEqualTo("groupId", safeGroupId).get(server).await() } },
+                async { runCatching { groupRef.collection("cardEvents").whereEqualTo("groupId", safeGroupId).get(server).await() } },
+                async { runCatching { groupRef.collection("monthlyBalances").whereEqualTo("groupId", safeGroupId).get(server).await() } },
+                async { runCatching { groupRef.collection("attendance").get(server).await() } },
+                async { runCatching { groupRef.collection("members").whereEqualTo("groupId", safeGroupId).get(server).await() } }
+            )
+            jobs.forEach { it.await() }
         }
     }
 
@@ -2260,12 +2324,14 @@ class KamRepository(private val db: FirebaseFirestore) {
         currentMonthPoints: Long,
         currentMonthEventsCount: Long,
         memberUids: List<String>,
-        waitForServerAck: Boolean = true
+        waitForServerAck: Boolean = true,
+        pointsOverride: Long? = null
     ): Result<String> = runCatching {
         val uid = requireUserId()
         val safeSlot = deterministicSlotKey.replace(Regex("[^a-zA-Z0-9_\\-]"), "")
         val eventId = "evt_${student.id}_${cardType.id}_${safeSlot}_${uid}".take(120)
         val balanceId = "bal_${student.id}_${monthKey.replace("-", "")}".take(120)
+        val awardedPoints = (pointsOverride ?: cardType.points.toLong()).coerceIn(0L, 100L)
 
         val groupRef = db.collection("groups").document(groupId)
         val eventRef = groupRef.collection("cardEvents").document(eventId)
@@ -2279,7 +2345,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                 "studentId" to student.id,
                 "studentName" to student.name.take(100),
                 "cardType" to cardType.id,
-                "points" to cardType.points.toLong(),
+                "points" to awardedPoints,
                 "servantId" to uid,
                 "servantName" to servantName.trim().ifBlank { "خادم" }.take(100),
                 "monthKey" to monthKey,
@@ -2295,7 +2361,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                 "studentId" to student.id,
                 "studentName" to student.name.take(100),
                 "monthKey" to monthKey,
-                "totalPoints" to (currentMonthPoints + cardType.points).coerceIn(0L, 100000L),
+                "totalPoints" to (currentMonthPoints + awardedPoints).coerceIn(0L, 100000L),
                 "eventsCount" to (currentMonthEventsCount + 1L).coerceIn(0L, 10000L),
                 "lastUpdatedByUid" to uid,
                 "memberUids" to safeMembers,
@@ -2353,6 +2419,54 @@ class KamRepository(private val db: FirebaseFirestore) {
                 .document(groupId)
                 .collection("attendance")
                 .whereEqualTo("weekKey", weekKey)
+                .snapshots()
+                .collect { snapshot ->
+                    if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {
+                        return@collect
+                    }
+                    hasEmittedInitial = true
+                    for (change in snapshot.documentChanges) {
+                        val docId = change.document.id
+                        when (change.type) {
+                            DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                val parsed = change.document.toObject(
+                                    AttendanceRecord::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                )
+                                recordsById[docId] = parsed.copy(id = docId)
+                            }
+                            DocumentChange.Type.REMOVED -> {
+                                recordsById.remove(docId)
+                            }
+                        }
+                    }
+                    emit(recordsById.values.toList())
+                }
+        }.catch { error ->
+            if (error is Exception && auth.currentUser != null) {
+                handleFirestoreError(error, OperationType.LIST, path)
+            }
+            emit(emptyList())
+        }
+    }
+
+    /**
+     * Observes all attendance records across all weeks for [groupId] so the Home attendance lamp
+     * and the Reports screen (attendance counts & attendance-only filter) stay live across all periods.
+     */
+    fun observeAllGroupAttendance(
+        groupId: String
+    ): Flow<List<AttendanceRecord>> {
+        if (groupId.isBlank()) {
+            return kotlinx.coroutines.flow.flowOf(emptyList())
+        }
+        val path = "groups/$groupId/attendance"
+        return flow {
+            val recordsById = LinkedHashMap<String, AttendanceRecord>()
+            var hasEmittedInitial = false
+            db.collection("groups")
+                .document(groupId)
+                .collection("attendance")
                 .snapshots()
                 .collect { snapshot ->
                     if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {

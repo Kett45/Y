@@ -97,6 +97,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardType
+import com.example.data.model.CustomCardConfig
+import com.example.data.model.CustomCardFrequency
 import com.example.data.model.Group
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_SERVANTS_PER_GROUP
@@ -1837,9 +1839,11 @@ fun SettingsScreen(
     onOpenPhoneWizard: () -> Unit = {},
     onUpdateOwnServantAvatar: (String) -> Unit = {},
     onDeleteOwnPhones: () -> Unit = {},
-    onEditOwnDisplayName: (String) -> Unit = {}
+    onEditOwnDisplayName: (String) -> Unit = {},
+    onSaveCustomCardSettings: (CustomCardConfig) -> Unit = {}
 ) {
     val enabledIds = state.userProfile?.enabledCards ?: CardType.defaultEnabledIds
+    val customCardConfig = state.customCardConfig
     val group = state.group
     var showAppearanceFullScreen by rememberSaveable { mutableStateOf(false) }
     var showOwnServantPhotoDialog by rememberSaveable { mutableStateOf(false) }
@@ -1910,6 +1914,9 @@ fun SettingsScreen(
     }
 
     val extColors = LocalKamExtendedColors.current
+    val personalCardItems = remember(customCardConfig.enabled) {
+        CardType.entries.filter { it != CardType.CUSTOM_ELDER || customCardConfig.enabled }
+    }
 
     LazyColumn(
         state = settingsListState,
@@ -2067,13 +2074,16 @@ fun SettingsScreen(
         }
 
         items(
-            items = CardType.entries,
+            items = personalCardItems,
             key = { card -> "personal_card_row_${card.id}" },
             contentType = { "settings_switch_row" }
         ) { card ->
             val isEnabled = card.id in enabledIds
-            val cardColor = KamSemanticColors.cardColor(card)
-            val isLast = card == CardType.entries.last()
+            val cardColor = KamSemanticColors.cardColor(card, customCardConfig)
+            val cardTitle = card.displayTitle(customCardConfig)
+            val cardSymbol = card.displaySymbol(customCardConfig)
+            val cardPoints = card.displayPoints(customCardConfig)
+            val isLast = card == personalCardItems.last()
             val rowShape = if (isLast) {
                 RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp)
             } else {
@@ -2101,7 +2111,7 @@ fun SettingsScreen(
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
                         Text(
-                            text = "${card.badgeSymbol} +${card.points}",
+                            text = "$cardSymbol +$cardPoints",
                             style = MaterialTheme.typography.labelLarge,
                             color = cardColor,
                             fontWeight = FontWeight.Bold
@@ -2110,12 +2120,16 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "كارت ${card.arabicTitle}",
+                            text = if (card == CardType.CUSTOM_ELDER) cardTitle else "كارت $cardTitle",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${card.points} نقاط",
+                            text = if (card == CardType.CUSTOM_ELDER) {
+                                "$cardPoints نقاط • ${customCardConfig.frequency.shortArabicLabel}"
+                            } else {
+                                "$cardPoints نقاط"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -2132,6 +2146,19 @@ fun SettingsScreen(
             }
         }
         item(key = "spacer_after_personal_cards", contentType = "settings_spacer") {
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        // 1b. كارت القمداء (Custom Elder Card Settings — Admin & Assistant Admin)
+        item(key = "custom_elder_card_settings_card", contentType = "settings_card") {
+            CustomElderCardSettingsCard(
+                config = customCardConfig,
+                isAdmin = state.isAdmin,
+                adminName = group?.adminName.orEmpty(),
+                onSave = onSaveCustomCardSettings
+            )
+        }
+        item(key = "spacer_after_custom_elder_card", contentType = "settings_spacer") {
             Spacer(modifier = Modifier.height(12.dp))
         }
 
@@ -2959,6 +2986,330 @@ private fun PolicySwitchRow(
         )
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CustomElderCardSettingsCard(
+    config: CustomCardConfig,
+    isAdmin: Boolean,
+    adminName: String,
+    onSave: (CustomCardConfig) -> Unit
+) {
+    val extColors = LocalKamExtendedColors.current
+
+    var draftEnabled by rememberSaveable(config.enabled) { mutableStateOf(config.enabled) }
+    var draftName by rememberSaveable(config.name) { mutableStateOf(config.effectiveName) }
+    var draftPointsText by rememberSaveable(config.points) { mutableStateOf(config.effectivePoints.toString()) }
+    var draftIcon by rememberSaveable(config.icon) { mutableStateOf(config.effectiveIcon) }
+    var draftColorKey by rememberSaveable(config.colorKey) { mutableStateOf(config.colorKey.ifBlank { "GOLD" }) }
+    var draftFrequencyId by rememberSaveable(config.frequency.id) { mutableStateOf(config.frequency.id) }
+
+    val draftFrequency = CustomCardFrequency.fromId(draftFrequencyId)
+    val draftPoints = (draftPointsText.toIntOrNull() ?: 0).coerceIn(0, 100)
+    val previewAccent = KamSemanticColors.cardColorByKey(draftColorKey)
+    val previewName = draftName.trim().ifBlank { "كارت القمداء" }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+            .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
+            .padding(16.dp)
+            .testTag("custom_elder_card_settings_section"),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Header + Master Enable Switch
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Text(
+                    text = "🏅 كارت القمداء (كارت إضافي مخصص)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = "كارت إضافي يضبط الأمين اسمه ونقاطه وشكله ولونه وموعد إعطائه، ويدخل تلقائياً في التقارير والتحليلات.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = draftEnabled,
+                enabled = isAdmin,
+                onCheckedChange = { checked ->
+                    draftEnabled = checked
+                    onSave(
+                        CustomCardConfig(
+                            enabled = checked,
+                            name = previewName,
+                            points = draftPoints,
+                            icon = draftIcon,
+                            colorKey = draftColorKey,
+                            frequency = draftFrequency
+                        )
+                    )
+                },
+                modifier = Modifier.testTag("switch_custom_elder_card_enabled")
+            )
+        }
+
+        // Live Preview Pill
+        Surface(
+            color = previewAccent.copy(alpha = 0.14f),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.5.dp, previewAccent.copy(alpha = 0.7f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = draftIcon,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Column {
+                        Text(
+                            text = previewName,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = previewAccent
+                        )
+                        Text(
+                            text = draftFrequency.arabicLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Surface(
+                    color = previewAccent,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "+$draftPoints نقطة",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+
+        HorizontalDivider(color = extColors.hairline)
+
+        // Name & Points Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = draftName,
+                onValueChange = { if (it.length <= 40) draftName = it },
+                label = { Text("اسم الكارت") },
+                placeholder = { Text("كارت القمداء") },
+                enabled = isAdmin,
+                singleLine = true,
+                modifier = Modifier
+                    .weight(1.7f)
+                    .testTag("custom_card_name_input")
+            )
+            OutlinedTextField(
+                value = draftPointsText,
+                onValueChange = { raw ->
+                    val digits = raw.filter { it.isDigit() }.take(3)
+                    val num = digits.toIntOrNull()
+                    draftPointsText = if (num != null && num > 100) "100" else digits
+                },
+                label = { Text("النقاط (0-100)") },
+                enabled = isAdmin,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("custom_card_points_input")
+            )
+        }
+
+        // Icon Picker
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = "شكل الأيقونة:",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                CustomCardConfig.ICON_PRESETS.forEach { emoji ->
+                    val selected = draftIcon == emoji
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (selected) previewAccent.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        border = BorderStroke(
+                            width = if (selected) 1.5.dp else 1.dp,
+                            color = if (selected) previewAccent else extColors.hairline
+                        ),
+                        modifier = Modifier
+                            .clickable(enabled = isAdmin) { draftIcon = emoji }
+                            .testTag("custom_card_icon_$emoji")
+                    ) {
+                        Text(
+                            text = emoji,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Color Picker
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = "لون الكارت:",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                CustomCardConfig.COLOR_PRESETS.forEach { (key, arabicName) ->
+                    val swatch = KamSemanticColors.cardColorByKey(key)
+                    val selected = draftColorKey.equals(key, ignoreCase = true)
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (selected) swatch.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        border = BorderStroke(
+                            width = if (selected) 1.5.dp else 1.dp,
+                            color = if (selected) swatch else extColors.hairline
+                        ),
+                        modifier = Modifier
+                            .clickable(enabled = isAdmin) { draftColorKey = key }
+                            .testTag("custom_card_color_$key")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .clip(CircleShape)
+                                    .background(swatch)
+                            )
+                            Text(
+                                text = arabicName,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
+                                color = if (selected) swatch else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Frequency Selector (Weekly / Monthly / Once Ever)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = "متى يُعطى الكارت لكل طفل:",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                CustomCardFrequency.entries.forEach { freq ->
+                    val selected = draftFrequency == freq
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selected) previewAccent.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        border = BorderStroke(
+                            width = if (selected) 1.5.dp else 1.dp,
+                            color = if (selected) previewAccent else extColors.hairline
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = isAdmin) { draftFrequencyId = freq.id }
+                            .testTag("custom_card_freq_${freq.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = freq.arabicLabel,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
+                                color = if (selected) previewAccent else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (selected) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "مختار",
+                                    tint = previewAccent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (isAdmin) {
+            Button(
+                onClick = {
+                    onSave(
+                        CustomCardConfig(
+                            enabled = draftEnabled,
+                            name = previewName,
+                            points = draftPoints,
+                            icon = draftIcon,
+                            colorKey = draftColorKey,
+                            frequency = draftFrequency
+                        )
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("save_custom_elder_card_button"),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("حفظ إعدادات كارت القمداء", fontWeight = FontWeight.ExtraBold)
+            }
+        } else {
+            Text(
+                text = "ملاحظة: إعدادات الكارت الإضافي للعرض فقط، وتعديلها متاح لأمين المجموعة ($adminName) أو مساعده.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 
 
 

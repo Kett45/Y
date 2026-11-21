@@ -108,7 +108,7 @@ service cloud.firestore {
         isOptionalString(data.email, 150) &&
         isOptionalString(data.groupId, 40) &&
         (!('joinedGroupIds' in data) || isBoundedStringList(data.joinedGroupIds, 0, 25)) &&
-        isBoundedStringList(data.enabledCards, 0, 7) &&
+        isBoundedStringList(data.enabledCards, 0, 8) &&
         (!('collapsedBlockIds' in data) || isBoundedStringList(data.collapsedBlockIds, 0, 50)) &&
         (!('hiddenBlockIds' in data) || isBoundedStringList(data.hiddenBlockIds, 0, 50)) &&
         (!('compactViewMode' in data) || data.compactViewMode is bool) &&
@@ -143,6 +143,8 @@ service cloud.firestore {
           'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
           'bannedUids', 'bannedServantEntries', 'dailyInviteToken', 'inviteCodeUpdatedAtMillis',
           'avatarBase64', 'avatarHash',
+          'customCardEnabled', 'customCardName', 'customCardPoints',
+          'customCardIcon', 'customCardColorKey', 'customCardFrequency',
           'createdAt', 'updatedAt'
         ]) &&
         data.inviteCode == groupId &&
@@ -165,6 +167,12 @@ service cloud.firestore {
         (!('inviteCodeUpdatedAtMillis' in data) || (data.inviteCodeUpdatedAtMillis is int && data.inviteCodeUpdatedAtMillis >= 0)) &&
         (!('avatarBase64' in data) || isOptionalString(data.avatarBase64, 360000)) &&
         (!('avatarHash' in data) || isOptionalString(data.avatarHash, 64)) &&
+        (!('customCardEnabled' in data) || data.customCardEnabled is bool) &&
+        (!('customCardName' in data) || isOptionalString(data.customCardName, 40)) &&
+        (!('customCardPoints' in data) || (data.customCardPoints is int && data.customCardPoints >= 0 && data.customCardPoints <= 100)) &&
+        (!('customCardIcon' in data) || isOptionalString(data.customCardIcon, 12)) &&
+        (!('customCardColorKey' in data) || isOptionalString(data.customCardColorKey, 24)) &&
+        (!('customCardFrequency' in data) || data.customCardFrequency in ['WEEKLY', 'MONTHLY', 'ONCE_EVER']) &&
         (!('createdAt' in data) || data.createdAt is timestamp) &&
         data.updatedAt is timestamp;
     }
@@ -268,7 +276,8 @@ service cloud.firestore {
              (cardType == 'PRAISE' && points == 10) ||
              (cardType == 'GOLD' && points == 20) ||
              (cardType == 'MEMORIZATION' && points == 6) ||
-             (cardType == 'CONFESSION' && points == 4);
+             (cardType == 'CONFESSION' && points == 4) ||
+             (cardType == 'CUSTOM_ELDER' && points is int && points >= 0 && points <= 100);
     }
 
     function isValidCardEvent(data, groupId) {
@@ -599,7 +608,9 @@ service cloud.firestore {
               'assistantAdminIds', 'bannedUids', 'bannedServantEntries',
               'dailyInviteToken', 'inviteCodeUpdatedAtMillis', 'name',
               'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
-              'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber'
+              'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
+              'customCardEnabled', 'customCardName', 'customCardPoints',
+              'customCardIcon', 'customCardColorKey', 'customCardFrequency'
             ]) &&
             (
               uid() in existing().memberUids ||

@@ -475,6 +475,7 @@ object LocalClassroomCache {
             put("name", g.name)
             put("adminId", g.adminId)
             put("adminName", g.adminName)
+            put("assistantAdminIds", JSONArray(g.assistantAdminIds))
             put("memberUids", JSONArray(g.memberUids))
             put("allowServantUndo", g.allowServantUndo)
             put("enforceWeeklyCardLimit", g.enforceWeeklyCardLimit)
@@ -487,6 +488,12 @@ object LocalClassroomCache {
             put("dailyInviteToken", g.dailyInviteToken)
             put("inviteCodeUpdatedAtMillis", g.inviteCodeUpdatedAtMillis)
             put("avatarHash", g.avatarHash)
+            put("customCardEnabled", g.customCardEnabled)
+            put("customCardName", g.customCardName)
+            put("customCardPoints", g.customCardPoints)
+            put("customCardIcon", g.customCardIcon)
+            put("customCardColorKey", g.customCardColorKey)
+            put("customCardFrequency", g.customCardFrequency)
         }
     }
 
@@ -503,6 +510,7 @@ object LocalClassroomCache {
             name = obj.optString("name", ""),
             adminId = obj.optString("adminId", ""),
             adminName = obj.optString("adminName", ""),
+            assistantAdminIds = jsonArrayToStringList(obj.optJSONArray("assistantAdminIds")),
             memberUids = jsonArrayToStringList(obj.optJSONArray("memberUids")),
             allowServantUndo = obj.optBoolean("allowServantUndo", true),
             enforceWeeklyCardLimit = obj.optBoolean("enforceWeeklyCardLimit", false),
@@ -515,7 +523,13 @@ object LocalClassroomCache {
             dailyInviteToken = obj.optString("dailyInviteToken", ""),
             inviteCodeUpdatedAtMillis = obj.optLong("inviteCodeUpdatedAtMillis", 0L),
             avatarBase64 = localAvatar,
-            avatarHash = obj.optString("avatarHash", "")
+            avatarHash = obj.optString("avatarHash", ""),
+            customCardEnabled = obj.optBoolean("customCardEnabled", false),
+            customCardName = obj.optString("customCardName", "كارت القمداء"),
+            customCardPoints = obj.optLong("customCardPoints", 15L),
+            customCardIcon = obj.optString("customCardIcon", "🏅"),
+            customCardColorKey = obj.optString("customCardColorKey", "GOLD"),
+            customCardFrequency = obj.optString("customCardFrequency", "WEEKLY")
         )
     }
 

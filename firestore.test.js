@@ -922,6 +922,115 @@ test("14. Primary Admin can appoint Assistant Admin with full admin permissions 
   );
 });
 
+test("17. Custom Elder Card (كارت القمداء): Admin/Assistant can configure, regular servant denied, CUSTOM_ELDER events validated (0..100 pts), and UserProfile supports 8 enabled cards", async () => {
+  await seedGroupWithMembers();
+  const now = new Date();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID).firestore();
+  const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
+  const adminGroupRef = adminDb.collection("groups").doc(GROUP_ID);
+  const servantGroupRef = servantDb.collection("groups").doc(GROUP_ID);
+
+  // Regular servant cannot configure customCard* fields
+  await assertFails(
+    servantGroupRef.update({
+      customCardEnabled: true,
+      customCardName: "كارت التميز",
+      customCardPoints: 25,
+      customCardIcon: "👑",
+      customCardColorKey: "GOLD",
+      customCardFrequency: "MONTHLY",
+      updatedAt: now,
+    })
+  );
+
+  // Admin can configure valid customCard* fields
+  await assertSucceeds(
+    adminGroupRef.update({
+      customCardEnabled: true,
+      customCardName: "كارت القمداء",
+      customCardPoints: 25,
+      customCardIcon: "👑",
+      customCardColorKey: "GOLD",
+      customCardFrequency: "ONCE_EVER",
+      updatedAt: now,
+    })
+  );
+
+  // Invalid frequency is rejected even for Admin
+  await assertFails(
+    adminGroupRef.update({
+      customCardFrequency: "DAILY",
+      updatedAt: now,
+    })
+  );
+
+  // Invalid points (> 100) is rejected
+  await assertFails(
+    adminGroupRef.update({
+      customCardPoints: 150,
+      updatedAt: now,
+    })
+  );
+
+  // Group member can create CUSTOM_ELDER cardEvent with points in 0..100
+  await assertSucceeds(
+    servantGroupRef.collection("cardEvents").doc("ev_custom_1").set({
+      groupId: GROUP_ID,
+      studentId: "stu_1",
+      studentName: "مارك",
+      cardType: "CUSTOM_ELDER",
+      points: 25,
+      servantId: SERVANT_UID,
+      servantName: "مايكل",
+      monthKey: "2026-11",
+      weekKey: "2026-11-W3",
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // CUSTOM_ELDER with points > 100 is rejected
+  await assertFails(
+    servantGroupRef.collection("cardEvents").doc("ev_custom_bad").set({
+      groupId: GROUP_ID,
+      studentId: "stu_1",
+      studentName: "مارك",
+      cardType: "CUSTOM_ELDER",
+      points: 101,
+      servantId: SERVANT_UID,
+      servantName: "مايكل",
+      monthKey: "2026-11",
+      weekKey: "2026-11-W3",
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // UserProfile accepts 8 enabled cards including CUSTOM_ELDER
+  await assertSucceeds(
+    adminDb.collection("users").doc(ADMIN_UID).set({
+      userId: ADMIN_UID,
+      displayName: "أمين الفصل",
+      email: "admin@example.com",
+      groupId: GROUP_ID,
+      enabledCards: [
+        "ATTENDANCE",
+        "QUIET",
+        "PARTICIPATION",
+        "PRAISE",
+        "GOLD",
+        "MEMORIZATION",
+        "CONFESSION",
+        "CUSTOM_ELDER",
+      ],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+});
+
 
 
 

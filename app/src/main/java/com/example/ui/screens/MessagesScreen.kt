@@ -2698,18 +2698,28 @@ private fun DaySeparatorChip(label: String) {
     }
 }
 
+private enum class ReportChildCategory {
+    ABSENT,
+    NO_CARD,
+    ISSUE
+}
+
 private data class ParsedAttendanceChildEntry(
     val student: Student,
     val studentNumber: Long,
     val studentName: String,
     val status: AttendanceStatus,
+    val category: ReportChildCategory = if (status == AttendanceStatus.ISSUE) ReportChildCategory.ISSUE else ReportChildCategory.ABSENT,
     val note: String = ""
 )
 
 private data class ParsedAttendanceChatReport(
     val servantName: String,
     val absentEntries: List<ParsedAttendanceChildEntry>,
-    val issueEntries: List<ParsedAttendanceChildEntry>
+    val noCardEntries: List<ParsedAttendanceChildEntry> = emptyList(),
+    val issueEntries: List<ParsedAttendanceChildEntry>,
+    val presentNames: List<String> = emptyList(),
+    val cardContextTitle: String = ""
 )
 
 private val LEGACY_ATTENDANCE_SPLIT_REGEX = Regex("""\s*[،,]\s*(?=[^()]*\(#\d+)""")
@@ -2741,14 +2751,36 @@ private fun parseAttendanceSystemMessage(
     val trimmed = rawText.trim()
     if (trimmed.isBlank()) return null
 
-    if (trimmed.startsWith(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX)) {
+    if (trimmed.startsWith(ChatMessage.ATTENDANCE_REPORT_V3_PREFIX) ||
+        trimmed.startsWith(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX)
+    ) {
         var servant = "خادم"
+        var cardContextTitle = ""
         val absent = mutableListOf<ParsedAttendanceChildEntry>()
+        val noCard = mutableListOf<ParsedAttendanceChildEntry>()
         val issue = mutableListOf<ParsedAttendanceChildEntry>()
+        val presentNames = mutableListOf<String>()
+
         for (line in trimmed.lineSequence()) {
             when {
                 line.startsWith("S|") -> {
                     servant = line.removePrefix("S|").trim().ifBlank { "خادم" }
+                }
+                line.startsWith("C|") -> {
+                    cardContextTitle = line.removePrefix("C|").trim()
+                }
+                line.startsWith("PL|") -> {
+                    val rawNames = line.removePrefix("PL|").trim()
+                    if (rawNames.isNotBlank()) {
+                        rawNames.split("•").map { it.trim() }.filter { it.isNotBlank() }.forEach {
+                            presentNames.add(it)
+                        }
+                    }
+                }
+                line.startsWith("P|") -> {
+                    val parts = line.split("|")
+                    val pName = parts.getOrNull(2)?.trim().orEmpty().ifBlank { parts.getOrNull(1)?.trim().orEmpty() }
+                    if (pName.isNotBlank()) presentNames.add(pName)
                 }
                 line.startsWith("A|") -> {
                     val parts = line.split("|")
@@ -2762,7 +2794,28 @@ private fun parseAttendanceSystemMessage(
                                 student = matched,
                                 studentNumber = if (sNum > 0L) sNum else matched.studentNumber,
                                 studentName = sName.ifBlank { matched.name },
-                                status = AttendanceStatus.ABSENT
+                                status = AttendanceStatus.ABSENT,
+                                category = ReportChildCategory.ABSENT
+                            )
+                        )
+                    }
+                }
+                line.startsWith("N|") -> {
+                    val parts = line.split("|")
+                    if (parts.size >= 4) {
+                        val sId = parts[1].trim()
+                        val sNum = parts[2].trim().toLongOrNull() ?: 0L
+                        val sName = parts[3].trim()
+                        val cardLabel = parts.getOrNull(4).orEmpty().trim()
+                        val matched = matchStudentForAttendanceReport(sId, sNum, sName, students)
+                        noCard.add(
+                            ParsedAttendanceChildEntry(
+                                student = matched,
+                                studentNumber = if (sNum > 0L) sNum else matched.studentNumber,
+                                studentName = sName.ifBlank { matched.name },
+                                status = AttendanceStatus.ABSENT,
+                                category = ReportChildCategory.NO_CARD,
+                                note = if (cardLabel.isNotBlank()) "بدون كارت $cardLabel" else "ما خدش كارت"
                             )
                         )
                     }
@@ -2781,6 +2834,7 @@ private fun parseAttendanceSystemMessage(
                                 studentNumber = if (sNum > 0L) sNum else matched.studentNumber,
                                 studentName = sName.ifBlank { matched.name },
                                 status = AttendanceStatus.ISSUE,
+                                category = ReportChildCategory.ISSUE,
                                 note = note
                             )
                         )
@@ -2788,11 +2842,14 @@ private fun parseAttendanceSystemMessage(
                 }
             }
         }
-        if (absent.isNotEmpty() || issue.isNotEmpty()) {
+        if (absent.isNotEmpty() || noCard.isNotEmpty() || issue.isNotEmpty() || presentNames.isNotEmpty()) {
             return ParsedAttendanceChatReport(
                 servantName = servant,
                 absentEntries = absent.sortedBy { it.studentNumber },
-                issueEntries = issue.sortedBy { it.studentNumber }
+                noCardEntries = noCard.sortedBy { it.studentNumber },
+                issueEntries = issue.sortedBy { it.studentNumber },
+                presentNames = presentNames.distinct(),
+                cardContextTitle = cardContextTitle
             )
         }
     }
@@ -2826,6 +2883,7 @@ private fun parseAttendanceSystemMessage(
                     studentNumber = if (num > 0L) num else matched.studentNumber,
                     studentName = name.ifBlank { matched.name },
                     status = if (isAbsentSeg) AttendanceStatus.ABSENT else AttendanceStatus.ISSUE,
+                    category = if (isAbsentSeg) ReportChildCategory.ABSENT else ReportChildCategory.ISSUE,
                     note = note
                 )
                 if (isAbsentSeg) absent.add(entry) else issue.add(entry)
@@ -3047,10 +3105,60 @@ private fun SystemMessageCenteredPill(
     }
 
     val extColors = LocalKamExtendedColors.current
-    val combinedEntries = remember(parsedReport) {
-        parsedReport.absentEntries + parsedReport.issueEntries
+    val combinedAlertEntries = remember(parsedReport) {
+        parsedReport.absentEntries + parsedReport.noCardEntries + parsedReport.issueEntries
     }
 
+    // Visual Style 1: Present-Only Compact Notification (names only in small font, no photo cards)
+    if (combinedAlertEntries.isEmpty() && parsedReport.presentNames.isNotEmpty()) {
+        Surface(
+            color = extColors.onlineGreen.copy(alpha = 0.09f),
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, extColors.onlineGreen.copy(alpha = 0.35f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp, horizontal = 8.dp)
+                .testTag("attendance_present_only_pill_${message.id}")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = if (parsedReport.cardContextTitle.isNotBlank()) {
+                            "✓ أخذوا كارت ${parsedReport.cardContextTitle} (${parsedReport.presentNames.size})"
+                        } else {
+                            "✓ الحاضرون (${parsedReport.presentNames.size})"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = extColors.onlineGreen
+                    )
+                    Text(
+                        text = "بواسطة ${parsedReport.servantName}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    text = parsedReport.presentNames.joinToString(" • "),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, lineHeight = 16.sp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f),
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+        return
+    }
+
+    // Visual Style 2: Prominent Alert Report (Photo + Name for Absent / No-Card / Issue) + Small-Font Present Names List
     Surface(
         color = extColors.offlineAmber.copy(alpha = 0.10f),
         shape = RoundedCornerShape(16.dp),
@@ -3073,7 +3181,11 @@ private fun SystemMessageCenteredPill(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "📋 تقرير تحضير الفصل",
+                    text = if (parsedReport.cardContextTitle.isNotBlank()) {
+                        "📋 متابعة كارت ${parsedReport.cardContextTitle}"
+                    } else {
+                        "📋 تقرير تحضير الفصل"
+                    },
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -3092,8 +3204,8 @@ private fun SystemMessageCenteredPill(
                 }
             }
 
-            // 3-Column Visual Photo Grid (Photo + Number & Name underneath every child)
-            val rows = remember(combinedEntries) { combinedEntries.chunked(3) }
+            // 3-Column Visual Photo Grid (Photo + Number & Name for Absent / No-Card / Issue)
+            val rows = remember(combinedAlertEntries) { combinedAlertEntries.chunked(3) }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (rowItems in rows) {
                     Row(
@@ -3101,14 +3213,16 @@ private fun SystemMessageCenteredPill(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         for (entry in rowItems) {
-                            val isAbsent = entry.status == AttendanceStatus.ABSENT
-                            val badgeColor = if (isAbsent) MaterialTheme.colorScheme.error else extColors.offlineAmber
-                            val badgeLabel = if (isAbsent) "غائب" else "مشكلة"
+                            val (badgeColor, badgeLabel) = when (entry.category) {
+                                ReportChildCategory.ABSENT -> MaterialTheme.colorScheme.error to "غائب"
+                                ReportChildCategory.NO_CARD -> MaterialTheme.colorScheme.tertiary to "ما خدش كارت"
+                                ReportChildCategory.ISSUE -> extColors.offlineAmber to "مشكلة"
+                            }
 
                             Surface(
                                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
                                 shape = RoundedCornerShape(14.dp),
-                                border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.45f)),
+                                border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.48f)),
                                 modifier = Modifier
                                     .weight(1f)
                                     .clickable { onInspectStudentPhoto(entry.student, entry.note) }
@@ -3130,11 +3244,11 @@ private fun SystemMessageCenteredPill(
                                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                             fontWeight = FontWeight.ExtraBold,
                                             color = badgeColor,
+                                            maxLines = 1,
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                                         )
                                     }
 
-                                    // Locally-cached student photo (no repeated network fetches!)
                                     StudentAvatarCircle(
                                         student = entry.student,
                                         blockAccent = badgeColor,
@@ -3172,7 +3286,7 @@ private fun SystemMessageCenteredPill(
                                         Text(
                                             text = entry.note,
                                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                            color = extColors.offlineAmber,
+                                            color = badgeColor,
                                             textAlign = TextAlign.Center,
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis
@@ -3188,9 +3302,41 @@ private fun SystemMessageCenteredPill(
                 }
             }
 
+            // Compact Small-Font Section: "اللي جه (الحاضرون)" inside the SAME report
+            if (parsedReport.presentNames.isNotEmpty()) {
+                Surface(
+                    color = extColors.onlineGreen.copy(alpha = 0.10f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, extColors.onlineGreen.copy(alpha = 0.32f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("report_present_names_strip_${message.id}")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text(
+                            text = "✓ اللي جه (${parsedReport.presentNames.size}):",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            fontWeight = FontWeight.ExtraBold,
+                            color = extColors.onlineGreen
+                        )
+                        Text(
+                            text = parsedReport.presentNames.joinToString(" • "),
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, lineHeight = 15.sp),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
             HorizontalDivider(color = extColors.offlineAmber.copy(alpha = 0.35f))
 
-            // Footer Summary: Exact Counts & Numbers of Absent & Issue Students Today
+            // Footer Summary: Exact Counts & Numbers of Absent, No-Card & Issue Students
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3201,37 +3347,57 @@ private fun SystemMessageCenteredPill(
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                val absentNumbers = parsedReport.absentEntries
-                    .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
-                    .joinToString("، ")
-                Text(
-                    text = if (parsedReport.absentEntries.isEmpty()) {
-                        "• غائب النهاردة: 0 أطفال"
-                    } else if (absentNumbers.isNotBlank()) {
-                        "• غائب النهاردة: ${parsedReport.absentEntries.size} — أرقامهم: $absentNumbers"
-                    } else {
-                        "• غائب النهاردة: ${parsedReport.absentEntries.size}"
-                    },
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.error
-                )
+                if (parsedReport.absentEntries.isNotEmpty() || parsedReport.noCardEntries.isEmpty()) {
+                    val absentNumbers = parsedReport.absentEntries
+                        .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
+                        .joinToString("، ")
+                    Text(
+                        text = if (parsedReport.absentEntries.isEmpty()) {
+                            "• غائب النهاردة: 0 أطفال"
+                        } else if (absentNumbers.isNotBlank()) {
+                            "• غائب النهاردة: ${parsedReport.absentEntries.size} — أرقامهم: $absentNumbers"
+                        } else {
+                            "• غائب النهاردة: ${parsedReport.absentEntries.size}"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
 
-                val issueNumbers = parsedReport.issueEntries
-                    .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
-                    .joinToString("، ")
-                Text(
-                    text = if (parsedReport.issueEntries.isEmpty()) {
-                        "• عندهم مشكلة النهاردة: 0 أطفال"
-                    } else if (issueNumbers.isNotBlank()) {
-                        "• عندهم مشكلة النهاردة: ${parsedReport.issueEntries.size} — أرقامهم: $issueNumbers"
-                    } else {
-                        "• عندهم مشكلة النهاردة: ${parsedReport.issueEntries.size}"
-                    },
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = extColors.offlineAmber
-                )
+                if (parsedReport.noCardEntries.isNotEmpty()) {
+                    val noCardNumbers = parsedReport.noCardEntries
+                        .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
+                        .joinToString("، ")
+                    Text(
+                        text = if (noCardNumbers.isNotBlank()) {
+                            "• ما خدوش كارت: ${parsedReport.noCardEntries.size} — أرقامهم: $noCardNumbers"
+                        } else {
+                            "• ما خدوش كارت: ${parsedReport.noCardEntries.size}"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+
+                if (parsedReport.issueEntries.isNotEmpty() || parsedReport.noCardEntries.isEmpty()) {
+                    val issueNumbers = parsedReport.issueEntries
+                        .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
+                        .joinToString("، ")
+                    Text(
+                        text = if (parsedReport.issueEntries.isEmpty()) {
+                            "• عندهم مشكلة النهاردة: 0 أطفال"
+                        } else if (issueNumbers.isNotBlank()) {
+                            "• عندهم مشكلة النهاردة: ${parsedReport.issueEntries.size} — أرقامهم: $issueNumbers"
+                        } else {
+                            "• عندهم مشكلة النهاردة: ${parsedReport.issueEntries.size}"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = extColors.offlineAmber
+                    )
+                }
             }
         }
     }

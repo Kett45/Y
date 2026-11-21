@@ -58,6 +58,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
@@ -68,6 +69,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Immutable
@@ -89,15 +91,19 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.BuildConfig
+import com.example.data.model.AttendanceStatus
 import com.example.data.model.BlockColorPreset
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
 import com.example.data.model.ChildNote
 import com.example.data.model.ChildNoteType
+import com.example.data.model.CustomCardConfig
 import com.example.data.model.NotificationCategory
 import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.model.ServantBlock
@@ -119,7 +125,7 @@ import com.example.ui.viewmodel.BulkImportLinePreview
 import com.example.ui.viewmodel.KamScreenState
 import com.example.util.KamPerformanceTracker
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     state: KamScreenState,
@@ -148,7 +154,9 @@ fun HomeScreen(
     onAddChildComment: (Student, String) -> Unit = { _, _ -> },
     onAddMemorizationNote: (Student, String, Boolean) -> Unit = { _, _, _ -> },
     onPostChildGroupNotification: (Student, NotificationCategory, String) -> Unit = { _, _, _ -> },
-    onDeleteChildNote: (ChildNote) -> Unit = {}
+    onDeleteChildNote: (ChildNote) -> Unit = {},
+    homeResetSignal: Int = 0,
+    onRefresh: () -> Unit = {}
 ) {
     val localCollapsedOverrides = remember { mutableStateMapOf<String, Boolean>() }
     var showLeaderboardExpanded by rememberSaveable { mutableStateOf(false) }
@@ -262,6 +270,25 @@ fun HomeScreen(
         }
     }
 
+    LaunchedEffect(homeResetSignal) {
+        if (homeResetSignal > 0) {
+            val wasInSubPage = showSmartAttendanceScreen || showLeaderboardExpanded
+            showSmartAttendanceScreen = false
+            showLeaderboardExpanded = false
+            showAddMenuDialog = false
+            showMonthWeekTreeDialog = false
+            studentForDetailsSheet = null
+            studentForMoveSheet = null
+            studentForQuickComment = null
+            studentForMemorizationSheet = null
+            if (!wasInSubPage) {
+                runCatching { listState.animateScrollToItem(0) }
+            }
+        }
+    }
+
+    val activeAttendanceByStudentId = state.activeWeekAttendanceByStudentId
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (showSmartAttendanceScreen) {
             SmartAttendanceScreen(
@@ -278,6 +305,11 @@ fun HomeScreen(
                 onOpenStudentDetails = { studentForDetailsSheet = it }
             )
         } else {
+            PullToRefreshBox(
+                isRefreshing = state.isRefreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize()
+            ) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -446,6 +478,8 @@ fun HomeScreen(
                                     monthPoints = state.pointsForStudentInDisplayedScope(student.id),
                                     enabledCardsMask = state.enabledCardsMask,
                                     packedCardCounts = state.packedCardCountsForStudent(student.id),
+                                    customCardConfig = state.customCardConfig,
+                                    attendanceStatus = activeAttendanceByStudentId[student.id]?.attendanceStatus,
                                     outerBorderColor = blockBorderColor,
                                     canMoveUp = idx > 0,
                                     canMoveDown = idx < blockStudents.lastIndex,
@@ -495,6 +529,8 @@ fun HomeScreen(
                                 enabledCardsMask = state.enabledCardsMask,
                                 monthPoints = state.pointsForStudentInDisplayedScope(student.id),
                                 packedCardCounts = state.packedCardCountsForStudent(student.id),
+                                customCardConfig = state.customCardConfig,
+                                attendanceStatus = activeAttendanceByStudentId[student.id]?.attendanceStatus,
                                 canMoveUp = idx > 0,
                                 canMoveDown = idx < unassignedStudents.lastIndex,
                                 onAwardCard = onHomeCardTapRemembered,
@@ -508,6 +544,7 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
             }
 
             // Compact Auto-Shrinking Floating Action Button isolated in its own composable so scrolling never recomposes HomeScreen
@@ -1584,6 +1621,8 @@ private fun UnassignedStudentLazyRow(
     enabledCardsMask: Int,
     monthPoints: Long,
     packedCardCounts: Long,
+    customCardConfig: CustomCardConfig = CustomCardConfig.DEFAULT,
+    attendanceStatus: AttendanceStatus? = null,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onAwardCard: (Student, CardType) -> Unit,
@@ -1618,6 +1657,8 @@ private fun UnassignedStudentLazyRow(
             monthPoints = monthPoints,
             enabledCardsMask = enabledCardsMask,
             packedCardCounts = packedCardCounts,
+            customCardConfig = customCardConfig,
+            attendanceStatus = attendanceStatus,
             outerBorderColor = null,
             canMoveUp = canMoveUp,
             canMoveDown = canMoveDown,
@@ -1667,6 +1708,59 @@ private val StudentRowCornerShape = RoundedCornerShape(14.dp)
 private val PointsPillCornerShape = RoundedCornerShape(8.dp)
 
 @Composable
+fun AttendanceIndicatorLamp(
+    status: AttendanceStatus?,
+    studentId: String,
+    modifier: Modifier = Modifier
+) {
+    val extColors = LocalKamExtendedColors.current
+    val errorColor = MaterialTheme.colorScheme.error
+    val neutralColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.32f)
+
+    val (coreColor, haloColor, label) = when (status) {
+        AttendanceStatus.PRESENT -> Triple(
+            extColors.onlineGreen,
+            extColors.onlineGreen.copy(alpha = 0.28f),
+            "حضر هذا الأسبوع"
+        )
+        AttendanceStatus.ABSENT, AttendanceStatus.ISSUE -> Triple(
+            errorColor,
+            errorColor.copy(alpha = 0.28f),
+            "لم يحضر هذا الأسبوع"
+        )
+        null -> Triple(
+            neutralColor,
+            neutralColor.copy(alpha = 0.14f),
+            "لم يُسجّل الحضور بعد"
+        )
+    }
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(16.dp)
+            .background(haloColor, CircleShape)
+            .semantics { contentDescription = label }
+            .testTag("attendance_lamp_$studentId")
+    ) {
+        Box(
+            modifier = Modifier
+                .size(9.dp)
+                .background(coreColor, CircleShape)
+                .border(
+                    width = 1.dp,
+                    color = if (status == null) {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                    } else {
+                        Color.White.copy(alpha = 0.55f)
+                    },
+                    shape = CircleShape
+                )
+        )
+    }
+}
+
+@Composable
 private fun StudentFastCardRow(
     student: Student,
     blockAccent: Color,
@@ -1675,6 +1769,8 @@ private fun StudentFastCardRow(
     monthPoints: Long,
     enabledCardsMask: Int,
     packedCardCounts: Long,
+    customCardConfig: CustomCardConfig = CustomCardConfig.DEFAULT,
+    attendanceStatus: AttendanceStatus? = null,
     outerBorderColor: Color? = null,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
@@ -1787,6 +1883,13 @@ private fun StudentFastCardRow(
             )
 
             Spacer(modifier = Modifier.width(10.dp))
+
+            AttendanceIndicatorLamp(
+                status = attendanceStatus,
+                studentId = student.id
+            )
+
+            Spacer(modifier = Modifier.width(7.dp))
 
             Text(
                 text = student.name,
@@ -1906,6 +2009,7 @@ private fun StudentFastCardRow(
             studentId = student.id,
             enabledCardsMask = enabledCardsMask,
             packedCardCounts = packedCardCounts,
+            customCardConfig = customCardConfig,
             tagPrefix = "card_btn",
             onCardClick = clickAwardCard
         )

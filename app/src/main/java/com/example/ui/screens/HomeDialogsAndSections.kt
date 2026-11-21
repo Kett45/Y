@@ -249,6 +249,11 @@ fun SearchResultsWithBlockOwnerSection(
                                             .weight(1f)
                                             .clickable { onOpenDetailsDialog(student) }
                                     )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    AttendanceIndicatorLamp(
+                                        status = state.activeWeekAttendanceByStudentId[student.id]?.attendanceStatus,
+                                        studentId = "search_${student.id}"
+                                    )
                                 }
 
                                 // Line 2: Number + Servant Owner Badge + Points Pill + Action Buttons
@@ -336,6 +341,7 @@ fun SearchResultsWithBlockOwnerSection(
                                     studentId = student.id,
                                     enabledCards = enabledCards,
                                     packedCardCounts = state.packedCardCountsForStudent(student.id),
+                                    customCardConfig = state.customCardConfig,
                                     tagPrefix = "search_card_btn",
                                     onCardClick = { card -> onAwardCard(student, card) }
                                 )

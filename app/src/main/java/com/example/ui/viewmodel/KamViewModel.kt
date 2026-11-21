@@ -13,11 +13,14 @@ import com.example.data.cache.CachedClassroomSnapshot
 import com.example.data.cache.LocalClassroomCache
 import com.example.data.cache.LocalUserPreferences
 import com.example.data.model.ArabicInitialsHelper
+import com.example.data.model.AttendanceRecord
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
 import com.example.data.model.ChatMessageType
 import com.example.data.model.ChildNote
 import com.example.data.model.ChildNoteType
+import com.example.data.model.CustomCardConfig
+import com.example.data.model.CustomCardFrequency
 import com.example.data.model.DuplicateCardAlert
 import com.example.data.model.DuplicateStudentNameGroup
 import com.example.data.model.Group
@@ -102,6 +105,7 @@ class PrecomputedClassroomIndices(
     val selectedWeekKey: String?,
     val dismissedDuplicateNames: Set<String>,
     val memberProfiles: List<ServantMemberProfile> = emptyList(),
+    val customCardEnabled: Boolean = false,
     private val reusedDuplicatesByName: List<DuplicateStudentNameGroup>? = null
 ) {
     val membersByUid: Map<String, ServantMemberProfile> by lazy(LazyThreadSafetyMode.PUBLICATION) {
@@ -113,7 +117,13 @@ class PrecomputedClassroomIndices(
     }
     val enabledCardTypes: List<CardType> by lazy(LazyThreadSafetyMode.PUBLICATION) {
         val ids = userProfile?.enabledCards ?: CardType.defaultEnabledIds
-        CardType.entries.filter { it.id in ids }
+        CardType.entries.filter { card ->
+            if (card == CardType.CUSTOM_ELDER) {
+                customCardEnabled
+            } else {
+                card.id in ids
+            }
+        }
     }
 
     val enabledCardsMask: Int by lazy(LazyThreadSafetyMode.PUBLICATION) {
@@ -270,7 +280,8 @@ class PrecomputedClassroomIndices(
         balList: List<MonthlyBalance>,
         weekKey: String?,
         dismissed: Set<String>,
-        members: List<ServantMemberProfile> = emptyList()
+        members: List<ServantMemberProfile> = emptyList(),
+        isCustomCardEnabled: Boolean = false
     ): Boolean {
         return userProfile === profile &&
             students === stuList &&
@@ -278,7 +289,8 @@ class PrecomputedClassroomIndices(
             monthlyBalances === balList &&
             selectedWeekKey == weekKey &&
             dismissedDuplicateNames === dismissed &&
-            memberProfiles === members
+            memberProfiles === members &&
+            customCardEnabled == isCustomCardEnabled
     }
 
     fun prewarmHomeEssential() {
@@ -321,11 +333,13 @@ data class KamScreenState(
     val allGroupMonthlyBalances: List<MonthlyBalance> = emptyList(),
     val invitations: List<Invitation> = emptyList(),
     val childNotes: List<ChildNote> = emptyList(),
+    val allAttendanceRecords: List<AttendanceRecord> = emptyList(),
     val selectedMonthKey: String = "",
     val selectedWeekKey: String? = null,
     val currentWeekKey: String = "",
     val searchQuery: String = "",
     val isOnline: Boolean = true,
+    val isRefreshing: Boolean = false,
     val hasPendingWrites: Boolean = false,
     val dismissedDuplicateNames: Set<String> = emptySet(),
     val previousGroupId: String = "",
@@ -336,8 +350,46 @@ data class KamScreenState(
     val ownAvatarHash: String = "",
     val precomputedIndices: PrecomputedClassroomIndices? = null
 ) {
+    val customCardConfig: CustomCardConfig
+        get() = group?.customCardConfig ?: CustomCardConfig.DEFAULT
+
+    val activeAttendanceWeekKey: String
+        get() = selectedWeekKey?.takeIf { it.isNotBlank() }
+            ?: currentWeekKey.ifBlank { SaturdayCalendarHelper.currentWeekKey() }
+
+    val activeWeekAttendanceByStudentId: Map<String, AttendanceRecord> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        if (allAttendanceRecords.isEmpty()) {
+            emptyMap()
+        } else {
+            val targetWeek = activeAttendanceWeekKey
+            allAttendanceRecords
+                .filter { it.weekKey == targetWeek }
+                .associateBy { it.studentId }
+        }
+    }
+
+    fun attendanceRecordsForSelection(
+        selectedMonthKeys: Set<String>,
+        selectedWeekKeys: Set<String>
+    ): List<AttendanceRecord> {
+        if (allAttendanceRecords.isEmpty()) return emptyList()
+        val targetMonths = selectedMonthKeys.filter { it.isNotBlank() }.toSet()
+        val targetWeeks = selectedWeekKeys.filter { it.isNotBlank() }.toSet()
+        val effectiveMonths = if (targetMonths.isEmpty() && targetWeeks.isEmpty()) {
+            setOf(selectedMonthKey.ifBlank { SaturdayCalendarHelper.currentYearMonth() })
+        } else {
+            targetMonths
+        }
+        return allAttendanceRecords.filter { rec ->
+            val wk = rec.weekKey.trim()
+            val mk = wk.substringBefore("-W", "")
+            (wk.isNotBlank() && wk in targetWeeks) || (mk.isNotBlank() && mk in effectiveMonths)
+        }
+    }
+
     private val indices: PrecomputedClassroomIndices by lazy(LazyThreadSafetyMode.PUBLICATION) {
         val existing = precomputedIndices
+        val isCustomEnabled = group?.customCardEnabled == true
         if (existing != null && existing.matchesState(
                 profile = userProfile,
                 stuList = students,
@@ -345,7 +397,8 @@ data class KamScreenState(
                 balList = monthlyBalances,
                 weekKey = selectedWeekKey,
                 dismissed = dismissedDuplicateNames,
-                members = memberProfiles
+                members = memberProfiles,
+                isCustomCardEnabled = isCustomEnabled
             )
         ) {
             existing
@@ -357,7 +410,8 @@ data class KamScreenState(
                 monthlyBalances = monthlyBalances,
                 selectedWeekKey = selectedWeekKey,
                 dismissedDuplicateNames = dismissedDuplicateNames,
-                memberProfiles = memberProfiles
+                memberProfiles = memberProfiles,
+                customCardEnabled = isCustomEnabled
             )
         }
     }
@@ -525,7 +579,7 @@ data class KamScreenState(
     }
 
     companion object {
-        const val ALL_CARDS_ENABLED_MASK: Int = 0x7F
+        const val ALL_CARDS_ENABLED_MASK: Int = 0xFF
 
         fun packEnabledCardsMask(cards: List<CardType>): Int {
             var mask = 0
@@ -615,8 +669,16 @@ data class KamScreenState(
             targetMonths
         }
         val allEvents = effectiveAllCardEvents
-        val activeCards = enabledCardTypes.ifEmpty { CardType.entries }
-        val cacheKey = "SEL|${effectiveMonths.joinToString(",")}|${targetWeeks.joinToString(",")}|${activeCards.size}|${allEvents.size}|${extraHistoricalEvents.size}|${students.size}"
+        val hasCustomElderEvents = allEvents.any { it.cardType == CardType.CUSTOM_ELDER.id } ||
+            extraHistoricalEvents.any { it.cardType == CardType.CUSTOM_ELDER.id }
+        val activeCards = buildList {
+            val base = enabledCardTypes.ifEmpty { CardType.entries.filter { it != CardType.CUSTOM_ELDER } }
+            addAll(base)
+            if ((customCardConfig.enabled || hasCustomElderEvents) && CardType.CUSTOM_ELDER !in this) {
+                add(CardType.CUSTOM_ELDER)
+            }
+        }
+        val cacheKey = "SEL|${effectiveMonths.joinToString(",")}|${targetWeeks.joinToString(",")}|${activeCards.size}|${allEvents.size}|${extraHistoricalEvents.size}|${students.size}|${customCardConfig.enabled}"
         indices.leaderboardCache[cacheKey]?.let { cached ->
             return cached
         }
@@ -729,6 +791,7 @@ class KamViewModel(
     private val _actionBanner = MutableStateFlow<String?>(null)
     private val _operationError = MutableStateFlow<String?>(null)
     private val _isBusy = MutableStateFlow(false)
+    private val _isRefreshing = MutableStateFlow(false)
     private val _dismissedDuplicateNames = MutableStateFlow<Set<String>>(emptySet())
     private val _previousGroupId = MutableStateFlow("")
 
@@ -1027,6 +1090,20 @@ class KamViewModel(
         }
     }
 
+    private val allAttendanceFlow: Flow<List<AttendanceRecord>> = activeGroupIdFlow.flatMapLatest { groupId ->
+        if (groupId.isBlank()) {
+            flowOf(emptyList())
+        } else {
+            repository.observeAllGroupAttendance(groupId)
+                .onStart { emit(emptyList()) }
+                .debounceSubsequentCloudEmissions(180L)
+                .catch { err ->
+                    Log.w(TAG, "Error observing group attendance", err)
+                    emit(emptyList())
+                }
+        }
+    }
+
     private val coreClassroomStateFlow: Flow<KamScreenState> = combine(
         combine(userProfileFlow, groupFlow, userGroupsFlow, blocksFlow, _localPrefsOverride) { profile, group, userGroups, blocks, localPrefs ->
             arrayOf<Any?>(profile, group, userGroups, blocks, localPrefs)
@@ -1073,7 +1150,13 @@ class KamViewModel(
                     showLeaderboard = optimisticGroupOverride.showLeaderboard,
                     autoStudentNumber = optimisticGroupOverride.autoStudentNumber,
                     avatarBase64 = optimisticGroupOverride.avatarBase64.ifBlank { base.avatarBase64 },
-                    avatarHash = optimisticGroupOverride.avatarHash.ifBlank { base.avatarHash }
+                    avatarHash = optimisticGroupOverride.avatarHash.ifBlank { base.avatarHash },
+                    customCardEnabled = optimisticGroupOverride.customCardEnabled,
+                    customCardName = optimisticGroupOverride.customCardName,
+                    customCardPoints = optimisticGroupOverride.customCardPoints,
+                    customCardIcon = optimisticGroupOverride.customCardIcon,
+                    customCardColorKey = optimisticGroupOverride.customCardColorKey,
+                    customCardFrequency = optimisticGroupOverride.customCardFrequency
                 )
             } else {
                 base
@@ -1389,6 +1472,7 @@ class KamViewModel(
             selectedWeekKey = selectedWeek,
             dismissedDuplicateNames = dismissedDuplicates,
             memberProfiles = effectiveMembers,
+            customCardEnabled = activeGroup?.customCardEnabled == true,
             reusedDuplicatesByName = reusableDuplicates
         ).also { indices ->
             indices.prewarmHomeEssential()
@@ -1482,11 +1566,11 @@ class KamViewModel(
 
     val uiState: StateFlow<KamScreenState> = combine(
         coreClassroomStateFlow,
-        _searchQuery,
-        isOnlineFlow,
-        hasPendingWritesFlow,
+        allAttendanceFlow,
+        combine(_searchQuery, _isRefreshing) { q, ref -> q to ref },
+        combine(isOnlineFlow, hasPendingWritesFlow) { online, pending -> online to pending },
         combine(_actionBanner, _operationError) { banner, error -> banner to error }
-    ) { coreState, searchQuery, isOnline, hasPendingWrites, (banner, error) ->
+    ) { coreState, attendanceRecords, (searchQuery, isRefreshing), (isOnline, hasPendingWrites), (banner, error) ->
         val activeGroup = coreState.group
         if (activeGroup != null && activeGroup.isUserAdmin(currentUserId) && isOnline && activeGroup.isDailyCodeExpired()) {
             val rotationKey = "${activeGroup.inviteCode}_${activeGroup.inviteCodeUpdatedAtMillis}"
@@ -1506,8 +1590,10 @@ class KamViewModel(
             isLoading = coreState.userProfile == null && resolvedError == null,
             errorMessage = resolvedError,
             actionBannerMessage = banner,
+            allAttendanceRecords = if (activeGroup == null) emptyList() else attendanceRecords,
             searchQuery = searchQuery,
             isOnline = isOnline,
+            isRefreshing = isRefreshing,
             hasPendingWrites = hasPendingWrites
         )
     }
@@ -2372,6 +2458,15 @@ class KamViewModel(
         KamPerformanceTracker.markCardTapStart(student.id, cardType.id)
         val state = uiState.value
         val group = state.group ?: return
+        val customConfig = group.customCardConfig
+        val cardTitle = cardType.displayTitle(customConfig)
+        val cardPoints = cardType.displayPoints(customConfig)
+
+        if (cardType == CardType.CUSTOM_ELDER && !customConfig.enabled) {
+            showBanner("كارت '$cardTitle' غير مفعّل حالياً من إعدادات الأمين")
+            return
+        }
+
         val activeWeekKey = state.selectedWeekKey?.takeIf { it.isNotBlank() }
             ?: SaturdayCalendarHelper.buildWeeksForMonth(
                 year = state.selectedMonthKey.substringBefore("-").toIntOrNull() ?: 2026,
@@ -2388,47 +2483,116 @@ class KamViewModel(
             return
         }
 
-        // If the SAME servant already recorded this card in the active week:
-        // Tapping it again toggles/undoes it back to the symbol (if allowed by group policy or Admin)
-        val existingBySameServant = state.cardEvents.firstOrNull {
-            it.studentId == student.id &&
-                it.cardType == cardType.id &&
-                it.weekKey == activeWeekKey &&
-                it.servantId == currentUserId
-        }
-        if (existingBySameServant != null) {
-            if (state.isAdmin || group.allowServantUndo) {
-                recentTapTimestamps[tapKey] = nowMs
-                undoCardEvent(existingBySameServant)
-                KamPerformanceTracker.markCardTapComplete(student.name, "${cardType.arabicTitle} (إلغاء)")
-            } else {
-                showBanner("تم تسجيل كارت '${cardType.arabicTitle}' لـ ${student.name} بالفعل هذا الأسبوع")
+        // Special frequency enforcement for CUSTOM_ELDER (WEEKLY / MONTHLY / ONCE_EVER)
+        if (cardType == CardType.CUSTOM_ELDER) {
+            val allStudentCustomEvents = state.effectiveAllCardEvents.filter {
+                it.studentId == student.id && it.cardType == CardType.CUSTOM_ELDER.id
             }
-            return
-        }
-
-        // Check strict weekly limit across all servants if enabled by Admin
-        if (group.enforceWeeklyCardLimit) {
-            val alreadyGivenThisWeek = state.cardEvents.any {
+            when (customConfig.frequency) {
+                CustomCardFrequency.WEEKLY -> {
+                    val ownInWeek = allStudentCustomEvents.firstOrNull {
+                        it.weekKey == activeWeekKey && it.servantId == currentUserId
+                    }
+                    if (ownInWeek != null) {
+                        if (state.isAdmin || group.allowServantUndo) {
+                            recentTapTimestamps[tapKey] = nowMs
+                            undoCardEvent(ownInWeek)
+                        } else {
+                            showBanner("تم تسجيل '$cardTitle' لـ ${student.name} بالفعل هذا الأسبوع")
+                        }
+                        return
+                    }
+                    val anyInWeek = allStudentCustomEvents.firstOrNull { it.weekKey == activeWeekKey }
+                    if (anyInWeek != null) {
+                        showBanner("تنبيه: '$cardTitle' يُعطى مرة واحدة في الأسبوع فقط، وقد حصل عليه ${student.name} بالفعل")
+                        return
+                    }
+                }
+                CustomCardFrequency.MONTHLY -> {
+                    val ownInMonth = allStudentCustomEvents.firstOrNull {
+                        it.monthKey == state.selectedMonthKey && it.servantId == currentUserId
+                    }
+                    if (ownInMonth != null) {
+                        if (state.isAdmin || group.allowServantUndo) {
+                            recentTapTimestamps[tapKey] = nowMs
+                            undoCardEvent(ownInMonth)
+                        } else {
+                            showBanner("تم تسجيل '$cardTitle' لـ ${student.name} بالفعل هذا الشهر")
+                        }
+                        return
+                    }
+                    val anyInMonth = allStudentCustomEvents.firstOrNull { it.monthKey == state.selectedMonthKey }
+                    if (anyInMonth != null) {
+                        showBanner("تنبيه: '$cardTitle' يُعطى مرة واحدة في الشهر فقط، وقد حصل عليه ${student.name} بالفعل هذا الشهر")
+                        return
+                    }
+                }
+                CustomCardFrequency.ONCE_EVER -> {
+                    val ownInCurrentWeek = allStudentCustomEvents.firstOrNull {
+                        it.weekKey == activeWeekKey && it.servantId == currentUserId
+                    }
+                    if (ownInCurrentWeek != null && (state.isAdmin || group.allowServantUndo)) {
+                        recentTapTimestamps[tapKey] = nowMs
+                        undoCardEvent(ownInCurrentWeek)
+                        return
+                    }
+                    if (allStudentCustomEvents.isNotEmpty()) {
+                        showBanner("تنبيه: '$cardTitle' يُعطى مرة واحدة فقط ولا يتكرر، وقد حصل عليه ${student.name} من قبل")
+                        return
+                    }
+                }
+            }
+        } else {
+            // If the SAME servant already recorded this standard card in the active week:
+            // Tapping it again toggles/undoes it back to the symbol (if allowed by group policy or Admin)
+            val existingBySameServant = state.cardEvents.firstOrNull {
                 it.studentId == student.id &&
                     it.cardType == cardType.id &&
-                    it.weekKey == activeWeekKey
+                    it.weekKey == activeWeekKey &&
+                    it.servantId == currentUserId
             }
-            if (alreadyGivenThisWeek) {
-                showBanner("تنبيه: كارت '${cardType.arabicTitle}' تم تسجيله بالفعل لـ ${student.name} هذا الأسبوع")
+            if (existingBySameServant != null) {
+                if (state.isAdmin || group.allowServantUndo) {
+                    recentTapTimestamps[tapKey] = nowMs
+                    undoCardEvent(existingBySameServant)
+                    KamPerformanceTracker.markCardTapComplete(student.name, "$cardTitle (إلغاء)")
+                } else {
+                    showBanner("تم تسجيل كارت '$cardTitle' لـ ${student.name} بالفعل هذا الأسبوع")
+                }
                 return
+            }
+
+            // Check strict weekly limit across all servants if enabled by Admin
+            if (group.enforceWeeklyCardLimit) {
+                val alreadyGivenThisWeek = state.cardEvents.any {
+                    it.studentId == student.id &&
+                        it.cardType == cardType.id &&
+                        it.weekKey == activeWeekKey
+                }
+                if (alreadyGivenThisWeek) {
+                    showBanner("تنبيه: كارت '$cardTitle' تم تسجيله بالفعل لـ ${student.name} هذا الأسبوع")
+                    return
+                }
             }
         }
 
         val currentPoints = state.pointsForStudentInSelectedMonth(student.id)
-        if (group.maxMonthlyPoints > 0L && currentPoints + cardType.points > group.maxMonthlyPoints) {
+        if (group.maxMonthlyPoints > 0L && currentPoints + cardPoints > group.maxMonthlyPoints) {
             showBanner("وصل ${student.name} للحد الأقصى الشهري للنقاط (${group.maxMonthlyPoints} نقطة)")
             return
         }
 
         recentTapTimestamps[tapKey] = nowMs
         val servantName = state.userProfile?.displayName?.ifBlank { initialDisplayName } ?: initialDisplayName
-        val slotKey = activeWeekKey
+        val slotKey = if (cardType == CardType.CUSTOM_ELDER) {
+            when (customConfig.frequency) {
+                CustomCardFrequency.WEEKLY -> activeWeekKey
+                CustomCardFrequency.MONTHLY -> state.selectedMonthKey
+                CustomCardFrequency.ONCE_EVER -> "ONCE"
+            }
+        } else {
+            activeWeekKey
+        }
         val currentEventsCount = state.eventsForStudent(student.id).size.toLong()
 
         // Check if another servant already gave this exact card in this week (for instant feedback if already synced)
@@ -2447,7 +2611,7 @@ class KamViewModel(
             studentId = student.id,
             studentName = student.name,
             cardType = cardType.id,
-            points = cardType.points.toLong(),
+            points = cardPoints.toLong(),
             servantId = currentUserId,
             servantName = servantName,
             monthKey = state.selectedMonthKey,
@@ -2458,7 +2622,7 @@ class KamViewModel(
         // Apply 0ms optimistic card addition before Firestore local cache round-trip
         _optimisticRemovedEventIds.update { it - deterministicEventId }
         _optimisticAddedEvents.update { it + (deterministicEventId to optimisticEvent) }
-        KamPerformanceTracker.markCardTapComplete(student.name, cardType.arabicTitle)
+        KamPerformanceTracker.markCardTapComplete(student.name, cardTitle)
 
         viewModelScope.launch {
             repository.awardCard(
@@ -2472,17 +2636,18 @@ class KamViewModel(
                 currentMonthPoints = currentPoints,
                 currentMonthEventsCount = currentEventsCount,
                 memberUids = group.memberUids,
-                waitForServerAck = false
+                waitForServerAck = false,
+                pointsOverride = if (cardType == CardType.CUSTOM_ELDER) cardPoints.toLong() else null
             ).onSuccess { savedId ->
                 _optimisticAddedEvents.update { (it - deterministicEventId) - savedId }
                 if (otherServantEvent != null) {
                     showBanner(
-                        "تنبيه: الطفل ${student.name} أخد كارت ${cardType.arabicTitle} مرتين: ${otherServantEvent.servantName} و$servantName"
+                        "تنبيه: الطفل ${student.name} أخد كارت $cardTitle مرتين: ${otherServantEvent.servantName} و$servantName"
                     )
                 } else if (!state.isOnline) {
-                    showBanner("+${cardType.points} (${cardType.arabicTitle}) لـ ${student.name} • محفوظ أوفلاين")
+                    showBanner("+$cardPoints ($cardTitle) لـ ${student.name} • محفوظ أوفلاين")
                 } else {
-                    showBanner("+${cardType.points} (${cardType.arabicTitle}) لـ ${student.name}")
+                    showBanner("+$cardPoints ($cardTitle) لـ ${student.name}")
                 }
             }.onFailure { err ->
                 _optimisticAddedEvents.update { it - deterministicEventId }
@@ -2619,6 +2784,91 @@ class KamViewModel(
                         "رفضت قاعدة البيانات التعديل (PERMISSION_DENIED) — يجب تحديث قواعد groups في Firebase Console"
                     else -> err.localizedMessage ?: "تعذر حفظ القاعدة في السحابة، تم إرجاع الحالة"
                 }
+            }
+        }
+    }
+
+    /**
+     * Updates the configurable custom extra card (كارت القمداء) settings for the group.
+     * Restricted to Primary Admin and Assistant Admins.
+     */
+    fun updateCustomCardSettings(config: CustomCardConfig) {
+        val group = uiState.value.group ?: return
+        if (!group.isUserAdmin(currentUserId)) {
+            _operationError.value = "تعديل إعدادات الكارت الإضافي متاح لأمين المجموعة أو مساعده فقط"
+            return
+        }
+        val cleanConfig = config.copy(
+            name = config.effectiveName.take(40),
+            points = config.effectivePoints,
+            icon = config.effectiveIcon.take(12),
+            colorKey = config.colorKey.trim().ifBlank { "GOLD" }
+        )
+        val seq = ++policyMutationSeq
+        _optimisticGroupPolicyOverride.value = group.copy(
+            customCardEnabled = cleanConfig.enabled,
+            customCardName = cleanConfig.name,
+            customCardPoints = cleanConfig.points.toLong(),
+            customCardIcon = cleanConfig.icon,
+            customCardColorKey = cleanConfig.colorKey,
+            customCardFrequency = cleanConfig.frequency.id
+        )
+
+        viewModelScope.launch {
+            repository.updateCustomCardSettings(
+                groupId = group.inviteCode,
+                config = cleanConfig
+            ).onSuccess {
+                val statusLabel = if (cleanConfig.enabled) {
+                    "تم حفظ وتفعيل '${cleanConfig.name}' (${cleanConfig.points} نقطة • ${cleanConfig.frequency.shortArabicLabel})"
+                } else {
+                    "تم حفظ إعدادات '${cleanConfig.name}' (متوقف حالياً)"
+                }
+                showBanner(statusLabel)
+                delay(600L)
+                if (policyMutationSeq == seq) {
+                    _optimisticGroupPolicyOverride.value = null
+                }
+            }.onFailure { err ->
+                if (policyMutationSeq == seq) {
+                    _optimisticGroupPolicyOverride.value = null
+                }
+                _operationError.value = err.localizedMessage ?: "تعذر حفظ إعدادات الكارت الإضافي"
+            }
+        }
+    }
+
+    /**
+     * Forces a full cloud refresh (`Source.SERVER`) for the active group so any changes made by
+     * other servants (cards, attendance, students, blocks, settings) sync immediately.
+     * Triggered by double-tapping the Home tab button or Pull-to-Refresh on Home.
+     */
+    fun forceFullCloudSync() {
+        if (_isRefreshing.value) return
+        val state = uiState.value
+        val groupId = state.group?.inviteCode.orEmpty()
+        if (!state.isOnline) {
+            showBanner("لا يوجد اتصال بالإنترنت — يتم عرض آخر بيانات محفوظة")
+            return
+        }
+        _isRefreshing.value = true
+        viewModelScope.launch {
+            try {
+                val result = kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                    repository.forceRefreshFromServer(
+                        groupId = groupId,
+                        userId = currentUserId
+                    )
+                }
+                if (result == null) {
+                    showBanner("استغرق الاتصال وقتاً أطول من المعتاد — تأكد من الشبكة")
+                } else if (result.isSuccess) {
+                    showBanner("تم تحديث ومزامنة البيانات مع باقي الخدام ✓")
+                } else {
+                    showBanner("تعذر المزامنة الآن — تأكد من اتصالك بالإنترنت")
+                }
+            } finally {
+                _isRefreshing.value = false
             }
         }
     }

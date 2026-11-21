@@ -84,7 +84,22 @@ object KamSemanticColors {
         }
     }
 
-    fun cardColor(cardType: CardType): Color {
+    fun cardColorByKey(colorKey: String): Color {
+        val ext = activeExtended
+        return when (colorKey.trim().uppercase()) {
+            "EMERALD" -> ext.cardAttendance
+            "SKY" -> ext.cardQuiet
+            "VIOLET" -> ext.cardParticipation
+            "INDIGO" -> ext.cardPraise
+            "GOLD" -> ext.cardGold
+            "TEAL" -> ext.cardMemorization
+            "ROSE" -> ext.cardConfession
+            "ORANGE" -> ext.blockOrange
+            else -> ext.cardGold
+        }
+    }
+
+    fun cardColor(cardType: CardType, customConfig: com.example.data.model.CustomCardConfig? = null): Color {
         val ext = activeExtended
         return when (cardType) {
             CardType.ATTENDANCE -> ext.cardAttendance
@@ -94,6 +109,7 @@ object KamSemanticColors {
             CardType.GOLD -> ext.cardGold
             CardType.MEMORIZATION -> ext.cardMemorization
             CardType.CONFESSION -> ext.cardConfession
+            CardType.CUSTOM_ELDER -> cardColorByKey(customConfig?.colorKey ?: cardType.colorKey)
         }
     }
 
