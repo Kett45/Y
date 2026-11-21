@@ -30,14 +30,27 @@ jobs:
       - name: Detect Whether APK Needs Rebuild
         id: detect
         run: |
-          CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD || true)
-          echo "Changed files in HEAD:"
-          echo "$CHANGED_FILES"
-          if echo "$CHANGED_FILES" | grep -q "^releases/kAM-Lite\.apk$"; then
-            echo "NEEDS_BUILD=false" >> "$GITHUB_OUTPUT"
-          elif echo "$CHANGED_FILES" | grep -qE "^(app/|build\.gradle\.kts|settings\.gradle\.kts|gradle/)"; then
+          CHANGED_IN_HEAD=$(git diff-tree --no-commit-id --name-only -r HEAD || true)
+          LAST_APK_COMMIT=$(git log -n 1 --format=%H -- releases/kAM-Lite.apk || true)
+          if [ -n "$LAST_APK_COMMIT" ]; then
+            CHANGED_SINCE_APK=$(git diff --name-only "$LAST_APK_COMMIT"..HEAD || true)
+          else
+            CHANGED_SINCE_APK="$CHANGED_IN_HEAD"
+          fi
+          GRADLE_VER_CODE=$(grep -oP 'propVersionCode\s*=.*:\s*\K[0-9]+' app/build.gradle.kts || echo "15")
+          MANIFEST_VER_CODE=$(grep -oP '"versionCode"\s*:\s*\K[0-9]+' releases/version.json 2>/dev/null || echo "0")
+          echo "Changed in HEAD:"
+          echo "$CHANGED_IN_HEAD"
+          echo "Changed since last APK commit ($LAST_APK_COMMIT):"
+          echo "$CHANGED_SINCE_APK"
+          echo "Gradle versionCode=$GRADLE_VER_CODE vs Manifest versionCode=$MANIFEST_VER_CODE"
+          if [ ! -f "releases/kAM-Lite.apk" ]; then
             echo "NEEDS_BUILD=true" >> "$GITHUB_OUTPUT"
-          elif [ ! -f "releases/kAM-Lite.apk" ]; then
+          elif echo "$CHANGED_IN_HEAD" | grep -q "^releases/kAM-Lite\.apk$" && [ "$GRADLE_VER_CODE" = "$MANIFEST_VER_CODE" ]; then
+            echo "NEEDS_BUILD=false" >> "$GITHUB_OUTPUT"
+          elif [ "$GRADLE_VER_CODE" != "$MANIFEST_VER_CODE" ]; then
+            echo "NEEDS_BUILD=true" >> "$GITHUB_OUTPUT"
+          elif echo "$CHANGED_SINCE_APK" | grep -qE "^(app/|build\.gradle\.kts|settings\.gradle\.kts|gradle/)"; then
             echo "NEEDS_BUILD=true" >> "$GITHUB_OUTPUT"
           else
             echo "NEEDS_BUILD=false" >> "$GITHUB_OUTPUT"
@@ -71,8 +84,8 @@ jobs:
           FORCE_FULL: ${{ github.event.inputs.requires_full_install || 'true' }}
         run: |
           mkdir -p releases
-          VERSION_NAME=$(grep -oP 'propVersionName\s*=.*"\K[^"]+' app/build.gradle.kts || echo "1.14")
-          VERSION_CODE=$(grep -oP 'propVersionCode\s*=.*:\s*\K[0-9]+' app/build.gradle.kts || echo "14")
+          VERSION_NAME=$(grep -oP 'propVersionName\s*=.*"\K[^"]+' app/build.gradle.kts || echo "1.15")
+          VERSION_CODE=$(grep -oP 'propVersionCode\s*=.*:\s*\K[0-9]+' app/build.gradle.kts || echo "15")
           MIN_DELTA_BASE=$((VERSION_CODE - 3))
           if [ "$MIN_DELTA_BASE" -lt 1 ]; then
             MIN_DELTA_BASE=1
@@ -119,10 +132,11 @@ jobs:
             "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v${VERSION_NAME} (${SHORT_SHA})",
             "latestApkDirectUrl": "${SINGLE_AUTO_URL}",
             "changedModules": [
-              "floating_animated_bottom_nav_bar",
-              "assistant_admin_full_permissions",
-              "admin_only_group_invite_code",
-              "in_app_apk_updater_redirect_and_installer_fix"
+              "home_double_tap_and_pull_to_refresh_cloud_sync",
+              "student_attendance_indicator_lamp",
+              "reports_multi_filters_and_period_summary",
+              "custom_elder_card_settings_and_analytics",
+              "differentiated_attendance_v3_chat_reports"
             ],
             "dynamicConfig": {
               "maxStudentsPerGroup": 150,

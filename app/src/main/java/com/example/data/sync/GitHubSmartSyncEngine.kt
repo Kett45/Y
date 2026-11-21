@@ -915,10 +915,12 @@ object GitHubSmartSyncEngine {
         val appContext = context.applicationContext
         val state = _syncState.value
 
+        val expectedApkSha256 = state.majorUpdatePrompt?.apkSha256?.trim().orEmpty()
+        val installedApkSha256 = getOrComputeInstalledApkSha256(appContext)
         val candidateUrls = listOf(
-            "https://github.com/$FIXED_GITHUB_REPO/releases/latest/download/kAM-Lite.apk",
             state.latestDirectApkUrl.ifBlank { defaultDirectApkUrl() },
-            "https://raw.githubusercontent.com/$FIXED_GITHUB_REPO/main/releases/kAM-Lite.apk"
+            "https://raw.githubusercontent.com/$FIXED_GITHUB_REPO/main/releases/kAM-Lite.apk",
+            "https://github.com/$FIXED_GITHUB_REPO/releases/latest/download/kAM-Lite.apk"
         ).distinct()
 
         _syncState.value = _syncState.value.copy(
@@ -931,22 +933,44 @@ object GitHubSmartSyncEngine {
         val tempFile = File(targetFile.parentFile, "$APK_UPDATE_FILENAME.tmp")
 
         var downloadedSuccess = false
+        var fallbackValidFileReady = false
         for (urlStr in candidateUrls) {
             if (tempFile.exists()) runCatching { tempFile.delete() }
             if (downloadApkFromCandidateUrl(urlStr, tempFile)) {
                 if (isValidApkFile(appContext, tempFile)) {
-                    if (targetFile.exists()) targetFile.delete()
-                    val renamed = tempFile.renameTo(targetFile)
-                    if (!renamed) {
-                        tempFile.copyTo(targetFile, overwrite = true)
-                        tempFile.delete()
+                    val candidateSha = computeFileSha256(tempFile)
+                    val matchesExpected = expectedApkSha256.length >= 16 &&
+                        candidateSha.equals(expectedApkSha256, ignoreCase = true)
+                    val isSameAsAlreadyInstalled = installedApkSha256.length >= 16 &&
+                        candidateSha.equals(installedApkSha256, ignoreCase = true)
+
+                    if (matchesExpected || expectedApkSha256.length < 16) {
+                        if (targetFile.exists()) targetFile.delete()
+                        val renamed = tempFile.renameTo(targetFile)
+                        if (!renamed) {
+                            tempFile.copyTo(targetFile, overwrite = true)
+                            tempFile.delete()
+                        }
+                        downloadedSuccess = true
+                        break
+                    } else if (!isSameAsAlreadyInstalled && !fallbackValidFileReady) {
+                        if (targetFile.exists()) targetFile.delete()
+                        val renamed = tempFile.renameTo(targetFile)
+                        if (!renamed) {
+                            tempFile.copyTo(targetFile, overwrite = true)
+                            tempFile.delete()
+                        }
+                        fallbackValidFileReady = true
+                    } else {
+                        runCatching { tempFile.delete() }
                     }
-                    downloadedSuccess = true
-                    break
                 } else {
                     runCatching { tempFile.delete() }
                 }
             }
+        }
+        if (!downloadedSuccess && fallbackValidFileReady && isValidApkFile(appContext, targetFile)) {
+            downloadedSuccess = true
         }
 
         if (downloadedSuccess && isValidApkFile(appContext, targetFile)) {

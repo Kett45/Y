@@ -20,8 +20,8 @@ android {
     applicationId = "com.aistudio.kamlite.rtyxqp"
     minSdk = 24
     targetSdk = 36
-    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 14
-    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.14"
+    val propVersionCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 15
+    val propVersionName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.15"
     val propGithubRepo = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
     val propEnableStrictMode = (project.findProperty("ENABLE_STRICT_MODE") as? String)?.toBoolean() ?: false
     versionCode = propVersionCode
@@ -115,8 +115,8 @@ tasks.register<Copy>("syncReleaseApk") {
   into(rootProject.layout.projectDirectory.dir("releases"))
   rename { "kAM-Lite.apk" }
 
-  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 14
-  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.14"
+  val verCode = (project.findProperty("APP_VERSION_CODE") as? String)?.toIntOrNull() ?: 15
+  val verName = (project.findProperty("APP_VERSION_NAME") as? String)?.takeIf { it.isNotBlank() } ?: "1.15"
   val repoSlug = (project.findProperty("GITHUB_REPO") as? String)?.takeIf { it.isNotBlank() } ?: "Kett45/Y"
   val releasesDir = rootProject.layout.projectDirectory.dir("releases").asFile
   val readmeFile = rootProject.layout.projectDirectory.file("README.md").asFile
@@ -157,7 +157,7 @@ tasks.register<Copy>("syncReleaseApk") {
         "updatedAt": "$nowIsoUtc",
         "apkDirectUrl": "$singleAutoUrl",
         "deltaSyncUrl": "$deltaUrl",
-        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): شريط تنقل سفلي عائم متحرك، تعيين مساعد أمين بكامل الصلاحيات، حماية كود الدعوة للأمين ومساعده، وإصلاح التحديث المباشر داخل التطبيق ($shortCommit)."
+        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): تحديث ومزامنة السحابة بالسحب والضغط المزدوج على الرئيسية، لمبة الحضور بجانب كل طفل، فلاتر التقارير المتعددة وملخص الفترة، كارت القمداء القابل للتخصيص، وتقارير المراسلة المتمايزة ($shortCommit)."
       }
       """.trimIndent() + "\n"
     )
@@ -171,13 +171,14 @@ tasks.register<Copy>("syncReleaseApk") {
         "commitSha": "$shortCommit",
         "apkSha256": "$apkSha256",
         "updatedAt": "$nowIsoUtc",
-        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): الشريط السفلي المتحرك، مساعد الأمين، وإصلاح التحديث المباشر",
+        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): تحديث الرئيسية، لمبة الحضور، تقارير متعددة وملخص الفترة، كارت القمداء، وإشعارات المراسلة المتمايزة",
         "latestApkDirectUrl": "$singleAutoUrl",
         "changedModules": [
-          "floating_animated_bottom_nav_bar",
-          "assistant_admin_full_permissions",
-          "admin_only_group_invite_code",
-          "in_app_apk_updater_redirect_and_installer_fix"
+          "home_double_tap_and_pull_to_refresh_cloud_sync",
+          "student_attendance_indicator_lamp",
+          "reports_multi_filters_and_period_summary",
+          "custom_elder_card_settings_and_analytics",
+          "differentiated_attendance_v3_chat_reports"
         ],
         "dynamicConfig": {
           "maxStudentsPerGroup": 150,
