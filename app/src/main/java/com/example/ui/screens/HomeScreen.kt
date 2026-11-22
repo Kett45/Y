@@ -161,7 +161,8 @@ fun HomeScreen(
     onPostChildGroupNotification: (Student, NotificationCategory, String) -> Unit = { _, _, _ -> },
     onDeleteChildNote: (ChildNote) -> Unit = {},
     homeResetSignal: Int = 0,
-    onRefresh: () -> Unit = {}
+    onRefresh: () -> Unit = {},
+    onSubPageActiveChange: (Boolean) -> Unit = {}
 ) {
     val localCollapsedOverrides = remember { mutableStateMapOf<String, Boolean>() }
     var showLeaderboardExpanded by rememberSaveable { mutableStateOf(false) }
@@ -302,15 +303,29 @@ fun HomeScreen(
         }
     }
 
+    val isAnyHomeSubPageOpen = showSmartAttendanceScreen || showLeaderboardExpanded
+    LaunchedEffect(isAnyHomeSubPageOpen) {
+        onSubPageActiveChange(isAnyHomeSubPageOpen)
+    }
+
     LaunchedEffect(homeResetSignal) {
         if (homeResetSignal > 0) {
             val wasInSubPage = showSmartAttendanceScreen || showLeaderboardExpanded
             showSmartAttendanceScreen = false
             showLeaderboardExpanded = false
             showAddMenuDialog = false
+            showAddStudentDialog = false
+            showBulkImportDialog = false
+            showAddBlockDialog = false
             showMonthWeekTreeDialog = false
+            showDuplicateAlertsDialog = false
+            showDuplicateNamesDialog = false
+            showOwnServantPhotoDialog = false
+            blockForAdminEditDialog = null
+            blockForCustomPhotoDialog = null
             studentForDetailsSheet = null
             studentForMoveSheet = null
+            studentForPhotoDialog = null
             studentForQuickComment = null
             studentForMemorizationSheet = null
             localSearchDraft = ""

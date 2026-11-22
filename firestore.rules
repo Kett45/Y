@@ -446,6 +446,21 @@ service cloud.firestore {
         newData.updatedAt is timestamp;
     }
 
+    function isValidLiveSystemReportUpdate(newData, oldData) {
+      return oldData.senderUid == uid() &&
+        oldData.type == 'SYSTEM' &&
+        oldData.isDeleted == false &&
+        newData.senderUid == oldData.senderUid &&
+        newData.senderName == oldData.senderName &&
+        newData.type == 'SYSTEM' &&
+        newData.isDeleted == false &&
+        (!('groupId' in oldData) || newData.groupId == oldData.groupId) &&
+        newData.createdAt == oldData.createdAt &&
+        newData.diff(oldData).affectedKeys().hasOnly(['text', 'updatedAt']) &&
+        newData.text is string && newData.text.size() > 0 && newData.text.size() <= 4000 &&
+        newData.updatedAt is timestamp;
+    }
+
     function isValidDmChatMeta(data, chatId) {
       return data.keys().hasAll([
           'participants', 'updatedAt'
@@ -762,7 +777,10 @@ service cloud.firestore {
         allow create: if isSignedIn() && isValidGroupChatMessageCreate(incoming(), groupId);
         allow update: if isSignedIn() &&
           (('memberUids' in existing() && uid() in existing().memberUids) || isGroupMember(groupId)) &&
-          isValidChatMessageSoftDelete(incoming(), existing());
+          (
+            isValidChatMessageSoftDelete(incoming(), existing()) ||
+            isValidLiveSystemReportUpdate(incoming(), existing())
+          );
         allow delete: if false;
       }
 

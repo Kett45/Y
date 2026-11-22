@@ -590,6 +590,7 @@ fun AuthenticatedKamApp(
         isInitialFrameSettled = true
     }
     var isBottomBarVisibleByScroll by rememberSaveable(sessionKey) { mutableStateOf(true) }
+    var isHomeSubPageActive by remember(sessionKey) { mutableStateOf(false) }
     var homeResetSignal by remember(sessionKey) { mutableStateOf(0) }
     var lastHomeTapTimeMs by remember(sessionKey) { mutableStateOf(0L) }
     LaunchedEffect(currentTab) {
@@ -630,7 +631,8 @@ fun AuthenticatedKamApp(
                     isBottomBarVisibleByScroll = true
                 }
             }
-            val showFloatingBottomBar = !isInsideActiveChatRoom && isBottomBarVisibleByScroll
+            val showFloatingBottomBar = !isInsideActiveChatRoom &&
+                (isBottomBarVisibleByScroll || (currentTab == KamBottomTab.HOME && isHomeSubPageActive))
             val visitationBottomPadding by animateDpAsState(
                 targetValue = if (showFloatingBottomBar) 82.dp else 0.dp,
                 animationSpec = tween(durationMillis = 200),
@@ -701,7 +703,11 @@ fun AuthenticatedKamApp(
                             onDeleteChildNote = viewModel::deleteChildNote,
                             onPostChildGroupNotification = viewModel::postChildGroupNotification,
                             homeResetSignal = homeResetSignal,
-                            onRefresh = viewModel::forceFullCloudSync
+                            onRefresh = viewModel::forceFullCloudSync,
+                            onSubPageActiveChange = { active ->
+                                isHomeSubPageActive = active
+                                isBottomBarVisibleByScroll = true
+                            }
                         )
                     }
 
@@ -723,6 +729,8 @@ fun AuthenticatedKamApp(
                             chatState = tabChatState,
                             memberProfiles = tabState.memberProfiles,
                             students = tabState.students,
+                            blocks = tabState.blocks,
+                            customCardConfig = tabState.customCardConfig,
                             currentUserId = user.uid,
                             mediaStorage = chatViewModel.mediaStorage,
                             onOpenGroupChat = chatViewModel::openGroupChat,

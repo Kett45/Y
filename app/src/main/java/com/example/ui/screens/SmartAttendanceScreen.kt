@@ -108,6 +108,7 @@ import com.example.data.repository.KamRepository
 import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalKamExtendedColors
+import android.widget.Toast
 import com.example.ui.viewmodel.KamScreenState
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CoroutineScope
@@ -116,6 +117,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 @Immutable
@@ -148,15 +150,87 @@ private data class PendingSystemChatEntry(
 
 private val attendanceIoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+private data class ParsedBaselineStatusMap(
+    val firstServantName: String,
+    val statusByStudentId: Map<String, Pair<ReportEventKind, String>>
+)
+
+private data class CrossServantDiffEntry(
+    val studentId: String,
+    val studentNumber: Long,
+    val studentName: String,
+    val firstStatusLabel: String,
+    val secondStatusLabel: String,
+    val note: String
+)
+
+private fun sanitizeReportField(raw: String): String =
+    raw.replace("|", " ").replace("\n", " ").replace("\r", " ").trim()
+
+private fun reportStatusArabicLabel(kind: ReportEventKind?, isCardReport: Boolean): String = when (kind) {
+    ReportEventKind.PRESENT -> if (isCardReport) "أخذ الكارت" else "حاضر"
+    ReportEventKind.ABSENT -> "غائب"
+    ReportEventKind.NO_CARD -> "ما خدش الكارت"
+    ReportEventKind.ISSUE -> "مشكلة"
+    null -> "غير مسجّل"
+}
+
+private fun parseBaselineAttendanceStatuses(rawText: String): ParsedBaselineStatusMap {
+    var firstServant = "الخادم الأول"
+    val statusMap = LinkedHashMap<String, Pair<ReportEventKind, String>>()
+    for (rawLine in rawText.lineSequence()) {
+        val line = rawLine.trim()
+        when {
+            line.startsWith("S|") -> {
+                firstServant = line.removePrefix("S|").trim().ifBlank { "الخادم الأول" }
+            }
+            line.startsWith("PID|") -> {
+                val ids = line.removePrefix("PID|").split(",").map { it.trim() }.filter { it.isNotBlank() }
+                for (id in ids) {
+                    statusMap[id] = ReportEventKind.PRESENT to ""
+                }
+            }
+            line.startsWith("A|") -> {
+                val parts = line.split("|")
+                val id = parts.getOrNull(1)?.trim().orEmpty()
+                if (id.isNotBlank()) statusMap[id] = ReportEventKind.ABSENT to ""
+            }
+            line.startsWith("N|") -> {
+                val parts = line.split("|")
+                val id = parts.getOrNull(1)?.trim().orEmpty()
+                val note = parts.getOrNull(4)?.trim().orEmpty()
+                if (id.isNotBlank()) statusMap[id] = ReportEventKind.NO_CARD to note
+            }
+            line.startsWith("I|") -> {
+                val parts = line.split("|")
+                val id = parts.getOrNull(1)?.trim().orEmpty()
+                val note = parts.getOrNull(4)?.trim().orEmpty()
+                if (id.isNotBlank()) statusMap[id] = ReportEventKind.ISSUE to note
+            }
+        }
+    }
+    return ParsedBaselineStatusMap(
+        firstServantName = firstServant,
+        statusByStudentId = statusMap
+    )
+}
+
 /**
- * Formats session attendance/card outcomes into `[ATTENDANCE_V3]` format:
- * - Present children: compact small-font list (`PL|name1 • name2 • ...`)
- * - Absent (`A|`), Did-not-take-card (`N|`), and Issue (`I|`) children: photo + name cards,
- *   always accompanied by the compact present names list (`PL|`) in the same report.
+ * Formats session attendance/card outcomes into `[ATTENDANCE_V3]` format with explicit
+ * report-type identification (`T|`, `TL|`, `IC|`, `CK|`, `W|`, `SU|`, `PID|`) so readers
+ * immediately know whether it is an Attendance report or a specific Card report, and a
+ * second servant can compute exact diffs against the first servant's baseline.
  */
 private fun formatMergedAttendanceSystemMessage(
+    weekKey: String,
+    reportTypeKey: String,
+    reportTypeLabel: String,
+    reportIcon: String,
+    reportColorKey: String,
+    servantUid: String,
     servantName: String,
     entries: Collection<PendingSystemChatEntry>,
+    presentStudentIds: List<String>,
     presentStudentNames: List<String>,
     cardContextTitle: String = ""
 ): String {
@@ -171,11 +245,12 @@ private fun formatMergedAttendanceSystemMessage(
         .filter { it.kind == ReportEventKind.ISSUE }
         .sortedBy { it.studentNumber }
 
-    fun sanitizeField(raw: String): String =
-        raw.replace("|", " ").replace("\n", " ").replace("\r", " ").trim()
-
     val cleanPresentNames = presentStudentNames
-        .map { sanitizeField(it) }
+        .map { sanitizeReportField(it) }
+        .filter { it.isNotBlank() }
+        .distinct()
+    val cleanPresentIds = presentStudentIds
+        .map { sanitizeReportField(it) }
         .filter { it.isNotBlank() }
         .distinct()
 
@@ -183,15 +258,17 @@ private fun formatMergedAttendanceSystemMessage(
         return ""
     }
 
-    val safeServant = sanitizeField(servantName).ifBlank { "خادم" }
-    val safeCardTitle = sanitizeField(cardContextTitle)
-    val headerTitle = if (safeCardTitle.isNotBlank()) {
-        "📋 متابعة كارت $safeCardTitle (بواسطة $safeServant)"
-    } else {
-        "📋 تحضير الفصل (بواسطة $safeServant)"
+    val safeServant = sanitizeReportField(servantName).ifBlank { "خادم" }
+    val safeCardTitle = sanitizeReportField(cardContextTitle)
+    val safeTypeLabel = sanitizeReportField(reportTypeLabel).ifBlank {
+        if (safeCardTitle.isNotBlank()) "كارت $safeCardTitle" else "الحضور"
     }
+    val safeIcon = sanitizeReportField(reportIcon).ifBlank { "📋" }
+    val headerTitle = "$safeIcon تقرير $safeTypeLabel (بواسطة $safeServant)"
     val summaryParts = buildList {
-        if (cleanPresentNames.isNotEmpty()) add("حاضر: ${cleanPresentNames.size}")
+        if (cleanPresentNames.isNotEmpty()) {
+            add(if (safeCardTitle.isNotBlank()) "أخذوا الكارت: ${cleanPresentNames.size}" else "حاضر: ${cleanPresentNames.size}")
+        }
         if (absentList.isNotEmpty()) add("غائب: ${absentList.size}")
         if (noCardList.isNotEmpty()) add("بدون كارت: ${noCardList.size}")
         if (issueList.isNotEmpty()) add("مشكلة: ${issueList.size}")
@@ -203,43 +280,120 @@ private fun formatMergedAttendanceSystemMessage(
     if (summaryParts.isNotEmpty()) {
         sb.append(" — ").append(summaryParts.joinToString(" | "))
     }
+    if (weekKey.isNotBlank()) {
+        sb.append('\n').append("W|").append(sanitizeReportField(weekKey))
+    }
+    sb.append('\n').append("T|").append(sanitizeReportField(reportTypeKey))
+    sb.append('\n').append("TL|").append(safeTypeLabel)
+    sb.append('\n').append("IC|").append(safeIcon)
+    if (reportColorKey.isNotBlank()) {
+        sb.append('\n').append("CK|").append(sanitizeReportField(reportColorKey))
+    }
     sb.append('\n').append("S|").append(safeServant)
+    if (servantUid.isNotBlank()) {
+        sb.append('\n').append("SU|").append(sanitizeReportField(servantUid))
+    }
     if (safeCardTitle.isNotBlank()) {
         sb.append('\n').append("C|").append(safeCardTitle)
     }
 
     val maxLen = ChatMessage.MAX_SYSTEM_TEXT_LENGTH
-    // Reserve space for the compact present names line so it is never dropped
+    val presentIdsLine = if (cleanPresentIds.isNotEmpty()) {
+        "\nPID|" + cleanPresentIds.joinToString(",")
+    } else {
+        ""
+    }
     val presentLine = if (cleanPresentNames.isNotEmpty()) {
         "\nPL|" + cleanPresentNames.joinToString(" • ")
     } else {
         ""
     }
-    val reservedForPresent = presentLine.length.coerceAtMost(900)
-    val bodyBudget = (maxLen - reservedForPresent).coerceAtLeast(400)
+    val reservedForPresent = (presentLine.length + presentIdsLine.length).coerceAtMost(1200)
+    val bodyBudget = (maxLen - reservedForPresent).coerceAtLeast(450)
 
     for (item in absentList) {
-        val line = "\nA|${sanitizeField(item.studentId)}|${item.studentNumber}|${sanitizeField(item.studentName)}"
+        val line = "\nA|${sanitizeReportField(item.studentId)}|${item.studentNumber}|${sanitizeReportField(item.studentName)}"
         if (sb.length + line.length <= bodyBudget) {
             sb.append(line)
         }
     }
     for (item in noCardList) {
-        val label = sanitizeField(item.cardLabel.ifBlank { safeCardTitle })
-        val line = "\nN|${sanitizeField(item.studentId)}|${item.studentNumber}|${sanitizeField(item.studentName)}|$label"
+        val label = sanitizeReportField(item.cardLabel.ifBlank { safeCardTitle })
+        val line = "\nN|${sanitizeReportField(item.studentId)}|${item.studentNumber}|${sanitizeReportField(item.studentName)}|$label"
         if (sb.length + line.length <= bodyBudget) {
             sb.append(line)
         }
     }
     for (item in issueList) {
-        val line = "\nI|${sanitizeField(item.studentId)}|${item.studentNumber}|${sanitizeField(item.studentName)}|${sanitizeField(item.note)}"
+        val line = "\nI|${sanitizeReportField(item.studentId)}|${item.studentNumber}|${sanitizeReportField(item.studentName)}|${sanitizeReportField(item.note)}"
         if (sb.length + line.length <= bodyBudget) {
             sb.append(line)
         }
     }
+    if (presentIdsLine.isNotEmpty() && sb.length + presentIdsLine.length <= maxLen - 20) {
+        sb.append(presentIdsLine)
+    }
     if (presentLine.isNotEmpty() && sb.length + 6 < maxLen) {
         val remaining = maxLen - sb.length
         sb.append(presentLine.take(remaining))
+    }
+    return sb.toString().take(maxLen)
+}
+
+/**
+ * Formats ONLY the differences between a second servant's report and the first servant's
+ * fixed baseline report for the same `(weekKey, reportTypeKey)`.
+ */
+private fun formatCrossServantDiffSystemMessage(
+    weekKey: String,
+    reportTypeKey: String,
+    reportTypeLabel: String,
+    reportIcon: String,
+    reportColorKey: String,
+    servantUid: String,
+    servantName: String,
+    firstServantName: String,
+    cardContextTitle: String,
+    diffs: List<CrossServantDiffEntry>
+): String {
+    if (diffs.isEmpty()) return ""
+    val safeServant = sanitizeReportField(servantName).ifBlank { "خادم" }
+    val safeFirst = sanitizeReportField(firstServantName).ifBlank { "الخادم الأول" }
+    val safeCardTitle = sanitizeReportField(cardContextTitle)
+    val safeTypeLabel = sanitizeReportField(reportTypeLabel).ifBlank {
+        if (safeCardTitle.isNotBlank()) "كارت $safeCardTitle" else "الحضور"
+    }
+    val safeIcon = sanitizeReportField(reportIcon).ifBlank { "📋" }
+
+    val sb = StringBuilder()
+    sb.append(ChatMessage.ATTENDANCE_REPORT_V3_PREFIX).append('\n')
+    sb.append("🔄 اختلافات تقرير ").append(safeTypeLabel)
+        .append(" (").append(safeServant).append(" عن ").append(safeFirst).append(")")
+        .append(" — ").append(diffs.size).append(" اختلاف")
+    if (weekKey.isNotBlank()) {
+        sb.append('\n').append("W|").append(sanitizeReportField(weekKey))
+    }
+    sb.append('\n').append("T|").append(sanitizeReportField(reportTypeKey))
+    sb.append('\n').append("TL|").append(safeTypeLabel)
+    sb.append('\n').append("IC|").append(safeIcon)
+    if (reportColorKey.isNotBlank()) {
+        sb.append('\n').append("CK|").append(sanitizeReportField(reportColorKey))
+    }
+    sb.append('\n').append("S|").append(safeServant)
+    if (servantUid.isNotBlank()) {
+        sb.append('\n').append("SU|").append(sanitizeReportField(servantUid))
+    }
+    if (safeCardTitle.isNotBlank()) {
+        sb.append('\n').append("C|").append(safeCardTitle)
+    }
+    sb.append('\n').append("DIFF|").append(safeFirst)
+
+    val maxLen = ChatMessage.MAX_SYSTEM_TEXT_LENGTH
+    for (diff in diffs.sortedBy { it.studentNumber }) {
+        val line = "\nD|${sanitizeReportField(diff.studentId)}|${diff.studentNumber}|${sanitizeReportField(diff.studentName)}|${sanitizeReportField(diff.firstStatusLabel)}|${sanitizeReportField(diff.secondStatusLabel)}|${sanitizeReportField(diff.note)}"
+        if (sb.length + line.length <= maxLen) {
+            sb.append(line)
+        }
     }
     return sb.toString().take(maxLen)
 }
@@ -438,32 +592,109 @@ fun SmartAttendanceScreen(
         val snapshotEntries = pendingChatEntries.values.toList()
         pendingChatEntries.clear()
 
-        // Collect all students known to be PRESENT in this week so the report always lists "مين اللي جه"
-        val presentNamesFromAttendance = orderedStudents
-            .filter { stu ->
-                recordsByStudentId[stu.id]?.attendanceStatus == AttendanceStatus.PRESENT
-            }
-            .map { it.name }
-        val presentNamesFromBatch = snapshotEntries
+        val activeCard = selectedCardType
+        val isCardReport = activeCard != null
+        val cardContextTitle = activeCard?.displayTitle(customCardConfig).orEmpty()
+        val reportTypeKey = if (activeCard == null) "ATTENDANCE" else "CARD:${activeCard.id}"
+        val reportTypeLabel = if (activeCard == null) {
+            "الحضور"
+        } else {
+            val cleanCardName = cardContextTitle.trim()
+            if (cleanCardName.startsWith("كارت")) cleanCardName else "كارت $cleanCardName"
+        }
+        val reportIcon = activeCard?.displaySymbol(customCardConfig) ?: "📋"
+        val reportColorKey = activeCard?.displayColorKey(customCardConfig) ?: "EMERALD"
+
+        // Collect all students known to be PRESENT in this mode for this week
+        val presentFromActiveRecords = orderedStudents.filter { stu ->
+            activeRecordsByStudentId[stu.id]?.attendanceStatus == AttendanceStatus.PRESENT
+        }
+        val presentBatchEntries = snapshotEntries
             .filter { it.kind == ReportEventKind.PRESENT }
             .sortedBy { it.studentNumber }
-            .map { it.studentName }
-        val combinedPresentNames = (presentNamesFromAttendance + presentNamesFromBatch).distinct()
+        val combinedPresentIds = (presentFromActiveRecords.map { it.id } + presentBatchEntries.map { it.studentId }).distinct()
+        val combinedPresentNames = (presentFromActiveRecords.map { it.name } + presentBatchEntries.map { it.studentName }).distinct()
 
-        val cardContextTitle = selectedCardType?.displayTitle(customCardConfig).orEmpty()
-        val messageText = formatMergedAttendanceSystemMessage(
-            servantName = servantDisplayName,
-            entries = snapshotEntries,
-            presentStudentNames = combinedPresentNames,
-            cardContextTitle = cardContextTitle
-        )
-        if (messageText.isBlank()) return
+        val appContext = context.applicationContext
+        val targetGroupId = groupId
+        val targetWeekKey = activeWeekKey
+        val targetServantName = servantDisplayName
+        val targetServantUid = currentUserId
+        val targetMembers = memberUids
+
         attendanceIoScope.launch {
+            val baselineMsg = chatRepository.findBaselineAttendanceReport(
+                groupId = targetGroupId,
+                weekKey = targetWeekKey,
+                reportTypeKey = reportTypeKey,
+                excludeSenderUid = targetServantUid
+            )
+
+            val messageTextToSend = if (baselineMsg != null) {
+                val baseline = parseBaselineAttendanceStatuses(baselineMsg.text)
+                val diffs = ArrayList<CrossServantDiffEntry>()
+                for (entry in snapshotEntries) {
+                    val basePair = baseline.statusByStudentId[entry.studentId]
+                    val baseKind = basePair?.first
+                    if (baseKind != entry.kind) {
+                        diffs.add(
+                            CrossServantDiffEntry(
+                                studentId = entry.studentId,
+                                studentNumber = entry.studentNumber,
+                                studentName = entry.studentName,
+                                firstStatusLabel = reportStatusArabicLabel(baseKind, isCardReport),
+                                secondStatusLabel = reportStatusArabicLabel(entry.kind, isCardReport),
+                                note = entry.note
+                            )
+                        )
+                    }
+                }
+
+                if (diffs.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(
+                            appContext,
+                            "✓ تقرير $reportTypeLabel مطابق تماماً لتقرير ${baseline.firstServantName} — لا توجد اختلافات للإرسال",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    return@launch
+                }
+
+                formatCrossServantDiffSystemMessage(
+                    weekKey = targetWeekKey,
+                    reportTypeKey = reportTypeKey,
+                    reportTypeLabel = reportTypeLabel,
+                    reportIcon = reportIcon,
+                    reportColorKey = reportColorKey,
+                    servantUid = targetServantUid,
+                    servantName = targetServantName,
+                    firstServantName = baseline.firstServantName,
+                    cardContextTitle = cardContextTitle,
+                    diffs = diffs
+                )
+            } else {
+                formatMergedAttendanceSystemMessage(
+                    weekKey = targetWeekKey,
+                    reportTypeKey = reportTypeKey,
+                    reportTypeLabel = reportTypeLabel,
+                    reportIcon = reportIcon,
+                    reportColorKey = reportColorKey,
+                    servantUid = targetServantUid,
+                    servantName = targetServantName,
+                    entries = snapshotEntries,
+                    presentStudentIds = combinedPresentIds,
+                    presentStudentNames = combinedPresentNames,
+                    cardContextTitle = cardContextTitle
+                )
+            }
+
+            if (messageTextToSend.isBlank()) return@launch
             chatRepository.sendGroupMessage(
-                groupId = groupId,
-                senderName = servantDisplayName,
-                text = messageText,
-                memberUids = memberUids,
+                groupId = targetGroupId,
+                senderName = targetServantName,
+                text = messageTextToSend,
+                memberUids = targetMembers,
                 type = ChatMessageType.SYSTEM,
                 waitForServerAck = false
             )

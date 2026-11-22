@@ -525,7 +525,7 @@ object LocalClassroomCache {
             avatarBase64 = localAvatar,
             avatarHash = obj.optString("avatarHash", ""),
             customCardEnabled = obj.optBoolean("customCardEnabled", false),
-            customCardName = obj.optString("customCardName", "كارت القمداء"),
+            customCardName = obj.optString("customCardName", ""),
             customCardPoints = obj.optLong("customCardPoints", 15L),
             customCardIcon = obj.optString("customCardIcon", "🏅"),
             customCardColorKey = obj.optString("customCardColorKey", "GOLD"),

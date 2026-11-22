@@ -103,11 +103,14 @@ import com.example.data.media.InlineFirestoreChatMediaStorageProvider
 import com.example.data.model.ActiveChatRoom
 import com.example.data.model.ArabicInitialsHelper
 import com.example.data.model.AttendanceStatus
+import com.example.data.model.CardType
 import com.example.data.model.ChatFormatHelper
 import com.example.data.model.ChatMessage
 import com.example.data.model.ChatMessageType
+import com.example.data.model.CustomCardConfig
 import com.example.data.model.DmChatMeta
 import com.example.data.model.NotificationCategory
+import com.example.data.model.ServantBlock
 import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
 import com.example.ui.components.ChatImageEditorDialog
@@ -156,6 +159,8 @@ fun MessagesScreen(
     chatState: ChatUiState,
     memberProfiles: List<ServantMemberProfile>,
     students: List<Student> = emptyList(),
+    blocks: List<ServantBlock> = emptyList(),
+    customCardConfig: CustomCardConfig = CustomCardConfig(),
     currentUserId: String,
     mediaStorage: ChatMediaStorageProvider = InlineFirestoreChatMediaStorageProvider,
     onOpenGroupChat: () -> Unit,
@@ -194,6 +199,8 @@ fun MessagesScreen(
                 chatState = chatState,
                 memberProfiles = memberProfiles,
                 students = students,
+                blocks = blocks,
+                customCardConfig = customCardConfig,
                 currentUserId = currentUserId,
                 mediaStorage = mediaStorage,
                 onBack = onCloseActiveChat,
@@ -1205,6 +1212,8 @@ private fun ChatConversationView(
     chatState: ChatUiState,
     memberProfiles: List<ServantMemberProfile>,
     students: List<Student>,
+    blocks: List<ServantBlock>,
+    customCardConfig: CustomCardConfig,
     currentUserId: String,
     mediaStorage: ChatMediaStorageProvider,
     onBack: () -> Unit,
@@ -1570,6 +1579,8 @@ private fun ChatConversationView(
                                     SystemMessageCenteredPill(
                                         message = msg,
                                         students = students,
+                                        blocks = blocks,
+                                        customCardConfig = customCardConfig,
                                         onInspectStudentPhoto = { stu, note ->
                                             inspectedAttendanceStudent = stu to note
                                         },
@@ -2716,7 +2727,8 @@ private fun DaySeparatorChip(label: String) {
 private enum class ReportChildCategory {
     ABSENT,
     NO_CARD,
-    ISSUE
+    ISSUE,
+    DIFF
 }
 
 private data class ParsedAttendanceChildEntry(
@@ -2725,7 +2737,9 @@ private data class ParsedAttendanceChildEntry(
     val studentName: String,
     val status: AttendanceStatus,
     val category: ReportChildCategory = if (status == AttendanceStatus.ISSUE) ReportChildCategory.ISSUE else ReportChildCategory.ABSENT,
-    val note: String = ""
+    val note: String = "",
+    val firstStatusLabel: String = "",
+    val secondStatusLabel: String = ""
 )
 
 private data class ParsedAttendanceChatReport(
@@ -2733,8 +2747,51 @@ private data class ParsedAttendanceChatReport(
     val absentEntries: List<ParsedAttendanceChildEntry>,
     val noCardEntries: List<ParsedAttendanceChildEntry> = emptyList(),
     val issueEntries: List<ParsedAttendanceChildEntry>,
+    val diffEntries: List<ParsedAttendanceChildEntry> = emptyList(),
     val presentNames: List<String> = emptyList(),
-    val cardContextTitle: String = ""
+    val cardContextTitle: String = "",
+    val reportTypeKey: String = "",
+    val reportTypeLabel: String = "",
+    val reportIcon: String = "",
+    val reportColorKey: String = "",
+    val diffAgainstServantName: String = ""
+)
+
+private enum class VisitationReportChildKind {
+    VISITED,
+    FOLLOWUP,
+    NOT_VISITED
+}
+
+private data class ParsedVisitationChildEntry(
+    val student: Student,
+    val studentNumber: Long,
+    val studentName: String,
+    val kind: VisitationReportChildKind,
+    val note: String = ""
+)
+
+private data class ParsedVisitationChatReport(
+    val servantName: String,
+    val scopeLabel: String,
+    val visitedEntries: List<ParsedVisitationChildEntry>,
+    val followupEntries: List<ParsedVisitationChildEntry>,
+    val notVisitedEntries: List<ParsedVisitationChildEntry>
+)
+
+private data class BlockGroupedSummaryLine(
+    val blockName: String,
+    val blockColorHex: String?,
+    val count: Int,
+    val numbersLabel: String
+)
+
+private data class ReportCategorySummarySection(
+    val title: String,
+    val accentColor: Color,
+    val totalCount: Int,
+    val blockLines: List<BlockGroupedSummaryLine>,
+    val emptyFallbackText: String = ""
 )
 
 private val LEGACY_ATTENDANCE_SPLIT_REGEX = Regex("""\s*[،,]\s*(?=[^()]*\(#\d+)""")
@@ -2759,6 +2816,144 @@ private fun matchStudentForAttendanceReport(
     )
 }
 
+private fun buildBlockGroupedLines(
+    entries: List<Pair<Student, Long>>,
+    blocks: List<ServantBlock>
+): List<BlockGroupedSummaryLine> {
+    if (entries.isEmpty()) return emptyList()
+    val sortedBlocks = blocks.sortedBy { it.sortOrder }
+    val validBlockIds = sortedBlocks.map { it.id }.toSet()
+    val grouped = entries.groupBy { (stu, _) ->
+        if (stu.blockId.isNotBlank() && stu.blockId in validBlockIds) stu.blockId else ""
+    }
+    val lines = mutableListOf<BlockGroupedSummaryLine>()
+    for (blk in sortedBlocks) {
+        val list = grouped[blk.id].orEmpty()
+        if (list.isNotEmpty()) {
+            val nums = list
+                .sortedBy { (_, num) -> num }
+                .map { (stu, num) ->
+                    if (num > 0L) "#$num" else stu.name.take(16)
+                }
+                .joinToString("، ")
+            lines.add(
+                BlockGroupedSummaryLine(
+                    blockName = "بلوك ${blk.servantName}",
+                    blockColorHex = blk.colorHex,
+                    count = list.size,
+                    numbersLabel = nums
+                )
+            )
+        }
+    }
+    val unassigned = grouped[""].orEmpty()
+    if (unassigned.isNotEmpty()) {
+        val nums = unassigned
+            .sortedBy { (_, num) -> num }
+            .map { (stu, num) ->
+                if (num > 0L) "#$num" else stu.name.take(16)
+            }
+            .joinToString("، ")
+        lines.add(
+            BlockGroupedSummaryLine(
+                blockName = "بدون بلوك",
+                blockColorHex = null,
+                count = unassigned.size,
+                numbersLabel = nums
+            )
+        )
+    }
+    return lines
+}
+
+private fun parseVisitationSystemMessage(
+    rawText: String,
+    students: List<Student>
+): ParsedVisitationChatReport? {
+    val trimmed = rawText.trim()
+    if (!trimmed.startsWith(ChatMessage.VISITATION_REPORT_V1_PREFIX)) return null
+
+    var servant = "خادم"
+    var scopeLabel = ""
+    val visited = mutableListOf<ParsedVisitationChildEntry>()
+    val followup = mutableListOf<ParsedVisitationChildEntry>()
+    val notVisited = mutableListOf<ParsedVisitationChildEntry>()
+
+    for (rawLine in trimmed.lineSequence()) {
+        val line = rawLine.trim()
+        when {
+            line.startsWith("S|") -> {
+                servant = line.removePrefix("S|").trim().ifBlank { "خادم" }
+            }
+            line.startsWith("B|") -> {
+                scopeLabel = line.removePrefix("B|").trim()
+            }
+            line.startsWith("V|") -> {
+                val parts = line.split("|")
+                if (parts.size >= 4) {
+                    val sId = parts[1].trim()
+                    val sNum = parts[2].trim().toLongOrNull() ?: 0L
+                    val sName = parts[3].trim()
+                    val matched = matchStudentForAttendanceReport(sId, sNum, sName, students)
+                    visited.add(
+                        ParsedVisitationChildEntry(
+                            student = matched,
+                            studentNumber = if (sNum > 0L) sNum else matched.studentNumber,
+                            studentName = sName.ifBlank { matched.name },
+                            kind = VisitationReportChildKind.VISITED
+                        )
+                    )
+                }
+            }
+            line.startsWith("F|") -> {
+                val parts = line.split("|")
+                if (parts.size >= 4) {
+                    val sId = parts[1].trim()
+                    val sNum = parts[2].trim().toLongOrNull() ?: 0L
+                    val sName = parts[3].trim()
+                    val note = parts.getOrNull(4).orEmpty().trim()
+                    val matched = matchStudentForAttendanceReport(sId, sNum, sName, students)
+                    followup.add(
+                        ParsedVisitationChildEntry(
+                            student = matched,
+                            studentNumber = if (sNum > 0L) sNum else matched.studentNumber,
+                            studentName = sName.ifBlank { matched.name },
+                            kind = VisitationReportChildKind.FOLLOWUP,
+                            note = note
+                        )
+                    )
+                }
+            }
+            line.startsWith("U|") -> {
+                val parts = line.split("|")
+                if (parts.size >= 4) {
+                    val sId = parts[1].trim()
+                    val sNum = parts[2].trim().toLongOrNull() ?: 0L
+                    val sName = parts[3].trim()
+                    val matched = matchStudentForAttendanceReport(sId, sNum, sName, students)
+                    notVisited.add(
+                        ParsedVisitationChildEntry(
+                            student = matched,
+                            studentNumber = if (sNum > 0L) sNum else matched.studentNumber,
+                            studentName = sName.ifBlank { matched.name },
+                            kind = VisitationReportChildKind.NOT_VISITED
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    if (visited.isEmpty() && followup.isEmpty() && notVisited.isEmpty()) return null
+    return ParsedVisitationChatReport(
+        servantName = servant,
+        scopeLabel = scopeLabel,
+        visitedEntries = visited.sortedBy { it.studentNumber },
+        followupEntries = followup.sortedBy { it.studentNumber },
+        notVisitedEntries = notVisited.sortedBy { it.studentNumber }
+    )
+}
+
 private fun parseAttendanceSystemMessage(
     rawText: String,
     students: List<Student>
@@ -2771,18 +2966,40 @@ private fun parseAttendanceSystemMessage(
     ) {
         var servant = "خادم"
         var cardContextTitle = ""
+        var reportTypeKey = ""
+        var reportTypeLabel = ""
+        var reportIcon = ""
+        var reportColorKey = ""
+        var diffAgainstServant = ""
         val absent = mutableListOf<ParsedAttendanceChildEntry>()
         val noCard = mutableListOf<ParsedAttendanceChildEntry>()
         val issue = mutableListOf<ParsedAttendanceChildEntry>()
+        val diffEntries = mutableListOf<ParsedAttendanceChildEntry>()
         val presentNames = mutableListOf<String>()
 
-        for (line in trimmed.lineSequence()) {
+        for (rawLine in trimmed.lineSequence()) {
+            val line = rawLine.trim()
             when {
                 line.startsWith("S|") -> {
                     servant = line.removePrefix("S|").trim().ifBlank { "خادم" }
                 }
                 line.startsWith("C|") -> {
                     cardContextTitle = line.removePrefix("C|").trim()
+                }
+                line.startsWith("T|") -> {
+                    reportTypeKey = line.removePrefix("T|").trim()
+                }
+                line.startsWith("TL|") -> {
+                    reportTypeLabel = line.removePrefix("TL|").trim()
+                }
+                line.startsWith("IC|") -> {
+                    reportIcon = line.removePrefix("IC|").trim()
+                }
+                line.startsWith("CK|") -> {
+                    reportColorKey = line.removePrefix("CK|").trim()
+                }
+                line.startsWith("DIFF|") -> {
+                    diffAgainstServant = line.removePrefix("DIFF|").trim()
                 }
                 line.startsWith("PL|") -> {
                     val rawNames = line.removePrefix("PL|").trim()
@@ -2796,6 +3013,30 @@ private fun parseAttendanceSystemMessage(
                     val parts = line.split("|")
                     val pName = parts.getOrNull(2)?.trim().orEmpty().ifBlank { parts.getOrNull(1)?.trim().orEmpty() }
                     if (pName.isNotBlank()) presentNames.add(pName)
+                }
+                line.startsWith("D|") -> {
+                    val parts = line.split("|")
+                    if (parts.size >= 6) {
+                        val sId = parts[1].trim()
+                        val sNum = parts[2].trim().toLongOrNull() ?: 0L
+                        val sName = parts[3].trim()
+                        val firstLbl = parts[4].trim()
+                        val secondLbl = parts[5].trim()
+                        val note = parts.getOrNull(6).orEmpty().trim()
+                        val matched = matchStudentForAttendanceReport(sId, sNum, sName, students)
+                        diffEntries.add(
+                            ParsedAttendanceChildEntry(
+                                student = matched,
+                                studentNumber = if (sNum > 0L) sNum else matched.studentNumber,
+                                studentName = sName.ifBlank { matched.name },
+                                status = AttendanceStatus.ISSUE,
+                                category = ReportChildCategory.DIFF,
+                                note = note,
+                                firstStatusLabel = firstLbl,
+                                secondStatusLabel = secondLbl
+                            )
+                        )
+                    }
                 }
                 line.startsWith("A|") -> {
                     val parts = line.split("|")
@@ -2857,14 +3098,20 @@ private fun parseAttendanceSystemMessage(
                 }
             }
         }
-        if (absent.isNotEmpty() || noCard.isNotEmpty() || issue.isNotEmpty() || presentNames.isNotEmpty()) {
+        if (absent.isNotEmpty() || noCard.isNotEmpty() || issue.isNotEmpty() || diffEntries.isNotEmpty() || presentNames.isNotEmpty()) {
             return ParsedAttendanceChatReport(
                 servantName = servant,
                 absentEntries = absent.sortedBy { it.studentNumber },
                 noCardEntries = noCard.sortedBy { it.studentNumber },
                 issueEntries = issue.sortedBy { it.studentNumber },
+                diffEntries = diffEntries.sortedBy { it.studentNumber },
                 presentNames = presentNames.distinct(),
-                cardContextTitle = cardContextTitle
+                cardContextTitle = cardContextTitle,
+                reportTypeKey = reportTypeKey,
+                reportTypeLabel = reportTypeLabel,
+                reportIcon = reportIcon,
+                reportColorKey = reportColorKey,
+                diffAgainstServantName = diffAgainstServant
             )
         }
     }
@@ -2908,7 +3155,11 @@ private fun parseAttendanceSystemMessage(
             return ParsedAttendanceChatReport(
                 servantName = servant,
                 absentEntries = absent.sortedBy { it.studentNumber },
-                issueEntries = issue.sortedBy { it.studentNumber }
+                issueEntries = issue.sortedBy { it.studentNumber },
+                reportTypeKey = "ATTENDANCE",
+                reportTypeLabel = "الحضور",
+                reportIcon = "📋",
+                reportColorKey = "EMERALD"
             )
         }
     }
@@ -2916,12 +3167,416 @@ private fun parseAttendanceSystemMessage(
 }
 
 @Composable
+private fun BlockGroupedNumbersFooter(
+    sections: List<ReportCategorySummarySection>,
+    grandTotalText: String,
+    grandTotalAccent: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        for (sec in sections) {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = if (sec.totalCount == 0 && sec.emptyFallbackText.isNotBlank()) {
+                        sec.emptyFallbackText
+                    } else {
+                        "• ${sec.title} (${sec.totalCount} طفل):"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = sec.accentColor
+                )
+                for (blkLine in sec.blockLines) {
+                    val blkColor = if (!blkLine.blockColorHex.isNullOrBlank()) {
+                        KamSemanticColors.blockColor(blkLine.blockColorHex)
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(blkColor)
+                        )
+                        Text(
+                            text = "${blkLine.blockName} (${blkLine.count}): ${blkLine.numbersLabel}",
+                            style = MaterialTheme.typography.labelSmall.copy(lineHeight = 16.sp),
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+
+        if (grandTotalText.isNotBlank()) {
+            HorizontalDivider(color = grandTotalAccent.copy(alpha = 0.25f))
+            Surface(
+                color = grandTotalAccent.copy(alpha = 0.13f),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = grandTotalText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = grandTotalAccent,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VisitationReportCard(
+    message: ChatMessage,
+    report: ParsedVisitationChatReport,
+    blocks: List<ServantBlock>,
+    onInspectStudentPhoto: (Student, String) -> Unit,
+    onRequestForward: () -> Unit
+) {
+    val extColors = LocalKamExtendedColors.current
+    val visitationAccent = KamSemanticColors.NotificationVisitation
+    val photoAlertEntries = remember(report) {
+        report.followupEntries + report.notVisitedEntries
+    }
+
+    val footerSections = remember(report, blocks, extColors) {
+        buildList {
+            if (report.followupEntries.isNotEmpty()) {
+                add(
+                    ReportCategorySummarySection(
+                        title = "عملوا مشكلة / يحتاجون متابعة",
+                        accentColor = extColors.offlineAmber,
+                        totalCount = report.followupEntries.size,
+                        blockLines = buildBlockGroupedLines(
+                            report.followupEntries.map { it.student to it.studentNumber },
+                            blocks
+                        )
+                    )
+                )
+            }
+            if (report.notVisitedEntries.isNotEmpty()) {
+                add(
+                    ReportCategorySummarySection(
+                        title = "لم يتم افتقادهم",
+                        accentColor = KamSemanticColors.NotificationAbsentIssue,
+                        totalCount = report.notVisitedEntries.size,
+                        blockLines = buildBlockGroupedLines(
+                            report.notVisitedEntries.map { it.student to it.studentNumber },
+                            blocks
+                        )
+                    )
+                )
+            }
+        }
+    }
+
+    val totalAlerts = photoAlertEntries.size
+    val totalAll = report.visitedEntries.size + totalAlerts
+    val grandTotalText = buildString {
+        append("المجموع الكلي: $totalAll طفل (تم افتقاده: ${report.visitedEntries.size}")
+        if (report.followupEntries.isNotEmpty()) append(" • متابعة/مشكلة: ${report.followupEntries.size}")
+        if (report.notVisitedEntries.isNotEmpty()) append(" • لم يُفتقد: ${report.notVisitedEntries.size}")
+        append(")")
+    }
+
+    Surface(
+        color = visitationAccent.copy(alpha = 0.11f),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.5.dp, visitationAccent.copy(alpha = 0.55f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp, horizontal = 6.dp)
+            .testTag("visitation_merged_report_card_${message.id}")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Header: Clear Visitation Badge + Scope + Servant + Forward
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Surface(
+                        color = visitationAccent,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            text = "🏠 تقرير الافتقاد",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                        )
+                    }
+                    if (report.scopeLabel.isNotBlank()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, visitationAccent.copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = report.scopeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "بواسطة ${report.servantName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onRequestForward,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("forward_message_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "إعادة توجيه التقرير",
+                            tint = visitationAccent,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
+            }
+
+            // TOP SECTION: Visited Children — Small Font Stacked Vertically One Under Another (NO photos)
+            if (report.visitedEntries.isNotEmpty()) {
+                Surface(
+                    color = extColors.onlineGreen.copy(alpha = 0.10f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, extColors.onlineGreen.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("visitation_visited_names_list_${message.id}")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = "✓ تم افتقادهم (${report.visitedEntries.size}):",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = extColors.onlineGreen
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        for (entry in report.visitedEntries) {
+                            val numPrefix = if (entry.studentNumber > 0L) "#${entry.studentNumber} — " else "• "
+                            Text(
+                                text = "$numPrefix${entry.studentName}",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                ),
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.90f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            // BOTTOM SECTION: Photo + Name Cards ONLY for Children with Problems/Follow-Up OR Not Visited
+            if (photoAlertEntries.isNotEmpty()) {
+                Text(
+                    text = "⚠️ يحتاجون متابعة / لم يتم افتقادهم (${photoAlertEntries.size}):",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.error
+                )
+                val rows = remember(photoAlertEntries) { photoAlertEntries.chunked(3) }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (rowItems in rows) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            for (entry in rowItems) {
+                                val (badgeColor, badgeLabel) = when (entry.kind) {
+                                    VisitationReportChildKind.FOLLOWUP -> extColors.offlineAmber to "متابعة / مشكلة"
+                                    VisitationReportChildKind.NOT_VISITED -> MaterialTheme.colorScheme.error to "لم يتم افتقاده"
+                                    VisitationReportChildKind.VISITED -> extColors.onlineGreen to "تم افتقاده"
+                                }
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.50f)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { onInspectStudentPhoto(entry.student, entry.note) }
+                                        .testTag("visitation_alert_card_${entry.student.id}")
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 6.dp, vertical = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Surface(
+                                            color = badgeColor.copy(alpha = 0.16f),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = badgeLabel,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = badgeColor,
+                                                maxLines = 1,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                        StudentAvatarCircle(
+                                            student = entry.student,
+                                            blockAccent = badgeColor,
+                                            size = 62.dp,
+                                            onClick = { onInspectStudentPhoto(entry.student, entry.note) },
+                                            testTag = "visitation_alert_avatar_${entry.student.id}"
+                                        )
+                                        if (entry.studentNumber > 0L) {
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.primaryContainer,
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = "#${entry.studentNumber}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = entry.studentName,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (entry.note.isNotBlank()) {
+                                            Text(
+                                                text = entry.note,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                                color = badgeColor,
+                                                textAlign = TextAlign.Center,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            repeat(3 - rowItems.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Block-grouped Footer + Grand Total
+            BlockGroupedNumbersFooter(
+                sections = footerSections,
+                grandTotalText = grandTotalText,
+                grandTotalAccent = visitationAccent
+            )
+
+            // Timestamp footer
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    text = ChatFormatHelper.formatMessageTime(message.effectiveTimeMillis),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SystemMessageCenteredPill(
     message: ChatMessage,
     students: List<Student>,
+    blocks: List<ServantBlock> = emptyList(),
+    customCardConfig: CustomCardConfig = CustomCardConfig(),
     onInspectStudentPhoto: (Student, String) -> Unit,
     onRequestForward: () -> Unit = {}
 ) {
+    // 1. Check Merged Live Visitation Report ([VISITATION_V1]) first
+    val parsedVisitationReport = remember(message.displayText, students) {
+        if (message.isDeleted) null else parseVisitationSystemMessage(message.displayText, students)
+    }
+    if (parsedVisitationReport != null) {
+        VisitationReportCard(
+            message = message,
+            report = parsedVisitationReport,
+            blocks = blocks,
+            onInspectStudentPhoto = onInspectStudentPhoto,
+            onRequestForward = onRequestForward
+        )
+        return
+    }
+
+    // 2. Check Attendance / Card / Cross-Servant Diff Report ([ATTENDANCE_V3] / [ATTENDANCE_V2] / Legacy)
     val parsedReport = remember(message.displayText, students) {
         if (message.isDeleted) null else parseAttendanceSystemMessage(message.displayText, students)
     }
@@ -3120,16 +3775,265 @@ private fun SystemMessageCenteredPill(
     }
 
     val extColors = LocalKamExtendedColors.current
+
+    // Resolve explicit Report Type Badge (Attendance vs Specific Card) with exact icon & color
+    val resolvedCardType = remember(parsedReport.reportTypeKey) {
+        if (parsedReport.reportTypeKey.startsWith("CARD:")) {
+            CardType.fromId(parsedReport.reportTypeKey.removePrefix("CARD:"))
+        } else {
+            null
+        }
+    }
+    val isCardReport = resolvedCardType != null ||
+        parsedReport.cardContextTitle.isNotBlank() ||
+        parsedReport.noCardEntries.isNotEmpty()
+    val effectiveTypeLabel = remember(parsedReport, resolvedCardType, customCardConfig) {
+        when {
+            parsedReport.reportTypeLabel.isNotBlank() -> parsedReport.reportTypeLabel
+            resolvedCardType != null -> {
+                val t = resolvedCardType.displayTitle(customCardConfig).trim()
+                if (t.startsWith("كارت")) t else "كارت $t"
+            }
+            parsedReport.cardContextTitle.isNotBlank() -> {
+                val t = parsedReport.cardContextTitle.trim()
+                if (t.startsWith("كارت")) t else "كارت $t"
+            }
+            else -> "الحضور"
+        }
+    }
+    val effectiveIcon = remember(parsedReport, resolvedCardType, customCardConfig) {
+        parsedReport.reportIcon.ifBlank {
+            resolvedCardType?.displaySymbol(customCardConfig) ?: if (isCardReport) "⭐" else "📋"
+        }
+    }
+    val reportHeaderColor = remember(parsedReport.reportColorKey, resolvedCardType, customCardConfig, isCardReport, extColors) {
+        when {
+            parsedReport.reportColorKey.isNotBlank() -> KamSemanticColors.cardColorByKey(parsedReport.reportColorKey)
+            resolvedCardType != null -> KamSemanticColors.cardColor(resolvedCardType, customCardConfig)
+            isCardReport -> extColors.cardGold
+            else -> extColors.cardAttendance
+        }
+    }
+
+    // Visual Style 0: Cross-Servant Diff Report (ONLY differences compared to Servant A's fixed baseline)
+    if (parsedReport.diffAgainstServantName.isNotBlank() && parsedReport.diffEntries.isNotEmpty()) {
+        val diffAccent = KamSemanticColors.NotificationCardConflict
+        val diffFooterSections = remember(parsedReport.diffEntries, blocks, diffAccent) {
+            listOf(
+                ReportCategorySummarySection(
+                    title = "الاختلافات حسب البلوك",
+                    accentColor = diffAccent,
+                    totalCount = parsedReport.diffEntries.size,
+                    blockLines = buildBlockGroupedLines(
+                        parsedReport.diffEntries.map { it.student to it.studentNumber },
+                        blocks
+                    )
+                )
+            )
+        }
+        Surface(
+            color = diffAccent.copy(alpha = 0.11f),
+            shape = RoundedCornerShape(18.dp),
+            border = BorderStroke(1.5.dp, diffAccent.copy(alpha = 0.62f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp, horizontal = 6.dp)
+                .testTag("attendance_diff_report_card_${message.id}")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Surface(
+                        color = diffAccent,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            text = "🔄 اختلافات تقرير $effectiveTypeLabel",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onRequestForward,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("forward_message_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "إعادة توجيه التقرير",
+                            tint = diffAccent,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
+
+                // Clear comparison banner: Servant B vs Servant A (baseline)
+                Surface(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, diffAccent.copy(alpha = 0.38f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "$effectiveIcon تقرير ${parsedReport.servantName} يختلف عن تقرير ${parsedReport.diffAgainstServantName} في ${parsedReport.diffEntries.size} طفل:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+
+                // 3-Column Photo Grid for Differing Children
+                val diffRows = remember(parsedReport.diffEntries) { parsedReport.diffEntries.chunked(3) }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (rowItems in diffRows) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            for (entry in rowItems) {
+                                val diffSummaryText = buildString {
+                                    append("عند ${parsedReport.diffAgainstServantName}: ${entry.firstStatusLabel}\n")
+                                    append("عند ${parsedReport.servantName}: ${entry.secondStatusLabel}")
+                                    if (entry.note.isNotBlank()) append("\nملاحظة: ${entry.note}")
+                                }
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = BorderStroke(1.dp, diffAccent.copy(alpha = 0.55f)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { onInspectStudentPhoto(entry.student, diffSummaryText) }
+                                        .testTag("diff_child_card_${entry.student.id}")
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 6.dp, vertical = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Surface(
+                                            color = diffAccent.copy(alpha = 0.16f),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "اختلاف",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = diffAccent,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                        StudentAvatarCircle(
+                                            student = entry.student,
+                                            blockAccent = diffAccent,
+                                            size = 60.dp,
+                                            onClick = { onInspectStudentPhoto(entry.student, diffSummaryText) },
+                                            testTag = "diff_child_avatar_${entry.student.id}"
+                                        )
+                                        if (entry.studentNumber > 0L) {
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.primaryContainer,
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = "#${entry.studentNumber}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = entry.studentName,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Surface(
+                                            color = diffAccent.copy(alpha = 0.11f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                Text(
+                                                    text = "${parsedReport.diffAgainstServantName}: ${entry.firstStatusLabel}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    textAlign = TextAlign.Center,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    text = "← ${parsedReport.servantName}: ${entry.secondStatusLabel}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = diffAccent,
+                                                    textAlign = TextAlign.Center,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                        if (entry.note.isNotBlank()) {
+                                            Text(
+                                                text = entry.note,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                                color = extColors.offlineAmber,
+                                                textAlign = TextAlign.Center,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            repeat(3 - rowItems.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+
+                BlockGroupedNumbersFooter(
+                    sections = diffFooterSections,
+                    grandTotalText = "المجموع الكلي للاختلافات: ${parsedReport.diffEntries.size} طفل",
+                    grandTotalAccent = diffAccent
+                )
+            }
+        }
+        return
+    }
+
     val combinedAlertEntries = remember(parsedReport) {
         parsedReport.absentEntries + parsedReport.noCardEntries + parsedReport.issueEntries
     }
 
-    // Visual Style 1: Present-Only Compact Notification (names only in small font, no photo cards)
+    // Visual Style 1: Present-Only Compact Notification (explicit Report Type Header + small-font names only, no photo cards)
     if (combinedAlertEntries.isEmpty() && parsedReport.presentNames.isNotEmpty()) {
         Surface(
-            color = extColors.onlineGreen.copy(alpha = 0.09f),
-            shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, extColors.onlineGreen.copy(alpha = 0.35f)),
+            color = reportHeaderColor.copy(alpha = 0.09f),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.2.dp, reportHeaderColor.copy(alpha = 0.45f)),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 4.dp, horizontal = 8.dp)
@@ -3138,30 +4042,43 @@ private fun SystemMessageCenteredPill(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = if (parsedReport.cardContextTitle.isNotBlank()) {
-                            "✓ أخذوا كارت ${parsedReport.cardContextTitle} (${parsedReport.presentNames.size})"
-                        } else {
-                            "✓ الحاضرون (${parsedReport.presentNames.size})"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = extColors.onlineGreen
-                    )
+                    Surface(
+                        color = reportHeaderColor,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "$effectiveIcon تقرير $effectiveTypeLabel",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
                     Text(
                         text = "بواسطة ${parsedReport.servantName}",
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Bold
                     )
                 }
+                Text(
+                    text = if (isCardReport) {
+                        "✓ أخذوا $effectiveTypeLabel (${parsedReport.presentNames.size} طفل):"
+                    } else {
+                        "✓ الحاضرون (${parsedReport.presentNames.size} طفل):"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = extColors.onlineGreen
+                )
                 Text(
                     text = parsedReport.presentNames.joinToString(" • "),
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, lineHeight = 16.sp),
@@ -3173,11 +4090,80 @@ private fun SystemMessageCenteredPill(
         return
     }
 
-    // Visual Style 2: Prominent Alert Report (Photo + Name for Absent / No-Card / Issue) + Small-Font Present Names List
+    // Visual Style 2: Prominent Alert Report (Explicit Report Type Header + Photo Cards + Compact Present List + Block-Grouped Footer & Grand Total)
+    val errorColor = MaterialTheme.colorScheme.error
+    val tertiaryColor = MaterialTheme.colorScheme.tertiary
+    val alertFooterSections = remember(parsedReport, blocks, errorColor, tertiaryColor, extColors, isCardReport, effectiveTypeLabel) {
+        buildList {
+            if (parsedReport.absentEntries.isNotEmpty() || (!isCardReport && parsedReport.noCardEntries.isEmpty())) {
+                add(
+                    ReportCategorySummarySection(
+                        title = "غائب النهاردة",
+                        accentColor = errorColor,
+                        totalCount = parsedReport.absentEntries.size,
+                        blockLines = buildBlockGroupedLines(
+                            parsedReport.absentEntries.map { it.student to it.studentNumber },
+                            blocks
+                        ),
+                        emptyFallbackText = "• غائب النهاردة: 0 أطفال"
+                    )
+                )
+            }
+            if (parsedReport.noCardEntries.isNotEmpty()) {
+                add(
+                    ReportCategorySummarySection(
+                        title = "ما خدوش $effectiveTypeLabel",
+                        accentColor = tertiaryColor,
+                        totalCount = parsedReport.noCardEntries.size,
+                        blockLines = buildBlockGroupedLines(
+                            parsedReport.noCardEntries.map { it.student to it.studentNumber },
+                            blocks
+                        )
+                    )
+                )
+            }
+            if (parsedReport.issueEntries.isNotEmpty() || (!isCardReport && parsedReport.noCardEntries.isEmpty())) {
+                add(
+                    ReportCategorySummarySection(
+                        title = "عندهم مشكلة النهاردة",
+                        accentColor = extColors.offlineAmber,
+                        totalCount = parsedReport.issueEntries.size,
+                        blockLines = buildBlockGroupedLines(
+                            parsedReport.issueEntries.map { it.student to it.studentNumber },
+                            blocks
+                        ),
+                        emptyFallbackText = "• عندهم مشكلة النهاردة: 0 أطفال"
+                    )
+                )
+            }
+        }
+    }
+
+    val grandTotalAlertText = remember(parsedReport, combinedAlertEntries.size, isCardReport) {
+        val breakdownParts = buildList {
+            if (parsedReport.absentEntries.isNotEmpty()) add("غائب: ${parsedReport.absentEntries.size}")
+            if (parsedReport.noCardEntries.isNotEmpty()) add("بدون كارت: ${parsedReport.noCardEntries.size}")
+            if (parsedReport.issueEntries.isNotEmpty()) add("مشكلة: ${parsedReport.issueEntries.size}")
+            if (parsedReport.presentNames.isNotEmpty()) {
+                add(if (isCardReport) "أخذوا الكارت: ${parsedReport.presentNames.size}" else "حاضر: ${parsedReport.presentNames.size}")
+            }
+        }
+        val mainCountLabel = if (isCardReport) {
+            "المجموع الكلي (لم يأخذ/مشكلة): ${combinedAlertEntries.size} طفل"
+        } else {
+            "المجموع الكلي (غائب/مشكلة): ${combinedAlertEntries.size} طفل"
+        }
+        if (breakdownParts.isNotEmpty()) {
+            "$mainCountLabel — (${breakdownParts.joinToString(" • ")})"
+        } else {
+            mainCountLabel
+        }
+    }
+
     Surface(
-        color = extColors.offlineAmber.copy(alpha = 0.10f),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, extColors.offlineAmber.copy(alpha = 0.45f)),
+        color = reportHeaderColor.copy(alpha = 0.08f),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.5.dp, reportHeaderColor.copy(alpha = 0.52f)),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp, horizontal = 6.dp)
@@ -3189,33 +4175,54 @@ private fun SystemMessageCenteredPill(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Card Header
+            // Card Header with unmistakable Report Type Badge (Attendance vs Specific Card)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = if (parsedReport.cardContextTitle.isNotBlank()) {
-                        "📋 متابعة كارت ${parsedReport.cardContextTitle}"
-                    } else {
-                        "📋 تقرير تحضير الفصل"
-                    },
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
                 Surface(
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                    shape = RoundedCornerShape(8.dp)
+                    color = reportHeaderColor,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("report_type_header_badge_${message.id}")
                 ) {
                     Text(
-                        text = "بواسطة ${parsedReport.servantName}",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        text = "$effectiveIcon تقرير $effectiveTypeLabel",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "بواسطة ${parsedReport.servantName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onRequestForward,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("forward_message_${message.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "إعادة توجيه التقرير",
+                            tint = reportHeaderColor,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
                 }
             }
 
@@ -3232,6 +4239,7 @@ private fun SystemMessageCenteredPill(
                                 ReportChildCategory.ABSENT -> MaterialTheme.colorScheme.error to "غائب"
                                 ReportChildCategory.NO_CARD -> MaterialTheme.colorScheme.tertiary to "ما خدش كارت"
                                 ReportChildCategory.ISSUE -> extColors.offlineAmber to "مشكلة"
+                                ReportChildCategory.DIFF -> KamSemanticColors.NotificationCardConflict to "اختلاف"
                             }
 
                             Surface(
@@ -3317,7 +4325,7 @@ private fun SystemMessageCenteredPill(
                 }
             }
 
-            // Compact Small-Font Section: "اللي جه (الحاضرون)" inside the SAME report
+            // Compact Small-Font Section: "اللي جه (الحاضرون)" / "أخذوا الكارت" inside the SAME report
             if (parsedReport.presentNames.isNotEmpty()) {
                 Surface(
                     color = extColors.onlineGreen.copy(alpha = 0.10f),
@@ -3334,7 +4342,11 @@ private fun SystemMessageCenteredPill(
                         verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
                         Text(
-                            text = "✓ اللي جه (${parsedReport.presentNames.size}):",
+                            text = if (isCardReport) {
+                                "✓ أخذوا $effectiveTypeLabel (${parsedReport.presentNames.size}):"
+                            } else {
+                                "✓ اللي جه (${parsedReport.presentNames.size}):"
+                            },
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
                             fontWeight = FontWeight.ExtraBold,
                             color = extColors.onlineGreen
@@ -3349,71 +4361,14 @@ private fun SystemMessageCenteredPill(
                 }
             }
 
-            HorizontalDivider(color = extColors.offlineAmber.copy(alpha = 0.35f))
+            HorizontalDivider(color = reportHeaderColor.copy(alpha = 0.30f))
 
-            // Footer Summary: Exact Counts & Numbers of Absent, No-Card & Issue Students
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                if (parsedReport.absentEntries.isNotEmpty() || parsedReport.noCardEntries.isEmpty()) {
-                    val absentNumbers = parsedReport.absentEntries
-                        .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
-                        .joinToString("، ")
-                    Text(
-                        text = if (parsedReport.absentEntries.isEmpty()) {
-                            "• غائب النهاردة: 0 أطفال"
-                        } else if (absentNumbers.isNotBlank()) {
-                            "• غائب النهاردة: ${parsedReport.absentEntries.size} — أرقامهم: $absentNumbers"
-                        } else {
-                            "• غائب النهاردة: ${parsedReport.absentEntries.size}"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-
-                if (parsedReport.noCardEntries.isNotEmpty()) {
-                    val noCardNumbers = parsedReport.noCardEntries
-                        .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
-                        .joinToString("، ")
-                    Text(
-                        text = if (noCardNumbers.isNotBlank()) {
-                            "• ما خدوش كارت: ${parsedReport.noCardEntries.size} — أرقامهم: $noCardNumbers"
-                        } else {
-                            "• ما خدوش كارت: ${parsedReport.noCardEntries.size}"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                }
-
-                if (parsedReport.issueEntries.isNotEmpty() || parsedReport.noCardEntries.isEmpty()) {
-                    val issueNumbers = parsedReport.issueEntries
-                        .mapNotNull { it.studentNumber.takeIf { n -> n > 0L }?.let { "#$it" } }
-                        .joinToString("، ")
-                    Text(
-                        text = if (parsedReport.issueEntries.isEmpty()) {
-                            "• عندهم مشكلة النهاردة: 0 أطفال"
-                        } else if (issueNumbers.isNotBlank()) {
-                            "• عندهم مشكلة النهاردة: ${parsedReport.issueEntries.size} — أرقامهم: $issueNumbers"
-                        } else {
-                            "• عندهم مشكلة النهاردة: ${parsedReport.issueEntries.size}"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = extColors.offlineAmber
-                    )
-                }
-            }
+            // Block-Grouped Footer Summary + Counts + Numbers + Grand Total
+            BlockGroupedNumbersFooter(
+                sections = alertFooterSections,
+                grandTotalText = grandTotalAlertText,
+                grandTotalAccent = reportHeaderColor
+            )
         }
     }
 }

@@ -1031,6 +1031,83 @@ test("17. Custom Elder Card (كارت القمداء): Admin/Assistant can confi
   );
 });
 
+test("16. Live SYSTEM report update: creator can live-update own SYSTEM report, others & TEXT edits blocked", async () => {
+  await seedGroupWithMembers();
+  const now = new Date();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID).firestore();
+  const servantDb = testEnv.authenticatedContext(SERVANT_UID).firestore();
+
+  const sysMsgRef = servantDb
+    .collection("groups")
+    .doc(GROUP_ID)
+    .collection("messages")
+    .doc("sys_vis_1");
+
+  await assertSucceeds(
+    sysMsgRef.set({
+      chatId: `group_${GROUP_ID}`,
+      groupId: GROUP_ID,
+      senderUid: SERVANT_UID,
+      senderName: "مايكل",
+      type: "SYSTEM",
+      text: "[VISITATION_V1]\nS|مايكل\nV|stu_1|1|مارك",
+      isDeleted: false,
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Creator CAN update text & updatedAt on their own SYSTEM report
+  await assertSucceeds(
+    sysMsgRef.update({
+      text: "[VISITATION_V1]\nS|مايكل\nV|stu_1|1|مارك\nF|stu_2|2|مينا|يحتاج متابعة",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Another user (even Admin) CANNOT alter the first servant's SYSTEM report text
+  await assertFails(
+    adminDb
+      .collection("groups")
+      .doc(GROUP_ID)
+      .collection("messages")
+      .doc("sys_vis_1")
+      .update({
+        text: "[VISITATION_V1]\nS|تزوير",
+        updatedAt: new Date(),
+      })
+  );
+
+  // Creator CANNOT mutate regular TEXT messages in place
+  const textMsgRef = servantDb
+    .collection("groups")
+    .doc(GROUP_ID)
+    .collection("messages")
+    .doc("txt_msg_1");
+  await assertSucceeds(
+    textMsgRef.set({
+      chatId: `group_${GROUP_ID}`,
+      groupId: GROUP_ID,
+      senderUid: SERVANT_UID,
+      senderName: "مايكل",
+      type: "TEXT",
+      text: "سلام للجميع",
+      isDeleted: false,
+      memberUids: [ADMIN_UID, SERVANT_UID],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertFails(
+    textMsgRef.update({
+      text: "نص معدل",
+      updatedAt: new Date(),
+    })
+  );
+});
+
+
 
 
 

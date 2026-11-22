@@ -25,14 +25,20 @@ enum class CustomCardFrequency(
 @Immutable
 data class CustomCardConfig(
     val enabled: Boolean = false,
-    val name: String = "كارت القمداء",
+    val name: String = "",
     val points: Int = 15,
     val icon: String = "🏅",
     val colorKey: String = "GOLD",
     val frequency: CustomCardFrequency = CustomCardFrequency.WEEKLY
 ) {
+    val rawTrimmedName: String
+        get() = name.trim()
+
+    val hasCustomName: Boolean
+        get() = rawTrimmedName.isNotBlank()
+
     val effectiveName: String
-        get() = name.trim().ifBlank { "كارت القمداء" }
+        get() = rawTrimmedName.ifBlank { "كارت القمداء" }
 
     val effectiveIcon: String
         get() = icon.trim().ifBlank { "🏅" }
@@ -160,7 +166,7 @@ data class Group(
     val avatarBase64: String = "",
     val avatarHash: String = "",
     val customCardEnabled: Boolean = false,
-    val customCardName: String = "كارت القمداء",
+    val customCardName: String = "",
     val customCardPoints: Long = 15L,
     val customCardIcon: String = "🏅",
     val customCardColorKey: String = "GOLD",
@@ -171,7 +177,7 @@ data class Group(
     val customCardConfig: CustomCardConfig
         get() = CustomCardConfig(
             enabled = customCardEnabled,
-            name = customCardName.trim().ifBlank { "كارت القمداء" },
+            name = customCardName.trim(),
             points = customCardPoints.toInt().coerceIn(0, 100),
             icon = customCardIcon.trim().ifBlank { "🏅" },
             colorKey = customCardColorKey.trim().ifBlank { "GOLD" },

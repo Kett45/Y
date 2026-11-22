@@ -2830,7 +2830,7 @@ class KamViewModel(
             return
         }
         val cleanConfig = config.copy(
-            name = config.effectiveName.take(40),
+            name = config.rawTrimmedName.take(40),
             points = config.effectivePoints,
             icon = config.effectiveIcon.take(12),
             colorKey = config.colorKey.trim().ifBlank { "GOLD" }
@@ -2850,10 +2850,15 @@ class KamViewModel(
                 groupId = group.inviteCode,
                 config = cleanConfig
             ).onSuccess {
-                val statusLabel = if (cleanConfig.enabled) {
-                    "تم حفظ وتفعيل '${cleanConfig.name}' (${cleanConfig.points} نقطة • ${cleanConfig.frequency.shortArabicLabel})"
+                val displayLabel = if (cleanConfig.hasCustomName) {
+                    cleanConfig.name
                 } else {
-                    "تم حفظ إعدادات '${cleanConfig.name}' (متوقف حالياً)"
+                    "${cleanConfig.icon} كارت القمداء"
+                }
+                val statusLabel = if (cleanConfig.enabled) {
+                    "تم حفظ وتفعيل '$displayLabel' (${cleanConfig.points} نقطة • ${cleanConfig.frequency.shortArabicLabel})"
+                } else {
+                    "تم حفظ إعدادات '$displayLabel' (متوقف حالياً)"
                 }
                 showBanner(statusLabel)
                 delay(600L)

@@ -213,16 +213,24 @@ class ChatRepository(
         require(cleanText.isNotBlank()) { "نص الرسالة فارغ" }
 
         val previewText = when {
+            cleanText.startsWith(ChatMessage.VISITATION_REPORT_V1_PREFIX) -> {
+                val firstHeader = cleanText
+                    .removePrefix(ChatMessage.VISITATION_REPORT_V1_PREFIX)
+                    .trim()
+                    .lineSequence()
+                    .map { it.trim() }
+                    .firstOrNull { it.isNotBlank() && !it.contains("|") }
+                firstHeader?.take(200)?.ifBlank { "🏠 تقرير الافتقاد المجمّع" }
+                    ?: "🏠 تقرير الافتقاد المجمّع"
+            }
             cleanText.startsWith(ChatMessage.ATTENDANCE_REPORT_V3_PREFIX) -> {
-                val lines = cleanText
+                val firstHeader = cleanText
                     .removePrefix(ChatMessage.ATTENDANCE_REPORT_V3_PREFIX)
                     .trim()
                     .lineSequence()
                     .map { it.trim() }
-                    .filter { it.isNotBlank() }
-                    .toList()
-                val header = lines.firstOrNull { it.startsWith("H|") }?.removePrefix("H|")?.trim()
-                header?.take(200)?.ifBlank { "📋 تقرير حضور ومتابعة الفصل" }
+                    .firstOrNull { it.isNotBlank() && !it.contains("|") }
+                firstHeader?.take(200)?.ifBlank { "📋 تقرير حضور ومتابعة الفصل" }
                     ?: "📋 تقرير حضور ومتابعة الفصل"
             }
             cleanText.startsWith(ChatMessage.ATTENDANCE_REPORT_V2_PREFIX) -> {
@@ -329,6 +337,74 @@ class ChatRepository(
             )
         } catch (e: CancellationException) {
             throw e
+        }
+    }
+
+    /**
+     * Live-updates the text of an existing SYSTEM report message (such as `[VISITATION_V1]`)
+     * created by the current user, without spamming multiple messages in the group chat.
+     */
+    suspend fun updateGroupSystemMessageText(
+        groupId: String,
+        messageId: String,
+        newText: String,
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        require(groupId.isNotBlank() && messageId.isNotBlank()) { "بيانات الرسالة غير مكتملة" }
+        val cleanText = newText.trim().take(ChatMessage.MAX_SYSTEM_TEXT_LENGTH)
+        require(cleanText.isNotBlank()) { "نص التقرير فارغ" }
+        val msgRef = db.collection("groups").document(groupId)
+            .collection("messages").document(messageId)
+        val task = msgRef.update(
+            mapOf(
+                "text" to cleanText,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        )
+        if (waitForServerAck) {
+            task.await()
+        }
+    }
+
+    /**
+     * Finds the earliest non-diff baseline `[ATTENDANCE_V3]` report sent by ANOTHER servant
+     * for the same `(weekKey, reportTypeKey)` in `groups/{groupId}/messages`, so a second servant
+     * can compute and send ONLY the differences while keeping the first servant's report intact.
+     */
+    suspend fun findBaselineAttendanceReport(
+        groupId: String,
+        weekKey: String,
+        reportTypeKey: String,
+        excludeSenderUid: String
+    ): ChatMessage? {
+        if (groupId.isBlank() || weekKey.isBlank() || reportTypeKey.isBlank()) return null
+        return try {
+            val snap = db.collection("groups").document(groupId)
+                .collection("messages")
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(50)
+                .get()
+                .await()
+            val weekLine = "W|$weekKey"
+            val typeLine = "T|$reportTypeKey"
+            val matching = snap.documents.mapNotNull { doc ->
+                val msg = doc.toObject(ChatMessage::class.java)?.copy(id = doc.id) ?: return@mapNotNull null
+                if (msg.isDeleted || msg.type != ChatMessageType.SYSTEM.id) return@mapNotNull null
+                if (msg.senderUid == excludeSenderUid) return@mapNotNull null
+                val raw = msg.text.trim()
+                if (!raw.startsWith(ChatMessage.ATTENDANCE_REPORT_V3_PREFIX)) return@mapNotNull null
+                val lines = raw.lineSequence().map { it.trim() }.toList()
+                val isDiffReport = lines.any { it.startsWith("DIFF|") }
+                if (isDiffReport) return@mapNotNull null
+                if (weekLine in lines && typeLine in lines) msg else null
+            }
+            // Pick the FIRST (earliest) baseline sent for this week & report type
+            matching.minByOrNull { it.effectiveTimeMillis }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
         }
     }
 

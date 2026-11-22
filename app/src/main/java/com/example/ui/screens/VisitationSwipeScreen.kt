@@ -80,10 +80,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
+import com.example.data.model.ChatMessage
+import com.example.data.model.ChatMessageType
 import com.example.data.model.ChildNote
 import com.example.data.model.ChildNoteType
+import com.example.data.model.NotificationCategory
+import com.example.data.model.SaturdayCalendarHelper
 import com.example.data.model.Student
 import com.example.data.model.VisitationStatus
+import com.example.data.repository.ChatRepository
 import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.theme.KamBackgroundDark
 import com.example.ui.theme.KamPrimaryContainerDark
@@ -91,12 +97,20 @@ import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.KamSurfaceDark
 import com.example.ui.theme.LocalKamExtendedColors
 import com.example.ui.viewmodel.KamScreenState
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+private val visitationIoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 private data class VisitationSwipeDecision(
     val student: Student,
@@ -104,6 +118,89 @@ private data class VisitationSwipeDecision(
     val noteText: String,
     val isSkipped: Boolean = false
 )
+
+private fun formatMergedVisitationSystemMessage(
+    weekKey: String,
+    servantName: String,
+    scopeLabel: String,
+    decisions: List<VisitationSwipeDecision>
+): String {
+    if (decisions.isEmpty()) return ""
+    // Keep latest decision per student while preserving chronological / numeric clarity
+    val latestByStudentId = LinkedHashMap<String, VisitationSwipeDecision>()
+    for (d in decisions) {
+        if (d.student.id.isNotBlank()) {
+            latestByStudentId[d.student.id] = d
+        }
+    }
+    if (latestByStudentId.isEmpty()) return ""
+
+    fun clean(raw: String): String =
+        raw.replace("|", " ").replace("\n", " ").replace("\r", " ").trim()
+
+    val visitedList = latestByStudentId.values
+        .filter { !it.isSkipped && it.status == VisitationStatus.VISITED }
+        .sortedBy { it.student.studentNumber }
+    val followupList = latestByStudentId.values
+        .filter { !it.isSkipped && it.status == VisitationStatus.FOLLOWUP }
+        .sortedBy { it.student.studentNumber }
+    val notVisitedList = latestByStudentId.values
+        .filter { it.isSkipped || it.status == null }
+        .sortedBy { it.student.studentNumber }
+
+    val safeServant = clean(servantName).ifBlank { "خادم" }
+    val safeScope = clean(scopeLabel)
+    val summaryParts = buildList {
+        if (visitedList.isNotEmpty()) add("تم افتقاده: ${visitedList.size}")
+        if (followupList.isNotEmpty()) add("مشكلة/متابعة: ${followupList.size}")
+        if (notVisitedList.isNotEmpty()) add("لم يتم افتقاده: ${notVisitedList.size}")
+    }
+
+    val sb = StringBuilder()
+    sb.append(ChatMessage.VISITATION_REPORT_V1_PREFIX).append('\n')
+    sb.append("🏠 تقرير الافتقاد (بواسطة ").append(safeServant).append(")")
+    if (summaryParts.isNotEmpty()) {
+        sb.append(" — ").append(summaryParts.joinToString(" | "))
+    }
+    if (weekKey.isNotBlank()) {
+        sb.append('\n').append("W|").append(clean(weekKey))
+    }
+    sb.append('\n').append("S|").append(safeServant)
+    if (safeScope.isNotBlank()) {
+        sb.append('\n').append("B|").append(safeScope)
+    }
+
+    val maxLen = ChatMessage.MAX_SYSTEM_TEXT_LENGTH
+    // Prioritize problem/follow-up & not-visited entries, while reserving ample space for visited names
+    val issueLines = buildList {
+        for (item in followupList) {
+            val defaultFollowup = "يحتاج متابعة وافتقاد خلال الأسبوع 🔔"
+            val customNote = clean(item.noteText).let { if (it == defaultFollowup) "" else it }.take(120)
+            add("\nF|${clean(item.student.id)}|${item.student.studentNumber}|${clean(item.student.name)}|$customNote")
+        }
+        for (item in notVisitedList) {
+            add("\nU|${clean(item.student.id)}|${item.student.studentNumber}|${clean(item.student.name)}")
+        }
+    }
+    val visitedLines = visitedList.map { item ->
+        "\nV|${clean(item.student.id)}|${item.student.studentNumber}|${clean(item.student.name)}"
+    }
+
+    val issueTotalLen = issueLines.sumOf { it.length }.coerceAtMost(maxLen / 2)
+    val visitedBudget = (maxLen - issueTotalLen).coerceAtLeast(800)
+
+    for (line in visitedLines) {
+        if (sb.length + line.length <= visitedBudget) {
+            sb.append(line)
+        }
+    }
+    for (line in issueLines) {
+        if (sb.length + line.length <= maxLen) {
+            sb.append(line)
+        }
+    }
+    return sb.toString().take(maxLen)
+}
 
 @Composable
 fun VisitationSwipeScreen(
@@ -149,10 +246,75 @@ fun VisitationSwipeScreen(
             .sortedBy { it.studentNumber }
     }
 
+    val groupId = state.group?.inviteCode?.ifBlank { state.group.id }.orEmpty()
+    val memberUids = remember(state.group, currentUserId) {
+        (state.group?.memberUids.orEmpty() + currentUserId).filter { it.isNotBlank() }.distinct()
+    }
+    val activeWeekKey = remember(state.selectedWeekKey) {
+        state.selectedWeekKey?.takeIf { it.isNotBlank() } ?: SaturdayCalendarHelper.currentWeekKey()
+    }
+    val servantDisplayName = remember(state.blocks, state.userProfile, currentUserId) {
+        state.blocks.firstOrNull { it.servantId == currentUserId }?.servantName?.takeIf { it.isNotBlank() }
+            ?: state.userProfile?.displayName?.takeIf { it.isNotBlank() }
+            ?: "خادم"
+    }
+    val firestoreDb = remember(context) {
+        val databaseId = context.applicationContext.getString(R.string.firestore_database_id)
+        require(databaseId.isNotBlank()) { "Missing firestore_database_id string resource" }
+        FirebaseFirestore.getInstance(databaseId)
+    }
+    val chatRepository = remember(firestoreDb) { ChatRepository(firestoreDb) }
+    val liveReportMutex = remember { Mutex() }
+    var liveVisitationMsgId by rememberSaveable(groupId, activeBlockIds.toString()) {
+        mutableStateOf<String?>(null)
+    }
+
     var currentIndex by rememberSaveable(activeBlockIds.toString(), blockStudents.size) {
         mutableIntStateOf(0)
     }
     val sessionDecisions = remember { mutableStateListOf<VisitationSwipeDecision>() }
+
+    fun syncLiveVisitationGroupReport() {
+        if (groupId.isBlank()) return
+        val snapshot = sessionDecisions.toList()
+        val scopeLabel = activeBlocks.joinToString(" • ") { it.servantName }
+        val reportText = formatMergedVisitationSystemMessage(
+            weekKey = activeWeekKey,
+            servantName = servantDisplayName,
+            scopeLabel = scopeLabel,
+            decisions = snapshot
+        )
+        if (reportText.isBlank()) return
+        val targetGroupId = groupId
+        val targetMembers = memberUids
+        val targetSenderName = servantDisplayName
+        visitationIoScope.launch {
+            liveReportMutex.withLock {
+                val existingId = liveVisitationMsgId
+                if (existingId.isNullOrBlank()) {
+                    val sent = chatRepository.sendGroupMessage(
+                        groupId = targetGroupId,
+                        senderName = targetSenderName,
+                        text = reportText,
+                        memberUids = targetMembers,
+                        type = ChatMessageType.SYSTEM,
+                        notificationCategory = NotificationCategory.VISITATION.id,
+                        waitForServerAck = false
+                    )
+                    sent.onSuccess { createdMsg ->
+                        liveVisitationMsgId = createdMsg.id
+                    }
+                } else {
+                    chatRepository.updateGroupSystemMessageText(
+                        groupId = targetGroupId,
+                        messageId = existingId,
+                        newText = reportText,
+                        waitForServerAck = false
+                    )
+                }
+            }
+        }
+    }
 
     // Preload ONLY visible child + next 1 child (Smart Local Images Rule)
     val upcomingStudents = remember(blockStudents, currentIndex) {
@@ -202,7 +364,10 @@ fun VisitationSwipeScreen(
         }
         val finalNote = noteText.trim().ifBlank { defaultText }
         sessionDecisions.add(VisitationSwipeDecision(student, status, finalNote, isSkipped = false))
-        onRecordVisitation(student, status, finalNote, true)
+        // Record visitation note in Firestore WITHOUT spamming individual cards in group chat;
+        // instead, live-update ONE merged [VISITATION_V1] report message in the group chat.
+        onRecordVisitation(student, status, finalNote, false)
+        syncLiveVisitationGroupReport()
         currentIndex = (currentIndex + 1).coerceAtMost(blockStudents.size)
     }
 
@@ -215,6 +380,7 @@ fun VisitationSwipeScreen(
                 isSkipped = true
             )
         )
+        syncLiveVisitationGroupReport()
         currentIndex = (currentIndex + 1).coerceAtMost(blockStudents.size)
     }
 
@@ -338,6 +504,9 @@ fun VisitationSwipeScreen(
                                         if (sessionDecisions.isNotEmpty() && currentIndex > 0) {
                                             sessionDecisions.removeAt(sessionDecisions.lastIndex)
                                             currentIndex = (currentIndex - 1).coerceAtLeast(0)
+                                            if (sessionDecisions.isNotEmpty()) {
+                                                syncLiveVisitationGroupReport()
+                                            }
                                         }
                                     },
                                     modifier = Modifier
@@ -1032,7 +1201,7 @@ fun VisitationSwipeScreen(
                                     fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
-                                    text = "تم إرسال إشعارات الافتقاد (اللون البنفسجي) لجروب الخدام تلقائياً.",
+                                    text = "تم تحديث تقرير الافتقاد المجمّع في جروب الخدام تلقائياً ✓",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1040,6 +1209,7 @@ fun VisitationSwipeScreen(
                             FilledTonalButton(
                                 onClick = {
                                     sessionDecisions.clear()
+                                    liveVisitationMsgId = null
                                     currentIndex = 0
                                 },
                                 modifier = Modifier.testTag("visitation_restart_session_button")
@@ -1237,7 +1407,7 @@ fun VisitationSwipeScreen(
                     },
                     modifier = Modifier.testTag("dialog_visitation_save_button")
                 ) {
-                    Text("حفظ وإرسال للجروب")
+                    Text("حفظ وتحديث التقرير")
                 }
             },
             dismissButton = {

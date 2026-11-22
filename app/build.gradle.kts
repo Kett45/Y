@@ -157,7 +157,7 @@ tasks.register<Copy>("syncReleaseApk") {
         "updatedAt": "$nowIsoUtc",
         "apkDirectUrl": "$singleAutoUrl",
         "deltaSyncUrl": "$deltaUrl",
-        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): تحديث الرئيسية بالسحب والضغط المزدوج، لمبة الحضور، فلاتر التقارير وملخص الفترة، كارت القمداء، إشعارات المراسلة المتمايزة، تعديل اسم وبلوك الطفل، إصلاح البحث العربي، ومنع تجمّد التطبيق بعد قفل الشاشة ($shortCommit)."
+        "releaseNotesArabic": "الإصدار $verName (نجم الكارت v$verName): رسالة افتقاد مجمعة متحدثة تلقائياً، تمييز تقارير الحضور والكروت، إرسال اختلافات الخادم الثاني فقط، تصنيف الغائبين والمشاكل حسب البلوكات مع المجموع الكلي، بالإضافة لكل مميزات v1.15 وإصلاحات التعديل والبحث العربي وقفل الشاشة ($shortCommit)."
       }
       """.trimIndent() + "\n"
     )
@@ -171,7 +171,7 @@ tasks.register<Copy>("syncReleaseApk") {
         "commitSha": "$shortCommit",
         "apkSha256": "$apkSha256",
         "updatedAt": "$nowIsoUtc",
-        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): كل مميزات v1.15 + تعديل اسم وبلوك الطفل، إصلاح البحث العربي، واستقرار قفل الشاشة",
+        "deltaSummaryArabic": "تمت مزامنة أحدث نسخة من نجم الكارت v$verName ($shortCommit): رسالة افتقاد مجمعة، تمييز تقارير الحضور والكروت، اختلافات الخادم الثاني فقط، وتصنيف البلوكات مع المجموع الكلي",
         "latestApkDirectUrl": "$singleAutoUrl",
         "changedModules": [
           "home_double_tap_and_pull_to_refresh_cloud_sync",
@@ -181,7 +181,10 @@ tasks.register<Copy>("syncReleaseApk") {
           "differentiated_attendance_v3_chat_reports",
           "student_edit_name_and_block_picker",
           "smooth_arabic_search_ime_debounce",
-          "screen_lock_lifecycle_freeze_fix"
+          "screen_lock_lifecycle_freeze_fix",
+          "live_merged_visitation_v1_report",
+          "explicit_report_type_headers_and_cross_servant_diff",
+          "block_grouped_report_counts_and_grand_totals"
         ],
         "dynamicConfig": {
           "maxStudentsPerGroup": 150,

@@ -161,6 +161,7 @@ data class ChatMessage(
         const val MAX_SYSTEM_TEXT_LENGTH = 4000
         const val ATTENDANCE_REPORT_V2_PREFIX = "[ATTENDANCE_V2]"
         const val ATTENDANCE_REPORT_V3_PREFIX = "[ATTENDANCE_V3]"
+        const val VISITATION_REPORT_V1_PREFIX = "[VISITATION_V1]"
         const val PAGE_SIZE = 30
         const val DELETED_MESSAGE_PLACEHOLDER = "تم حذف الرسالة"
         const val MAX_IMAGE_DIMENSION_PX = 1440

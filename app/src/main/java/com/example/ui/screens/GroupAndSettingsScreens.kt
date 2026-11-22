@@ -2998,7 +2998,7 @@ private fun CustomElderCardSettingsCard(
     val extColors = LocalKamExtendedColors.current
 
     var draftEnabled by rememberSaveable(config.enabled) { mutableStateOf(config.enabled) }
-    var draftName by rememberSaveable(config.name) { mutableStateOf(config.effectiveName) }
+    var draftName by rememberSaveable(config.name) { mutableStateOf(config.rawTrimmedName) }
     var draftPointsText by rememberSaveable(config.points) { mutableStateOf(config.effectivePoints.toString()) }
     var draftIcon by rememberSaveable(config.icon) { mutableStateOf(config.effectiveIcon) }
     var draftColorKey by rememberSaveable(config.colorKey) { mutableStateOf(config.colorKey.ifBlank { "GOLD" }) }
@@ -3007,7 +3007,8 @@ private fun CustomElderCardSettingsCard(
     val draftFrequency = CustomCardFrequency.fromId(draftFrequencyId)
     val draftPoints = (draftPointsText.toIntOrNull() ?: 0).coerceIn(0, 100)
     val previewAccent = KamSemanticColors.cardColorByKey(draftColorKey)
-    val previewName = draftName.trim().ifBlank { "كارت القمداء" }
+    val trimmedDraftName = draftName.trim()
+    val previewName = trimmedDraftName.ifBlank { "بدون اسم ثابت (يظهر بالشكل فقط)" }
 
     Column(
         modifier = Modifier
@@ -3026,12 +3027,12 @@ private fun CustomElderCardSettingsCard(
         ) {
             Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                 Text(
-                    text = "🏅 كارت القمداء (كارت إضافي مخصص)",
+                    text = "🏅 كارت القمداء (كارت إضافي بدون اسم ثابت)",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.ExtraBold
                 )
                 Text(
-                    text = "كارت إضافي يضبط الأمين اسمه ونقاطه وشكله ولونه وموعد إعطائه، ويدخل تلقائياً في التقارير والتحليلات.",
+                    text = "كارت إضافي بدون اسم ثابت — يضبط الأمين شكله ولونه ونقاطه وموعد إعطائه (ويمكن ترك الاسم فارغاً أو كتابة اسم مخصص)، ويدخل تلقائياً في التقارير والتحليلات.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -3044,7 +3045,7 @@ private fun CustomElderCardSettingsCard(
                     onSave(
                         CustomCardConfig(
                             enabled = checked,
-                            name = previewName,
+                            name = trimmedDraftName,
                             points = draftPoints,
                             icon = draftIcon,
                             colorKey = draftColorKey,
@@ -3117,8 +3118,21 @@ private fun CustomElderCardSettingsCard(
             OutlinedTextField(
                 value = draftName,
                 onValueChange = { if (it.length <= 40) draftName = it },
-                label = { Text("اسم الكارت") },
-                placeholder = { Text("كارت القمداء") },
+                label = { Text("اسم الكارت (اختياري)") },
+                placeholder = { Text("اتركه فارغاً بدون اسم ثابت") },
+                trailingIcon = if (isAdmin && draftName.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { draftName = "" }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "مسح الاسم",
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                } else {
+                    null
+                },
                 enabled = isAdmin,
                 singleLine = true,
                 modifier = Modifier
@@ -3284,7 +3298,7 @@ private fun CustomElderCardSettingsCard(
                     onSave(
                         CustomCardConfig(
                             enabled = draftEnabled,
-                            name = previewName,
+                            name = trimmedDraftName,
                             points = draftPoints,
                             icon = draftIcon,
                             colorKey = draftColorKey,

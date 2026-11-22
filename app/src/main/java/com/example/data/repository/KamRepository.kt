@@ -867,7 +867,7 @@ class KamRepository(private val db: FirebaseFirestore) {
             groupRef.update(
                 mapOf(
                     "customCardEnabled" to config.enabled,
-                    "customCardName" to config.effectiveName.take(40),
+                    "customCardName" to config.rawTrimmedName.take(40),
                     "customCardPoints" to config.effectivePoints.toLong(),
                     "customCardIcon" to config.effectiveIcon.take(12),
                     "customCardColorKey" to config.colorKey.trim().ifBlank { "GOLD" }.take(24),
@@ -905,7 +905,7 @@ class KamRepository(private val db: FirebaseFirestore) {
         val server = com.google.firebase.firestore.Source.SERVER
         // Primary group doc must succeed to verify connectivity
         groupRef.get(server).await()
-        // Refresh subcollections concurrently in best-effort batches
+        // Refresh all subcollections concurrently so every change made by other servants appears immediately
         coroutineScope {
             val jobs = listOf(
                 async { runCatching { groupRef.collection("blocks").whereEqualTo("groupId", safeGroupId).get(server).await() } },
@@ -913,7 +913,10 @@ class KamRepository(private val db: FirebaseFirestore) {
                 async { runCatching { groupRef.collection("cardEvents").whereEqualTo("groupId", safeGroupId).get(server).await() } },
                 async { runCatching { groupRef.collection("monthlyBalances").whereEqualTo("groupId", safeGroupId).get(server).await() } },
                 async { runCatching { groupRef.collection("attendance").get(server).await() } },
-                async { runCatching { groupRef.collection("members").whereEqualTo("groupId", safeGroupId).get(server).await() } }
+                async { runCatching { groupRef.collection("members").whereEqualTo("groupId", safeGroupId).get(server).await() } },
+                async { runCatching { groupRef.collection("childNotes").whereEqualTo("groupId", safeGroupId).get(server).await() } },
+                async { runCatching { groupRef.collection("invitations").whereEqualTo("groupId", safeGroupId).get(server).await() } },
+                async { runCatching { groupRef.collection("chatMeta").document("main").get(server).await() } }
             )
             jobs.forEach { it.await() }
         }
