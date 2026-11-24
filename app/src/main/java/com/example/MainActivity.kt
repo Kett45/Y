@@ -813,7 +813,10 @@ fun AuthenticatedKamApp(
                 if (targetTab == KamBottomTab.HOME) {
                     val nowMs = System.currentTimeMillis()
                     if (currentTab == KamBottomTab.HOME) {
-                        if (nowMs - lastHomeTapTimeMs in 1L..450L) {
+                        if (isHomeSubPageActive) {
+                            lastHomeTapTimeMs = 0L
+                            homeResetSignal += 1
+                        } else if (nowMs - lastHomeTapTimeMs in 1L..550L) {
                             lastHomeTapTimeMs = 0L
                             homeResetSignal += 1
                             viewModel.forceFullCloudSync()
@@ -822,7 +825,7 @@ fun AuthenticatedKamApp(
                             homeResetSignal += 1
                         }
                     } else {
-                        lastHomeTapTimeMs = nowMs
+                        lastHomeTapTimeMs = 0L
                         homeResetSignal += 1
                         selectTab(KamBottomTab.HOME)
                     }
