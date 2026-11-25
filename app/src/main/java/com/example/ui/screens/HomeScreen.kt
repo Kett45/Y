@@ -101,7 +101,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.BuildConfig
 import com.example.data.model.ArabicInitialsHelper
 import com.example.data.model.AttendanceStatus
 import kotlinx.coroutines.delay
@@ -988,7 +987,7 @@ private fun HomeTopControlCard(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "نجم الكارت v${BuildConfig.VERSION_NAME}",
+                        text = "نجم الكارت",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold,

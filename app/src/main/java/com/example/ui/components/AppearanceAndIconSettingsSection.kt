@@ -218,7 +218,7 @@ fun AppearanceFullScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                text = "المظهر • نجم الكارت v1.6",
+                                text = "المظهر • نجم الكارت",
                                 style = MaterialTheme.typography.titleLarge,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 fontWeight = FontWeight.Bold
@@ -493,7 +493,7 @@ fun AppearanceFullScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Text(
-                                text = "أيقونة التطبيق (نجم الكارت v1.6)",
+                                text = "أيقونة التطبيق (نجم الكارت)",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -530,7 +530,7 @@ fun AppearanceFullScreen(
                                 Spacer(modifier = Modifier.width(14.dp))
                                 Column {
                                     Text(
-                                        text = "نجم الكارت v1.6",
+                                        text = "نجم الكارت",
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurface

@@ -146,7 +146,7 @@ fun GroupOnboardingScreen(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = "نجم الكارت v1.11",
+                    text = "نجم الكارت",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold
