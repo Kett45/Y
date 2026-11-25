@@ -125,6 +125,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
 
 enum class KamBottomTab(val routeId: String, val labelRes: Int) {
     HOME("home", R.string.tab_home),
@@ -703,7 +704,15 @@ fun AuthenticatedKamApp(
                             onDeleteChildNote = viewModel::deleteChildNote,
                             onPostChildGroupNotification = viewModel::postChildGroupNotification,
                             homeResetSignal = homeResetSignal,
-                            onRefresh = viewModel::forceFullCloudSync,
+                            onRefresh = {
+                                viewModel.forceFullCloudSync()
+                                authScope.launch {
+                                    GitHubSmartSyncEngine.checkAndSyncSilently(
+                                        context = context,
+                                        forceManualCheck = false
+                                    )
+                                }
+                            },
                             onSubPageActiveChange = { active ->
                                 isHomeSubPageActive = active
                                 isBottomBarVisibleByScroll = true

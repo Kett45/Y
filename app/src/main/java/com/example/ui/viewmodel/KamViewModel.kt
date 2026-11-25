@@ -803,6 +803,7 @@ class KamViewModel(
     private val _optimisticGroupPolicyOverride = MutableStateFlow<Group?>(null)
     private val _optimisticChildNotes = MutableStateFlow<List<ChildNote>>(emptyList())
     private val _optimisticDeletedNoteIds = MutableStateFlow<Set<String>>(emptySet())
+    private val _manualRefreshTrigger = MutableStateFlow(0)
     private var policyMutationSeq: Long = 0L
 
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
@@ -886,57 +887,66 @@ class KamViewModel(
         }
     }
 
-    private val userProfileFlow: Flow<UserProfile?> = repository.observeUserProfile(currentUserId)
-        .map { profile ->
-            Log.d(TAG, "[Step 4] observeUserProfile emitted: exists=${profile != null}, groupId='${profile?.groupId.orEmpty()}'")
-            if (profile != null && !hasSeededPrefsFromCloud) {
-                hasSeededPrefsFromCloud = true
-                val existingLocal = _localPrefsOverride.value
-                val mergedPrefs = LocalUserPreferences(
-                    enabledCards = existingLocal?.enabledCards ?: profile.enabledCards.ifEmpty { CardType.defaultEnabledIds },
-                    collapsedBlockIds = existingLocal?.collapsedBlockIds ?: profile.collapsedBlockIds,
-                    hiddenBlockIds = existingLocal?.hiddenBlockIds ?: profile.hiddenBlockIds,
-                    themeId = profile.themeId.ifBlank { existingLocal?.themeId ?: "DARK" },
-                    uiScaleMode = profile.uiScaleMode.ifBlank { existingLocal?.uiScaleMode ?: "AUTO" },
-                    uiScaleFactor = profile.uiScaleFactor.toFloat().takeIf { it in 0.70f..1.30f }
-                        ?: existingLocal?.uiScaleFactor ?: 0.85f,
-                    showFloatingAddButton = profile.showFloatingAddButton,
-                    activeGroupId = profile.groupId,
-                    phoneOnboardingDone = existingLocal?.phoneOnboardingDone ?: false,
-                    primaryPhone = existingLocal?.primaryPhone.orEmpty(),
-                    secondaryPhone = existingLocal?.secondaryPhone.orEmpty(),
-                    phoneHidden = existingLocal?.phoneHidden ?: false,
-                    servantAvatarHash = existingLocal?.servantAvatarHash.orEmpty()
-                )
-                _localPrefsOverride.value = mergedPrefs
-                LocalClassroomCache.saveUserPreferences(currentUserId, mergedPrefs)
+    private val userProfileFlow: Flow<UserProfile?> = _manualRefreshTrigger.flatMapLatest {
+        repository.observeUserProfile(currentUserId)
+            .map { profile ->
+                Log.d(TAG, "[Step 4] observeUserProfile emitted: exists=${profile != null}, groupId='${profile?.groupId.orEmpty()}'")
+                if (profile != null && !hasSeededPrefsFromCloud) {
+                    hasSeededPrefsFromCloud = true
+                    val existingLocal = _localPrefsOverride.value
+                    val mergedPrefs = LocalUserPreferences(
+                        enabledCards = existingLocal?.enabledCards ?: profile.enabledCards.ifEmpty { CardType.defaultEnabledIds },
+                        collapsedBlockIds = existingLocal?.collapsedBlockIds ?: profile.collapsedBlockIds,
+                        hiddenBlockIds = existingLocal?.hiddenBlockIds ?: profile.hiddenBlockIds,
+                        themeId = profile.themeId.ifBlank { existingLocal?.themeId ?: "DARK" },
+                        uiScaleMode = profile.uiScaleMode.ifBlank { existingLocal?.uiScaleMode ?: "AUTO" },
+                        uiScaleFactor = profile.uiScaleFactor.toFloat().takeIf { it in 0.70f..1.30f }
+                            ?: existingLocal?.uiScaleFactor ?: 0.85f,
+                        showFloatingAddButton = profile.showFloatingAddButton,
+                        activeGroupId = profile.groupId,
+                        phoneOnboardingDone = existingLocal?.phoneOnboardingDone ?: false,
+                        primaryPhone = existingLocal?.primaryPhone.orEmpty(),
+                        secondaryPhone = existingLocal?.secondaryPhone.orEmpty(),
+                        phoneHidden = existingLocal?.phoneHidden ?: false,
+                        servantAvatarHash = existingLocal?.servantAvatarHash.orEmpty()
+                    )
+                    _localPrefsOverride.value = mergedPrefs
+                    LocalClassroomCache.saveUserPreferences(currentUserId, mergedPrefs)
+                }
+                profile
             }
-            profile
-        }
-        .onStart {
-            resolveCachedSnapshot()?.userProfile?.let { emit(it) }
-        }
-        .catch { err ->
-            Log.w(TAG, "[Step 4] Error observing userProfile: ${err.javaClass.simpleName} - ${err.message}", err)
-            val snap = resolveCachedSnapshot()
-            if (snap == null) {
-                _operationError.value = err.localizedMessage
+            .onStart {
+                resolveCachedSnapshot()?.userProfile?.let { emit(it) }
             }
-            emit(snap?.userProfile)
-        }
+            .catch { err ->
+                Log.w(TAG, "[Step 4] Error observing userProfile: ${err.javaClass.simpleName} - ${err.message}", err)
+                val snap = resolveCachedSnapshot()
+                if (snap == null) {
+                    _operationError.value = err.localizedMessage
+                }
+                emit(snap?.userProfile)
+            }
+    }
 
-    private val userGroupsFlow: Flow<List<Group>> = repository.observeUserGroups(currentUserId)
-        .onStart { emit(resolveCachedSnapshot()?.userGroups.orEmpty()) }
-        .catch { err ->
-            Log.w(TAG, "Error observing userGroups", err)
-            emit(resolveCachedSnapshot()?.userGroups.orEmpty())
-        }
+    private val userGroupsFlow: Flow<List<Group>> = _manualRefreshTrigger.flatMapLatest {
+        repository.observeUserGroups(currentUserId)
+            .onStart { emit(resolveCachedSnapshot()?.userGroups.orEmpty()) }
+            .catch { err ->
+                Log.w(TAG, "Error observing userGroups", err)
+                emit(resolveCachedSnapshot()?.userGroups.orEmpty())
+            }
+    }
 
     private val activeGroupIdFlow: Flow<String> = userProfileFlow
         .map { it?.groupId?.trim().orEmpty() }
         .distinctUntilChanged()
 
-    private val groupFlow: Flow<Group?> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val activeGroupRefreshScopeFlow: Flow<Pair<String, Int>> = combine(
+        activeGroupIdFlow,
+        _manualRefreshTrigger
+    ) { groupId, refreshTick -> groupId to refreshTick }
+
+    private val groupFlow: Flow<Group?> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             Log.d(TAG, "[Step 4] User has no active groupId yet (routing to GroupOnboardingScreen)")
             flowOf(null)
@@ -954,7 +964,7 @@ class KamViewModel(
         }
     }
 
-    private val blocksFlow: Flow<List<ServantBlock>> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val blocksFlow: Flow<List<ServantBlock>> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
@@ -972,7 +982,7 @@ class KamViewModel(
         }
     }
 
-    private val studentsFlow: Flow<List<Student>> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val studentsFlow: Flow<List<Student>> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
@@ -990,7 +1000,7 @@ class KamViewModel(
         }
     }
 
-    private val invitationsFlow: Flow<List<Invitation>> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val invitationsFlow: Flow<List<Invitation>> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
@@ -1004,7 +1014,7 @@ class KamViewModel(
         }
     }
 
-    private val allCardEventsFlow: Flow<List<CardEvent>> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val allCardEventsFlow: Flow<List<CardEvent>> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
@@ -1022,7 +1032,7 @@ class KamViewModel(
         }
     }
 
-    private val hasPendingWritesFlow: Flow<Boolean> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val hasPendingWritesFlow: Flow<Boolean> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             flowOf(false)
         } else {
@@ -1032,7 +1042,7 @@ class KamViewModel(
         }
     }.distinctUntilChanged()
 
-    private val allMonthlyBalancesFlow: Flow<List<MonthlyBalance>> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val allMonthlyBalancesFlow: Flow<List<MonthlyBalance>> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
@@ -1050,7 +1060,7 @@ class KamViewModel(
         }
     }
 
-    private val memberProfilesFlow: Flow<List<ServantMemberProfile>> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val memberProfilesFlow: Flow<List<ServantMemberProfile>> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
@@ -1070,7 +1080,7 @@ class KamViewModel(
         }
     }
 
-    private val childNotesFlow: Flow<List<ChildNote>> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val childNotesFlow: Flow<List<ChildNote>> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
@@ -1090,7 +1100,7 @@ class KamViewModel(
         }
     }
 
-    private val allAttendanceFlow: Flow<List<AttendanceRecord>> = activeGroupIdFlow.flatMapLatest { groupId ->
+    private val allAttendanceFlow: Flow<List<AttendanceRecord>> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
         if (groupId.isBlank()) {
             flowOf(emptyList())
         } else {
@@ -2882,13 +2892,11 @@ class KamViewModel(
     fun forceFullCloudSync() {
         if (_isRefreshing.value) return
         val state = uiState.value
-        val groupId = state.group?.inviteCode.orEmpty()
-        if (!state.isOnline) {
-            showBanner("لا يوجد اتصال بالإنترنت — يتم عرض آخر بيانات محفوظة")
-            return
-        }
+        val groupId = state.group?.inviteCode?.trim().orEmpty()
+            .ifBlank { state.userProfile?.groupId?.trim().orEmpty() }
         _isRefreshing.value = true
         viewModelScope.launch {
+            val startedAtMs = System.currentTimeMillis()
             try {
                 val result = kotlinx.coroutines.withTimeoutOrNull(10_000L) {
                     repository.forceRefreshFromServer(
@@ -2896,12 +2904,28 @@ class KamViewModel(
                         userId = currentUserId
                     )
                 }
-                if (result == null) {
-                    showBanner("استغرق الاتصال وقتاً أطول من المعتاد — تأكد من الشبكة")
-                } else if (result.isSuccess) {
-                    showBanner("تم تحديث ومزامنة البيانات مع باقي الخدام ✓")
-                } else {
-                    showBanner("تعذر المزامنة الآن — تأكد من اتصالك بالإنترنت")
+                // Re-attach all live Firestore snapshot listeners so any stale or previously errored
+                // stream immediately re-subscribes and pushes fresh server state to the UI.
+                _manualRefreshTrigger.value = _manualRefreshTrigger.value + 1
+
+                val elapsedMs = System.currentTimeMillis() - startedAtMs
+                if (elapsedMs < 480L) {
+                    delay(480L - elapsedMs)
+                }
+
+                when {
+                    result == null -> {
+                        showBanner("استغرق الاتصال وقتاً أطول من المعتاد — تأكد من الشبكة")
+                    }
+                    result.isSuccess -> {
+                        showBanner("تم تحديث ومزامنة بيانات التطبيق ✓")
+                    }
+                    !uiState.value.isOnline -> {
+                        showBanner("لا يوجد اتصال بالإنترنت — يتم عرض آخر بيانات محفوظة")
+                    }
+                    else -> {
+                        showBanner("تعذر المزامنة الآن — تأكد من اتصالك بالإنترنت")
+                    }
                 }
             } finally {
                 _isRefreshing.value = false

@@ -18,6 +18,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -3798,7 +3800,7 @@ private fun SystemMessageCenteredPill(
                 val t = parsedReport.cardContextTitle.trim()
                 if (t.startsWith("كارت")) t else "كارت $t"
             }
-            else -> "الحضور"
+            else -> "حضور عادي"
         }
     }
     val effectiveIcon = remember(parsedReport, resolvedCardType, customCardConfig) {
@@ -4085,6 +4087,20 @@ private fun SystemMessageCenteredPill(
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f),
                     fontWeight = FontWeight.Medium
                 )
+                HorizontalDivider(color = reportHeaderColor.copy(alpha = 0.25f))
+                AttendanceReportBottomSummaryFooter(
+                    presentCount = parsedReport.presentNames.size,
+                    troublemakerCount = parsedReport.issueEntries.size,
+                    absentCount = parsedReport.absentEntries.size,
+                    noCardCount = parsedReport.noCardEntries.size,
+                    isCardReport = isCardReport,
+                    servantName = parsedReport.servantName,
+                    registrationTypeLabel = effectiveTypeLabel,
+                    registrationIcon = effectiveIcon,
+                    accentColor = reportHeaderColor,
+                    timestampMillis = message.effectiveTimeMillis,
+                    messageId = message.id
+                )
             }
         }
         return
@@ -4369,6 +4385,163 @@ private fun SystemMessageCenteredPill(
                 grandTotalText = grandTotalAlertText,
                 grandTotalAccent = reportHeaderColor
             )
+
+            // Bottom-most Summary Footer: Troublemakers count, Present count, Recorder Name & Registration Type
+            AttendanceReportBottomSummaryFooter(
+                presentCount = parsedReport.presentNames.size,
+                troublemakerCount = parsedReport.issueEntries.size,
+                absentCount = parsedReport.absentEntries.size,
+                noCardCount = parsedReport.noCardEntries.size,
+                isCardReport = isCardReport,
+                servantName = parsedReport.servantName,
+                registrationTypeLabel = effectiveTypeLabel,
+                registrationIcon = effectiveIcon,
+                accentColor = reportHeaderColor,
+                timestampMillis = message.effectiveTimeMillis,
+                messageId = message.id
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AttendanceReportBottomSummaryFooter(
+    presentCount: Int,
+    troublemakerCount: Int,
+    absentCount: Int,
+    noCardCount: Int,
+    isCardReport: Boolean,
+    servantName: String,
+    registrationTypeLabel: String,
+    registrationIcon: String,
+    accentColor: Color,
+    timestampMillis: Long,
+    messageId: String
+) {
+    val extColors = LocalKamExtendedColors.current
+    val timeLabel = remember(timestampMillis) {
+        if (timestampMillis > 0L) ChatFormatHelper.formatMessageTime(timestampMillis) else ""
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("report_bottom_summary_footer_$messageId")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Surface(
+                    color = extColors.onlineGreen.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(0.8.dp, extColors.onlineGreen.copy(alpha = 0.40f))
+                ) {
+                    Text(
+                        text = if (isCardReport) "✓ حاضر (أخذ الكارت): $presentCount" else "✓ حاضر: $presentCount",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        fontWeight = FontWeight.ExtraBold,
+                        color = extColors.onlineGreen,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+
+                Surface(
+                    color = extColors.offlineAmber.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(0.8.dp, extColors.offlineAmber.copy(alpha = 0.45f))
+                ) {
+                    Text(
+                        text = "⚠️ مشاغب: $troublemakerCount",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        fontWeight = FontWeight.ExtraBold,
+                        color = extColors.offlineAmber,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+
+                if (absentCount > 0) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.13f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.38f))
+                    ) {
+                        Text(
+                            text = "✕ غائب: $absentCount",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+
+                if (noCardCount > 0) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.40f))
+                    ) {
+                        Text(
+                            text = "✕ بدون كارت: $noCardCount",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(color = accentColor.copy(alpha = 0.18f))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "المسجّل: ${servantName.ifBlank { "خادم" }}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "نوع التسجيل: $registrationIcon $registrationTypeLabel",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        fontWeight = FontWeight.ExtraBold,
+                        color = accentColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (timeLabel.isNotBlank()) {
+                    Text(
+                        text = timeLabel,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 6.dp)
+                    )
+                }
+            }
         }
     }
 }

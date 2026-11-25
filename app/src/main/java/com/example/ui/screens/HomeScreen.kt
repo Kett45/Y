@@ -71,6 +71,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -354,10 +356,23 @@ fun HomeScreen(
                 onOpenStudentDetails = { studentForDetailsSheet = it }
             )
         } else {
+            val pullToRefreshState = rememberPullToRefreshState()
             PullToRefreshBox(
                 isRefreshing = state.isRefreshing,
                 onRefresh = onRefresh,
-                modifier = Modifier.fillMaxSize()
+                state = pullToRefreshState,
+                indicator = {
+                    PullToRefreshDefaults.Indicator(
+                        state = pullToRefreshState,
+                        isRefreshing = state.isRefreshing,
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.align(Alignment.TopCenter)
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("home_pull_to_refresh")
             ) {
             LazyColumn(
                 state = listState,

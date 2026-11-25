@@ -1,15 +1,31 @@
 package com.example.ui.screens
 
+import android.content.Context
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,9 +36,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -37,12 +55,15 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -70,26 +91,32 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.ui.zIndex
 import com.example.R
 import com.example.data.cache.LocalClassroomCache
 import com.example.data.model.ArabicInitialsHelper
@@ -108,17 +135,33 @@ import com.example.data.repository.KamRepository
 import com.example.ui.components.StudentAvatarImageHelper
 import com.example.ui.theme.KamSemanticColors
 import com.example.ui.theme.LocalKamExtendedColors
-import android.widget.Toast
 import com.example.ui.viewmodel.KamScreenState
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.roundToInt
+
+private const val SMART_SWIPE_ONBOARDING_PREFS = "kam_smart_swipe_onboarding_v1"
+private const val MODE_KEY_UNSELECTED = ""
+private const val MODE_KEY_NORMAL_ATTENDANCE = "NORMAL_ATTENDANCE"
+
+private sealed interface SwipeSessionMode {
+    data object Unselected : SwipeSessionMode
+    data object NormalAttendance : SwipeSessionMode
+    data class CardMode(val cardType: CardType) : SwipeSessionMode
+}
+
+private fun formatCardRegistrationLabel(card: CardType, customCardConfig: CustomCardConfig): String {
+    val cleanTitle = card.displayTitle(customCardConfig).trim()
+    return if (cleanTitle.startsWith("كارت")) cleanTitle else "كارت $cleanTitle"
+}
 
 @Immutable
 private data class AttendanceActionHistoryEntry(
@@ -261,7 +304,7 @@ private fun formatMergedAttendanceSystemMessage(
     val safeServant = sanitizeReportField(servantName).ifBlank { "خادم" }
     val safeCardTitle = sanitizeReportField(cardContextTitle)
     val safeTypeLabel = sanitizeReportField(reportTypeLabel).ifBlank {
-        if (safeCardTitle.isNotBlank()) "كارت $safeCardTitle" else "الحضور"
+        if (safeCardTitle.isNotBlank()) "كارت $safeCardTitle" else "حضور عادي"
     }
     val safeIcon = sanitizeReportField(reportIcon).ifBlank { "📋" }
     val headerTitle = "$safeIcon تقرير $safeTypeLabel (بواسطة $safeServant)"
@@ -271,7 +314,7 @@ private fun formatMergedAttendanceSystemMessage(
         }
         if (absentList.isNotEmpty()) add("غائب: ${absentList.size}")
         if (noCardList.isNotEmpty()) add("بدون كارت: ${noCardList.size}")
-        if (issueList.isNotEmpty()) add("مشكلة: ${issueList.size}")
+        if (issueList.isNotEmpty()) add("مشاغب: ${issueList.size}")
     }
 
     val sb = StringBuilder()
@@ -426,14 +469,64 @@ fun SmartAttendanceScreen(
         CardType.entries.filter { it != CardType.CUSTOM_ELDER || customCardConfig.enabled }
     }
 
-    // Selected mode: null = Normal Attendance ("الحضور"), non-null = any enabled CardType entry
-    var selectedCardTypeId by rememberSaveable(groupId, activeWeekKey) { mutableStateOf("") }
-    val selectedCardType: CardType? = remember(selectedCardTypeId, customCardConfig.enabled) {
-        if (selectedCardTypeId.isBlank()) {
-            null
-        } else {
-            val found = CardType.fromId(selectedCardTypeId)
-            if (found == CardType.CUSTOM_ELDER && !customCardConfig.enabled) null else found
+    // Selected mode starts UNSELECTED ("") until the servant explicitly picks from the Star button
+    var selectedModeKey by rememberSaveable(groupId, activeWeekKey) { mutableStateOf(MODE_KEY_UNSELECTED) }
+    val sessionMode: SwipeSessionMode = remember(selectedModeKey, customCardConfig.enabled) {
+        when (selectedModeKey) {
+            MODE_KEY_UNSELECTED -> SwipeSessionMode.Unselected
+            MODE_KEY_NORMAL_ATTENDANCE -> SwipeSessionMode.NormalAttendance
+            else -> {
+                val found = CardType.fromId(selectedModeKey)
+                if (found == null || (found == CardType.CUSTOM_ELDER && !customCardConfig.enabled)) {
+                    SwipeSessionMode.Unselected
+                } else {
+                    SwipeSessionMode.CardMode(found)
+                }
+            }
+        }
+    }
+    val isModeSelected = sessionMode != SwipeSessionMode.Unselected
+    val selectedCardType: CardType? = (sessionMode as? SwipeSessionMode.CardMode)?.cardType
+
+    // Star button menu, first-time Spotlight coach-mark, and quick "not selected" prompt state
+    var starMenuExpanded by remember { mutableStateOf(false) }
+    var showSelectCardPrompt by remember { mutableStateOf(false) }
+    var starPulseTrigger by remember { mutableIntStateOf(0) }
+    var showStarSpotlight by remember { mutableStateOf(false) }
+    var starButtonBoundsInRoot by remember { mutableStateOf(Rect.Zero) }
+    var rootOriginInRoot by remember { mutableStateOf(Offset.Zero) }
+
+    LaunchedEffect(currentUserId) {
+        val seen = withContext(Dispatchers.IO) {
+            val prefs = context.applicationContext.getSharedPreferences(
+                SMART_SWIPE_ONBOARDING_PREFS,
+                Context.MODE_PRIVATE
+            )
+            val key = "seen_star_spotlight_${currentUserId.ifBlank { "default" }}"
+            prefs.getBoolean(key, false)
+        }
+        if (!seen) {
+            showStarSpotlight = true
+        }
+    }
+
+    fun markStarSpotlightSeenAndOpenMenu() {
+        showStarSpotlight = false
+        starMenuExpanded = true
+        val appCtx = context.applicationContext
+        val key = "seen_star_spotlight_${currentUserId.ifBlank { "default" }}"
+        attendanceIoScope.launch {
+            appCtx.getSharedPreferences(SMART_SWIPE_ONBOARDING_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(key, true)
+                .apply()
+        }
+    }
+
+    LaunchedEffect(showSelectCardPrompt, starPulseTrigger) {
+        if (showSelectCardPrompt) {
+            delay(4_500L)
+            showSelectCardPrompt = false
         }
     }
 
@@ -500,27 +593,42 @@ fun SmartAttendanceScreen(
         }
     }
 
-    // Effective records map for the active mode (Attendance mode vs selected CardType mode)
+    // Effective records map for the active mode (empty while Unselected; Normal Attendance vs selected CardType)
     val activeRecordsByStudentId: Map<String, AttendanceRecord> = remember(
-        selectedCardType,
+        sessionMode,
         orderedStudents,
         recordsByStudentId.toMap(),
         cardSessionRecordsByKey.toMap(),
         weeklyCardEventByStudentId
     ) {
-        val card = selectedCardType
-        if (card == null) {
-            recordsByStudentId.toMap()
-        } else {
-            val result = LinkedHashMap<String, AttendanceRecord>()
-            for (stu in orderedStudents) {
-                val sessionKey = "${card.id}_${stu.id}"
-                val sessionRec = cardSessionRecordsByKey[sessionKey]
-                val liveCardEvent = weeklyCardEventByStudentId[stu.id]
-                if (sessionRec != null) {
-                    // If session marked PRESENT, or ABSENT/ISSUE, reflect it; if awarded outside later, prefer PRESENT
-                    if (sessionRec.attendanceStatus == AttendanceStatus.ABSENT && liveCardEvent != null) {
-                        // Awarded from outside after session mark
+        when (sessionMode) {
+            SwipeSessionMode.Unselected -> emptyMap()
+            SwipeSessionMode.NormalAttendance -> recordsByStudentId.toMap()
+            is SwipeSessionMode.CardMode -> {
+                val card = sessionMode.cardType
+                val result = LinkedHashMap<String, AttendanceRecord>()
+                for (stu in orderedStudents) {
+                    val sessionKey = "${card.id}_${stu.id}"
+                    val sessionRec = cardSessionRecordsByKey[sessionKey]
+                    val liveCardEvent = weeklyCardEventByStudentId[stu.id]
+                    if (sessionRec != null) {
+                        if (sessionRec.attendanceStatus == AttendanceStatus.ABSENT && liveCardEvent != null) {
+                            result[stu.id] = AttendanceRecord(
+                                id = "${activeWeekKey}_${card.id}_${stu.id}",
+                                groupId = groupId,
+                                studentId = stu.id,
+                                studentName = stu.name,
+                                status = AttendanceStatus.PRESENT.id,
+                                weekKey = activeWeekKey,
+                                servantId = liveCardEvent.servantId.ifBlank { currentUserId },
+                                servantName = liveCardEvent.servantName.ifBlank { servantDisplayName },
+                                note = "",
+                                memberUids = memberUids
+                            )
+                        } else {
+                            result[stu.id] = sessionRec
+                        }
+                    } else if (liveCardEvent != null) {
                         result[stu.id] = AttendanceRecord(
                             id = "${activeWeekKey}_${card.id}_${stu.id}",
                             groupId = groupId,
@@ -533,25 +641,10 @@ fun SmartAttendanceScreen(
                             note = "",
                             memberUids = memberUids
                         )
-                    } else {
-                        result[stu.id] = sessionRec
                     }
-                } else if (liveCardEvent != null) {
-                    result[stu.id] = AttendanceRecord(
-                        id = "${activeWeekKey}_${card.id}_${stu.id}",
-                        groupId = groupId,
-                        studentId = stu.id,
-                        studentName = stu.name,
-                        status = AttendanceStatus.PRESENT.id,
-                        weekKey = activeWeekKey,
-                        servantId = liveCardEvent.servantId.ifBlank { currentUserId },
-                        servantName = liveCardEvent.servantName.ifBlank { servantDisplayName },
-                        note = "",
-                        memberUids = memberUids
-                    )
                 }
+                result
             }
-            result
         }
     }
 
@@ -581,116 +674,74 @@ fun SmartAttendanceScreen(
         }
     }
 
-    // 3. Batching PRESENT, ABSENT, NO_CARD & ISSUE events into a unified V3 SYSTEM group chat report
+    // 3. Collect ALL session choices and dispatch ONE consolidated V3 SYSTEM group chat message
+    // ONLY when the servant completes all children, taps Finish, exits the screen, or switches card type.
     val pendingChatEntries = remember { LinkedHashMap<String, PendingSystemChatEntry>() }
-    var batchFlushJob by remember { mutableStateOf<Job?>(null) }
+    var pendingChatMode by remember { mutableStateOf<SwipeSessionMode>(SwipeSessionMode.Unselected) }
 
     fun flushPendingSystemChatNow() {
-        batchFlushJob?.cancel()
-        batchFlushJob = null
         if (pendingChatEntries.isEmpty() || groupId.isBlank()) return
+        val modeToReport = pendingChatMode.takeIf { it != SwipeSessionMode.Unselected } ?: sessionMode
+        if (modeToReport == SwipeSessionMode.Unselected) {
+            pendingChatEntries.clear()
+            return
+        }
         val snapshotEntries = pendingChatEntries.values.toList()
         pendingChatEntries.clear()
+        pendingChatMode = SwipeSessionMode.Unselected
 
-        val activeCard = selectedCardType
-        val isCardReport = activeCard != null
+        val activeCard = (modeToReport as? SwipeSessionMode.CardMode)?.cardType
         val cardContextTitle = activeCard?.displayTitle(customCardConfig).orEmpty()
         val reportTypeKey = if (activeCard == null) "ATTENDANCE" else "CARD:${activeCard.id}"
         val reportTypeLabel = if (activeCard == null) {
-            "الحضور"
+            "حضور عادي"
         } else {
-            val cleanCardName = cardContextTitle.trim()
-            if (cleanCardName.startsWith("كارت")) cleanCardName else "كارت $cleanCardName"
+            formatCardRegistrationLabel(activeCard, customCardConfig)
         }
         val reportIcon = activeCard?.displaySymbol(customCardConfig) ?: "📋"
         val reportColorKey = activeCard?.displayColorKey(customCardConfig) ?: "EMERALD"
 
-        // Collect all students known to be PRESENT in this mode for this week
-        val presentFromActiveRecords = orderedStudents.filter { stu ->
-            activeRecordsByStudentId[stu.id]?.attendanceStatus == AttendanceStatus.PRESENT
-        }
+        // Collect all students marked PRESENT / received card in this session (names only in the single message)
         val presentBatchEntries = snapshotEntries
             .filter { it.kind == ReportEventKind.PRESENT }
             .sortedBy { it.studentNumber }
-        val combinedPresentIds = (presentFromActiveRecords.map { it.id } + presentBatchEntries.map { it.studentId }).distinct()
-        val combinedPresentNames = (presentFromActiveRecords.map { it.name } + presentBatchEntries.map { it.studentName }).distinct()
+        val nonPresentBatchIds = snapshotEntries
+            .filter { it.kind != ReportEventKind.PRESENT }
+            .map { it.studentId }
+            .toSet()
+        val presentFromActiveRecords = if (modeToReport == sessionMode) {
+            orderedStudents.filter { stu ->
+                stu.id !in nonPresentBatchIds &&
+                    activeRecordsByStudentId[stu.id]?.attendanceStatus == AttendanceStatus.PRESENT
+            }
+        } else {
+            emptyList()
+        }
+        val combinedPresentIds = (presentBatchEntries.map { it.studentId } + presentFromActiveRecords.map { it.id }).distinct()
+        val combinedPresentNames = (presentBatchEntries.map { it.studentName } + presentFromActiveRecords.map { it.name }).distinct()
+
+        val messageTextToSend = formatMergedAttendanceSystemMessage(
+            weekKey = activeWeekKey,
+            reportTypeKey = reportTypeKey,
+            reportTypeLabel = reportTypeLabel,
+            reportIcon = reportIcon,
+            reportColorKey = reportColorKey,
+            servantUid = currentUserId,
+            servantName = servantDisplayName,
+            entries = snapshotEntries,
+            presentStudentIds = combinedPresentIds,
+            presentStudentNames = combinedPresentNames,
+            cardContextTitle = cardContextTitle
+        )
+        if (messageTextToSend.isBlank()) return
 
         val appContext = context.applicationContext
         val targetGroupId = groupId
-        val targetWeekKey = activeWeekKey
         val targetServantName = servantDisplayName
-        val targetServantUid = currentUserId
         val targetMembers = memberUids
 
         attendanceIoScope.launch {
-            val baselineMsg = chatRepository.findBaselineAttendanceReport(
-                groupId = targetGroupId,
-                weekKey = targetWeekKey,
-                reportTypeKey = reportTypeKey,
-                excludeSenderUid = targetServantUid
-            )
-
-            val messageTextToSend = if (baselineMsg != null) {
-                val baseline = parseBaselineAttendanceStatuses(baselineMsg.text)
-                val diffs = ArrayList<CrossServantDiffEntry>()
-                for (entry in snapshotEntries) {
-                    val basePair = baseline.statusByStudentId[entry.studentId]
-                    val baseKind = basePair?.first
-                    if (baseKind != entry.kind) {
-                        diffs.add(
-                            CrossServantDiffEntry(
-                                studentId = entry.studentId,
-                                studentNumber = entry.studentNumber,
-                                studentName = entry.studentName,
-                                firstStatusLabel = reportStatusArabicLabel(baseKind, isCardReport),
-                                secondStatusLabel = reportStatusArabicLabel(entry.kind, isCardReport),
-                                note = entry.note
-                            )
-                        )
-                    }
-                }
-
-                if (diffs.isEmpty()) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(
-                            appContext,
-                            "✓ تقرير $reportTypeLabel مطابق تماماً لتقرير ${baseline.firstServantName} — لا توجد اختلافات للإرسال",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                    return@launch
-                }
-
-                formatCrossServantDiffSystemMessage(
-                    weekKey = targetWeekKey,
-                    reportTypeKey = reportTypeKey,
-                    reportTypeLabel = reportTypeLabel,
-                    reportIcon = reportIcon,
-                    reportColorKey = reportColorKey,
-                    servantUid = targetServantUid,
-                    servantName = targetServantName,
-                    firstServantName = baseline.firstServantName,
-                    cardContextTitle = cardContextTitle,
-                    diffs = diffs
-                )
-            } else {
-                formatMergedAttendanceSystemMessage(
-                    weekKey = targetWeekKey,
-                    reportTypeKey = reportTypeKey,
-                    reportTypeLabel = reportTypeLabel,
-                    reportIcon = reportIcon,
-                    reportColorKey = reportColorKey,
-                    servantUid = targetServantUid,
-                    servantName = targetServantName,
-                    entries = snapshotEntries,
-                    presentStudentIds = combinedPresentIds,
-                    presentStudentNames = combinedPresentNames,
-                    cardContextTitle = cardContextTitle
-                )
-            }
-
-            if (messageTextToSend.isBlank()) return@launch
-            chatRepository.sendGroupMessage(
+            val sendResult = chatRepository.sendGroupMessage(
                 groupId = targetGroupId,
                 senderName = targetServantName,
                 text = messageTextToSend,
@@ -698,6 +749,15 @@ fun SmartAttendanceScreen(
                 type = ChatMessageType.SYSTEM,
                 waitForServerAck = false
             )
+            if (sendResult.isSuccess) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        appContext,
+                        "تم إرسال تقرير $reportTypeLabel إلى المراسلة ✓",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
         }
     }
 
@@ -705,9 +765,11 @@ fun SmartAttendanceScreen(
         student: Student,
         kind: ReportEventKind?,
         note: String = "",
-        cardLabel: String = ""
+        cardLabel: String = "",
+        modeForEntry: SwipeSessionMode = sessionMode
     ) {
         if (kind != null) {
+            pendingChatMode = modeForEntry
             pendingChatEntries[student.id] = PendingSystemChatEntry(
                 studentId = student.id,
                 studentName = student.name,
@@ -716,18 +778,10 @@ fun SmartAttendanceScreen(
                 note = note.trim(),
                 cardLabel = cardLabel.trim()
             )
-            if (batchFlushJob == null || batchFlushJob?.isActive != true) {
-                batchFlushJob = uiScope.launch {
-                    // 2-minute session batch window
-                    delay(120_000L)
-                    flushPendingSystemChatNow()
-                }
-            }
         } else {
             pendingChatEntries.remove(student.id)
             if (pendingChatEntries.isEmpty()) {
-                batchFlushJob?.cancel()
-                batchFlushJob = null
+                pendingChatMode = SwipeSessionMode.Unselected
             }
         }
     }
@@ -739,16 +793,22 @@ fun SmartAttendanceScreen(
     }
 
     // 4. Navigation & Queue State
-    var currentIndex by rememberSaveable(groupId, activeWeekKey, selectedCardTypeId) { mutableIntStateOf(0) }
-    var showSummaryView by rememberSaveable(groupId, activeWeekKey, selectedCardTypeId) { mutableStateOf(false) }
-    var isEditingSpecificPreparedStudent by rememberSaveable(groupId, activeWeekKey, selectedCardTypeId) { mutableStateOf(false) }
-    var hasInitializedIndex by remember(groupId, activeWeekKey, selectedCardTypeId) { mutableStateOf(false) }
+    var currentIndex by rememberSaveable(groupId, activeWeekKey, selectedModeKey) { mutableIntStateOf(0) }
+    var showSummaryView by rememberSaveable(groupId, activeWeekKey, selectedModeKey) { mutableStateOf(false) }
+    var isEditingSpecificPreparedStudent by rememberSaveable(groupId, activeWeekKey, selectedModeKey) { mutableStateOf(false) }
+    var hasInitializedIndex by remember(groupId, activeWeekKey, selectedModeKey) { mutableStateOf(false) }
     var permissionErrorMessage by remember { mutableStateOf<String?>(null) }
     var studentPendingIssueNote by remember { mutableStateOf<Student?>(null) }
     val undoStack = remember { mutableStateListOf<AttendanceActionHistoryEntry>() }
 
-    // Jump to the first unprepared student initially (or show summary if all are already prepared)
-    LaunchedEffect(orderedStudents.size, activeRecordsByStudentId.size, selectedCardTypeId) {
+    // Jump to the first unprepared student once a session mode has been chosen from the Star button
+    LaunchedEffect(orderedStudents.size, activeRecordsByStudentId.size, selectedModeKey, isModeSelected) {
+        if (!isModeSelected) {
+            currentIndex = 0
+            showSummaryView = false
+            hasInitializedIndex = false
+            return@LaunchedEffect
+        }
         if (!hasInitializedIndex && orderedStudents.isNotEmpty()) {
             val firstUnprepared = orderedStudents.indexOfFirst { stu ->
                 !activeRecordsByStudentId.containsKey(stu.id)
@@ -810,11 +870,20 @@ fun SmartAttendanceScreen(
         return state.isAdmin || existing.servantId.isBlank() || existing.servantId == currentUserId
     }
 
+    fun triggerSelectCardPrompt() {
+        showSelectCardPrompt = true
+        starPulseTrigger += 1
+    }
+
     fun recordStudentAttendance(
         student: Student,
         status: AttendanceStatus,
         note: String = ""
     ) {
+        if (!isModeSelected) {
+            triggerSelectCardPrompt()
+            return
+        }
         val card = selectedCardType
         val existing = activeRecordsByStudentId[student.id]
         if (!canModifyRecord(existing)) {
@@ -1003,8 +1072,8 @@ fun SmartAttendanceScreen(
             }
         } else {
             // Switch back to that card mode if needed
-            if (selectedCardTypeId != entryCard.id) {
-                selectedCardTypeId = entryCard.id
+            if (selectedModeKey != entryCard.id) {
+                selectedModeKey = entryCard.id
             }
             val sessionKey = "${entryCard.id}_${stu.id}"
             if (prev == null) {
@@ -1073,187 +1142,239 @@ fun SmartAttendanceScreen(
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-        Surface(
-            color = MaterialTheme.colorScheme.background,
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .testTag("smart_attendance_screen")
+                .onGloballyPositioned { coords ->
+                    rootOriginInRoot = coords.positionInRoot()
+                }
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                // Top Bar with Progress ("12 / 58") & Summary Toggle + Mode Selector
-                val totalCount = orderedStudents.size
-                val preparedCount = orderedStudents.count { activeRecordsByStudentId.containsKey(it.id) }
-                val displayedStepNumber = if (totalCount == 0) {
-                    0
-                } else if (showSummaryView) {
-                    totalCount
-                } else {
-                    (currentIndex.coerceIn(0, totalCount - 1) + 1)
-                }
-
-                SmartAttendanceTopHeader(
-                    weekKey = activeWeekKey,
-                    selectedCardType = selectedCardType,
-                    availableCardTypes = availableCardTypes,
-                    customCardConfig = customCardConfig,
-                    onSelectCardType = { newCardType ->
-                        flushPendingSystemChatNow()
-                        selectedCardTypeId = newCardType?.id.orEmpty()
-                        permissionErrorMessage = null
-                        isEditingSpecificPreparedStudent = false
-                        showSummaryView = false
-                        hasInitializedIndex = false
-                    },
-                    currentPosition = displayedStepNumber,
-                    preparedCount = preparedCount,
-                    totalCount = totalCount,
-                    showSummaryView = showSummaryView,
-                    canUndo = undoStack.isNotEmpty(),
-                    onUndo = ::undoLastGesture,
-                    onToggleSummary = {
-                        if (!showSummaryView) {
-                            flushPendingSystemChatNow()
-                        }
-                        showSummaryView = !showSummaryView
-                    },
-                    onClose = {
-                        flushPendingSystemChatNow()
-                        onClose()
+            Surface(
+                color = MaterialTheme.colorScheme.background,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("smart_attendance_screen")
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // Compact Top Bar with Progress & Single Prominent Star Button next to Summary/Swipe Toggle
+                    val totalCount = orderedStudents.size
+                    val preparedCount = if (isModeSelected) {
+                        orderedStudents.count { activeRecordsByStudentId.containsKey(it.id) }
+                    } else {
+                        0
                     }
-                )
-
-                AnimatedVisibility(visible = permissionErrorMessage != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = permissionErrorMessage.orEmpty(),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.weight(1f)
-                            )
-                            TextButton(onClick = { permissionErrorMessage = null }) {
-                                Text("إغلاق", color = MaterialTheme.colorScheme.onErrorContainer)
-                            }
-                        }
+                    val displayedStepNumber = if (totalCount == 0) {
+                        0
+                    } else if (showSummaryView) {
+                        totalCount
+                    } else {
+                        (currentIndex.coerceIn(0, totalCount - 1) + 1)
                     }
-                }
 
-                if (orderedStudents.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "لا يوجد أطفال مسجلون في الفصل حالياً.",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                } else if (showSummaryView) {
-                    SmartAttendanceSummaryView(
-                        selectedCardType = selectedCardType,
+                    SmartAttendanceTopHeader(
+                        weekKey = activeWeekKey,
+                        sessionMode = sessionMode,
+                        availableCardTypes = availableCardTypes,
                         customCardConfig = customCardConfig,
-                        orderedStudents = orderedStudents,
-                        recordsByStudentId = activeRecordsByStudentId,
-                        blockById = blockById,
-                        isAdmin = state.isAdmin,
-                        currentUserId = currentUserId,
-                        onSelectStudentToEdit = { index ->
-                            currentIndex = index
-                            isEditingSpecificPreparedStudent = true
-                            showSummaryView = false
+                        starMenuExpanded = starMenuExpanded,
+                        onStarMenuExpandedChange = { expanded ->
+                            starMenuExpanded = expanded
+                            if (expanded) {
+                                showSelectCardPrompt = false
+                            }
                         },
-                        onAdminDeleteRecord = ::adminDeleteRecord,
-                        onResumeUnprepared = {
-                            val nextIdx = orderedStudents.indexOfFirst { !activeRecordsByStudentId.containsKey(it.id) }
-                            if (nextIdx >= 0) {
-                                currentIndex = nextIdx
+                        starPulseTrigger = starPulseTrigger,
+                        onStarButtonBoundsChanged = { bounds ->
+                            starButtonBoundsInRoot = bounds
+                        },
+                        onSelectSessionMode = { newMode ->
+                            val newKey = when (newMode) {
+                                SwipeSessionMode.Unselected -> MODE_KEY_UNSELECTED
+                                SwipeSessionMode.NormalAttendance -> MODE_KEY_NORMAL_ATTENDANCE
+                                is SwipeSessionMode.CardMode -> newMode.cardType.id
+                            }
+                            if (newKey != selectedModeKey) {
+                                flushPendingSystemChatNow()
+                                selectedModeKey = newKey
+                                permissionErrorMessage = null
                                 isEditingSpecificPreparedStudent = false
                                 showSummaryView = false
+                                hasInitializedIndex = false
+                            }
+                            showSelectCardPrompt = false
+                            starMenuExpanded = false
+                        },
+                        currentPosition = displayedStepNumber,
+                        preparedCount = preparedCount,
+                        totalCount = totalCount,
+                        showSummaryView = showSummaryView,
+                        canUndo = undoStack.isNotEmpty(),
+                        onUndo = ::undoLastGesture,
+                        onToggleSummary = {
+                            if (!isModeSelected) {
+                                triggerSelectCardPrompt()
+                            } else {
+                                showSummaryView = !showSummaryView
                             }
                         },
-                        onFinishAndClose = {
+                        onClose = {
                             flushPendingSystemChatNow()
                             onClose()
                         }
                     )
-                } else {
-                    val safeIndex = currentIndex.coerceIn(0, orderedStudents.lastIndex)
-                    val currentStudent = orderedStudents[safeIndex]
-                    val currentBlock = blockById[currentStudent.blockId]
-                    val existingRecord = activeRecordsByStudentId[currentStudent.id]
 
-                    // Automatically skip already-prepared student unless the user explicitly navigated to edit them
-                    LaunchedEffect(currentStudent.id, existingRecord != null, isEditingSpecificPreparedStudent, selectedCardTypeId) {
-                        if (existingRecord != null && !isEditingSpecificPreparedStudent) {
-                            val hasAnyUnprepared = orderedStudents.any { !activeRecordsByStudentId.containsKey(it.id) }
-                            if (hasAnyUnprepared) {
-                                advanceToNextUnpreparedFrom(safeIndex)
-                            } else {
-                                showSummaryView = true
+                    AnimatedVisibility(visible = permissionErrorMessage != null) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 3.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = permissionErrorMessage.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { permissionErrorMessage = null }) {
+                                    Text("إغلاق", color = MaterialTheme.colorScheme.onErrorContainer)
+                                }
                             }
                         }
                     }
 
-                    SmartAttendanceSwipeCardContent(
-                        selectedCardType = selectedCardType,
-                        customCardConfig = customCardConfig,
-                        student = currentStudent,
-                        block = currentBlock,
-                        existingRecord = existingRecord,
-                        currentIndex = safeIndex,
-                        totalStudents = orderedStudents.size,
-                        isAdmin = state.isAdmin,
-                        currentUserId = currentUserId,
-                        canUndo = undoStack.isNotEmpty(),
-                        onSwipePresent = {
-                            recordStudentAttendance(currentStudent, AttendanceStatus.PRESENT)
-                        },
-                        onSwipeAbsent = {
-                            recordStudentAttendance(currentStudent, AttendanceStatus.ABSENT)
-                        },
-                        onSwipeIssue = {
-                            if (!canModifyRecord(existingRecord)) {
-                                permissionErrorMessage =
-                                    "هذا الطفل تم تسجيله بواسطة «${existingRecord?.servantName.orEmpty()}» — الأمين فقط يمكنه تعديل أو حذف تسجيل خادم آخر."
-                            } else {
-                                studentPendingIssueNote = currentStudent
-                            }
-                        },
-                        onUndo = ::undoLastGesture,
-                        onNavigatePrev = {
-                            if (orderedStudents.isNotEmpty()) {
-                                isEditingSpecificPreparedStudent = true
-                                currentIndex = if (safeIndex - 1 < 0) orderedStudents.lastIndex else safeIndex - 1
-                            }
-                        },
-                        onNavigateNext = {
-                            if (orderedStudents.isNotEmpty()) {
-                                isEditingSpecificPreparedStudent = true
-                                currentIndex = (safeIndex + 1) % orderedStudents.size
-                            }
-                        },
-                        onAdminDeleteRecord = {
-                            adminDeleteRecord(currentStudent)
+                    if (orderedStudents.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "لا يوجد أطفال مسجلون في الفصل حالياً.",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
-                    )
+                    } else if (showSummaryView && isModeSelected) {
+                        SmartAttendanceSummaryView(
+                            selectedCardType = selectedCardType,
+                            customCardConfig = customCardConfig,
+                            orderedStudents = orderedStudents,
+                            recordsByStudentId = activeRecordsByStudentId,
+                            blockById = blockById,
+                            isAdmin = state.isAdmin,
+                            currentUserId = currentUserId,
+                            onSelectStudentToEdit = { index ->
+                                currentIndex = index
+                                isEditingSpecificPreparedStudent = true
+                                showSummaryView = false
+                            },
+                            onAdminDeleteRecord = ::adminDeleteRecord,
+                            onResumeUnprepared = {
+                                val nextIdx = orderedStudents.indexOfFirst { !activeRecordsByStudentId.containsKey(it.id) }
+                                if (nextIdx >= 0) {
+                                    currentIndex = nextIdx
+                                    isEditingSpecificPreparedStudent = false
+                                    showSummaryView = false
+                                }
+                            },
+                            onFinishAndClose = {
+                                flushPendingSystemChatNow()
+                                onClose()
+                            }
+                        )
+                    } else {
+                        val safeIndex = currentIndex.coerceIn(0, orderedStudents.lastIndex)
+                        val currentStudent = orderedStudents[safeIndex]
+                        val currentBlock = blockById[currentStudent.blockId]
+                        val existingRecord = activeRecordsByStudentId[currentStudent.id]
+
+                        // Automatically skip already-prepared student once a mode is active unless explicitly editing
+                        LaunchedEffect(currentStudent.id, existingRecord != null, isEditingSpecificPreparedStudent, selectedModeKey, isModeSelected) {
+                            if (isModeSelected && existingRecord != null && !isEditingSpecificPreparedStudent) {
+                                val hasAnyUnprepared = orderedStudents.any { !activeRecordsByStudentId.containsKey(it.id) }
+                                if (hasAnyUnprepared) {
+                                    advanceToNextUnpreparedFrom(safeIndex)
+                                } else {
+                                    showSummaryView = true
+                                }
+                            }
+                        }
+
+                        SmartAttendanceSwipeCardContent(
+                            isModeSelected = isModeSelected,
+                            selectedCardType = selectedCardType,
+                            customCardConfig = customCardConfig,
+                            student = currentStudent,
+                            block = currentBlock,
+                            existingRecord = existingRecord,
+                            currentIndex = safeIndex,
+                            totalStudents = orderedStudents.size,
+                            isAdmin = state.isAdmin,
+                            currentUserId = currentUserId,
+                            canUndo = undoStack.isNotEmpty(),
+                            onRequireModeSelection = ::triggerSelectCardPrompt,
+                            onSwipePresent = {
+                                recordStudentAttendance(currentStudent, AttendanceStatus.PRESENT)
+                            },
+                            onSwipeAbsent = {
+                                recordStudentAttendance(currentStudent, AttendanceStatus.ABSENT)
+                            },
+                            onSwipeIssue = {
+                                if (!isModeSelected) {
+                                    triggerSelectCardPrompt()
+                                } else if (!canModifyRecord(existingRecord)) {
+                                    permissionErrorMessage =
+                                        "هذا الطفل تم تسجيله بواسطة «${existingRecord?.servantName.orEmpty()}» — الأمين فقط يمكنه تعديل أو حذف تسجيل خادم آخر."
+                                } else {
+                                    studentPendingIssueNote = currentStudent
+                                }
+                            },
+                            onUndo = ::undoLastGesture,
+                            onNavigatePrev = {
+                                if (orderedStudents.isNotEmpty()) {
+                                    isEditingSpecificPreparedStudent = true
+                                    currentIndex = if (safeIndex - 1 < 0) orderedStudents.lastIndex else safeIndex - 1
+                                }
+                            },
+                            onNavigateNext = {
+                                if (orderedStudents.isNotEmpty()) {
+                                    isEditingSpecificPreparedStudent = true
+                                    currentIndex = (safeIndex + 1) % orderedStudents.size
+                                }
+                            },
+                            onAdminDeleteRecord = {
+                                adminDeleteRecord(currentStudent)
+                            }
+                        )
+                    }
                 }
+            }
+
+            // Quick Floating Notification ("لسه ما اخترتش كارت") — dismisses immediately on tap anywhere
+            SelectCardQuickAlertOverlay(
+                visible = showSelectCardPrompt && !showStarSpotlight,
+                onDismiss = { showSelectCardPrompt = false }
+            )
+
+            // First-time-only Professional Spotlight Coach-Mark highlighting ONLY the Star button
+            if (showStarSpotlight && starButtonBoundsInRoot != Rect.Zero) {
+                StarButtonSpotlightOverlay(
+                    starBoundsInRoot = starButtonBoundsInRoot,
+                    rootOriginInRoot = rootOriginInRoot,
+                    onTapStarTarget = ::markStarSpotlightSeenAndOpenMenu
+                )
             }
         }
 
@@ -1277,10 +1398,14 @@ fun SmartAttendanceScreen(
 @Composable
 private fun SmartAttendanceTopHeader(
     weekKey: String,
-    selectedCardType: CardType?,
+    sessionMode: SwipeSessionMode,
     availableCardTypes: List<CardType>,
     customCardConfig: CustomCardConfig,
-    onSelectCardType: (CardType?) -> Unit,
+    starMenuExpanded: Boolean,
+    onStarMenuExpandedChange: (Boolean) -> Unit,
+    starPulseTrigger: Int,
+    onStarButtonBoundsChanged: (Rect) -> Unit,
+    onSelectSessionMode: (SwipeSessionMode) -> Unit,
     currentPosition: Int,
     preparedCount: Int,
     totalCount: Int,
@@ -1290,7 +1415,6 @@ private fun SmartAttendanceTopHeader(
     onToggleSummary: () -> Unit,
     onClose: () -> Unit
 ) {
-    var showModeDropdown by remember { mutableStateOf(false) }
     val progressFraction = if (totalCount > 0) {
         (preparedCount.toFloat() / totalCount.toFloat()).coerceIn(0f, 1f)
     } else {
@@ -1298,6 +1422,32 @@ private fun SmartAttendanceTopHeader(
     }
 
     val extColors = LocalKamExtendedColors.current
+    val isModeSelected = sessionMode != SwipeSessionMode.Unselected
+    val selectedCard = (sessionMode as? SwipeSessionMode.CardMode)?.cardType
+
+    // Brief energetic bounce when the servant tries to swipe before picking from the Star button
+    var isPulsingStar by remember { mutableStateOf(false) }
+    LaunchedEffect(starPulseTrigger) {
+        if (starPulseTrigger > 0) {
+            isPulsingStar = true
+            delay(280L)
+            isPulsingStar = false
+        }
+    }
+    val starScale by animateFloatAsState(
+        targetValue = if (isPulsingStar) 1.24f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "star_button_pulse_scale"
+    )
+
+    val starAccentColor = when (sessionMode) {
+        SwipeSessionMode.Unselected -> extColors.cardGold
+        SwipeSessionMode.NormalAttendance -> extColors.onlineGreen
+        is SwipeSessionMode.CardMode -> KamSemanticColors.cardColor(sessionMode.cardType, customCardConfig)
+    }
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -1307,8 +1457,8 @@ private fun SmartAttendanceTopHeader(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1317,7 +1467,7 @@ private fun SmartAttendanceTopHeader(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     IconButton(
@@ -1329,12 +1479,15 @@ private fun SmartAttendanceTopHeader(
                             contentDescription = "رجوع للرئيسية"
                         )
                     }
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (selectedCardType == null) {
-                                "السحب الذكي — الحضور"
-                            } else {
-                                "سحب ${selectedCardType.displaySymbol(customCardConfig)} ${selectedCardType.displayTitle(customCardConfig)} (+${selectedCardType.displayPoints(customCardConfig)})"
+                            text = when (sessionMode) {
+                                SwipeSessionMode.Unselected -> "السحب الذكي"
+                                SwipeSessionMode.NormalAttendance -> "📋 حضور عادي"
+                                is SwipeSessionMode.CardMode -> {
+                                    val c = sessionMode.cardType
+                                    "${c.displaySymbol(customCardConfig)} ${formatCardRegistrationLabel(c, customCardConfig)}"
+                                }
                             },
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.ExtraBold,
@@ -1343,14 +1496,20 @@ private fun SmartAttendanceTopHeader(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (selectedCardType == null) {
-                                "الأسبوع: $weekKey (حضور بدون نقاط)"
-                            } else {
-                                "الأسبوع: $weekKey (يسمع تلقائياً في الرئيسية)"
+                            text = when (sessionMode) {
+                                SwipeSessionMode.Unselected -> "اختر النوع من النجمة ⭐"
+                                SwipeSessionMode.NormalAttendance -> "$weekKey • بدون نقاط"
+                                is SwipeSessionMode.CardMode -> "$weekKey • +${sessionMode.cardType.displayPoints(customCardConfig)} نقطة"
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
+                            color = if (isModeSelected) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                extColors.cardGold
+                            },
+                            fontWeight = if (isModeSelected) FontWeight.Normal else FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -1371,14 +1530,140 @@ private fun SmartAttendanceTopHeader(
                             )
                         }
                     }
+
+                    // Single Prominent Star Button right beside the Summary/Swipe Toggle
+                    Box {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (isModeSelected) {
+                                starAccentColor.copy(alpha = 0.20f)
+                            } else {
+                                extColors.cardGold.copy(alpha = 0.22f)
+                            },
+                            border = BorderStroke(
+                                width = if (isModeSelected) 1.5.dp else 2.dp,
+                                color = starAccentColor
+                            ),
+                            modifier = Modifier
+                                .size(48.dp)
+                                .graphicsLayer {
+                                    scaleX = starScale
+                                    scaleY = starScale
+                                }
+                                .onGloballyPositioned { coords ->
+                                    onStarButtonBoundsChanged(coords.boundsInRoot())
+                                }
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onStarMenuExpandedChange(true) }
+                                .testTag("smart_swipe_star_selector_button")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = "اختيار الحضور أو نوع الكارت",
+                                    tint = starAccentColor,
+                                    modifier = Modifier.size(30.dp)
+                                )
+                                if (isModeSelected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(4.dp)
+                                            .size(10.dp)
+                                            .clip(CircleShape)
+                                            .background(extColors.onlineGreen)
+                                            .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                                    )
+                                }
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = starMenuExpanded,
+                            onDismissRequest = { onStarMenuExpandedChange(false) },
+                            modifier = Modifier.testTag("smart_swipe_star_mode_menu")
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "📋 حضور عادي (بدون نقاط)",
+                                            fontWeight = if (sessionMode == SwipeSessionMode.NormalAttendance) {
+                                                FontWeight.ExtraBold
+                                            } else {
+                                                FontWeight.Medium
+                                            },
+                                            color = if (sessionMode == SwipeSessionMode.NormalAttendance) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            }
+                                        )
+                                        if (sessionMode == SwipeSessionMode.NormalAttendance) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    onSelectSessionMode(SwipeSessionMode.NormalAttendance)
+                                },
+                                modifier = Modifier.testTag("star_menu_normal_attendance")
+                            )
+                            HorizontalDivider()
+                            availableCardTypes.forEach { card ->
+                                val isSelected = selectedCard == card
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                text = "${card.displaySymbol(customCardConfig)} ${formatCardRegistrationLabel(card, customCardConfig)} (+${card.displayPoints(customCardConfig)})",
+                                                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                                                color = if (isSelected) {
+                                                    MaterialTheme.colorScheme.primary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurface
+                                                }
+                                            )
+                                            if (isSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    },
+                                    onClick = {
+                                        onSelectSessionMode(SwipeSessionMode.CardMode(card))
+                                    },
+                                    modifier = Modifier.testTag("star_menu_card_${card.id}")
+                                )
+                            }
+                        }
+                    }
+
                     OutlinedButton(
                         onClick = onToggleSummary,
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.testTag("toggle_attendance_summary_button")
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("toggle_attendance_summary_button")
                     ) {
                         Text(
-                            text = if (showSummaryView) "بطاقات السحب" else "الملخص ($preparedCount)",
+                            text = if (showSummaryView) "السحب" else "الملخص ($preparedCount)",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -1386,153 +1671,15 @@ private fun SmartAttendanceTopHeader(
                 }
             }
 
-            // Prominent Full-Width Mode & Card Selector Banner
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-                shape = RoundedCornerShape(14.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "اختر نوع السحب (الحضور أو أي كارت):",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-
-                        Box {
-                            Surface(
-                                color = MaterialTheme.colorScheme.primary,
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier
-                                    .clickable { showModeDropdown = true }
-                                    .testTag("switch_swipe_mode_button")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Text(
-                                        text = if (selectedCardType == null) {
-                                            "📋 الحضور العادي ▾"
-                                        } else {
-                                            "${selectedCardType.displaySymbol(customCardConfig)} ${selectedCardType.displayTitle(customCardConfig)} (+${selectedCardType.displayPoints(customCardConfig)}) ▾"
-                                        },
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = MaterialTheme.colorScheme.onPrimary
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = showModeDropdown,
-                                onDismissRequest = { showModeDropdown = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = "📋 الحضور العادي (بدون نقاط)",
-                                            fontWeight = if (selectedCardType == null) FontWeight.ExtraBold else FontWeight.Normal
-                                        )
-                                    },
-                                    onClick = {
-                                        showModeDropdown = false
-                                        onSelectCardType(null)
-                                    }
-                                )
-                                HorizontalDivider()
-                                availableCardTypes.forEach { card ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                text = "${card.displaySymbol(customCardConfig)} ${card.displayTitle(customCardConfig)} (+${card.displayPoints(customCardConfig)})",
-                                                fontWeight = if (selectedCardType == card) FontWeight.ExtraBold else FontWeight.Normal
-                                            )
-                                        },
-                                        onClick = {
-                                            showModeDropdown = false
-                                            onSelectCardType(card)
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Horizontal Scrollable Mode Selector Bar: Normal Attendance + Enabled Card Types
-                    LazyRow(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("swipe_mode_selector_row"),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        item(key = "mode_attendance") {
-                            FilterChip(
-                                selected = selectedCardType == null,
-                                onClick = { onSelectCardType(null) },
-                                label = {
-                                    Text(
-                                        text = "📋 الحضور العادي",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                                ),
-                                modifier = Modifier.testTag("mode_chip_attendance")
-                            )
-                        }
-                        items(
-                            items = availableCardTypes,
-                            key = { "mode_${it.id}" }
-                        ) { card ->
-                            val isSelected = selectedCardType == card
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = { onSelectCardType(card) },
-                                label = {
-                                    Text(
-                                        text = "${card.displaySymbol(customCardConfig)} ${card.displayTitle(customCardConfig)} (+${card.displayPoints(customCardConfig)})",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                                ),
-                                modifier = Modifier.testTag("mode_chip_${card.id}")
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Progress Bar ("12 / 58")
+            // Slim Progress Strip ("12 / 58")
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "الطفل الحالي: $currentPosition / $totalCount",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = "الطفل: $currentPosition / $totalCount",
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.testTag("attendance_progress_text")
@@ -1549,7 +1696,7 @@ private fun SmartAttendanceTopHeader(
                 progress = { progressFraction },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(4.dp)
+                    .height(3.5.dp)
                     .clip(RoundedCornerShape(999.dp))
                     .testTag("attendance_progress_bar")
             )
@@ -1559,7 +1706,250 @@ private fun SmartAttendanceTopHeader(
 }
 
 @Composable
+private fun SelectCardQuickAlertOverlay(
+    visible: Boolean,
+    onDismiss: () -> Unit
+) {
+    val extColors = LocalKamExtendedColors.current
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.92f, animationSpec = tween(180)),
+        exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.94f, animationSpec = tween(140)),
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(25f)
+    ) {
+        // Transparent full-screen touch interceptor: tapping ANYWHERE immediately dismisses the alert
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.22f))
+                .pointerInput(Unit) {
+                    detectTapGestures { onDismiss() }
+                }
+                .testTag("select_card_quick_alert_overlay"),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.inverseSurface,
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.5.dp, extColors.cardGold),
+                shadowElevation = 10.dp,
+                modifier = Modifier
+                    .padding(top = 86.dp, start = 20.dp, end = 20.dp)
+                    .widthIn(max = 420.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        color = extColors.cardGold.copy(alpha = 0.22f),
+                        shape = CircleShape,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = null,
+                                tint = extColors.cardGold,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = "لسه ما اخترتش كارت!",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.inverseOnSurface
+                        )
+                        Text(
+                            text = "اضغط على النجمة ⭐ فوق لاختيار الحضور العادي أو نوع الكارت أولاً",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.88f)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StarButtonSpotlightOverlay(
+    starBoundsInRoot: Rect,
+    rootOriginInRoot: Offset,
+    onTapStarTarget: () -> Unit
+) {
+    val density = LocalDensity.current
+    val extColors = LocalKamExtendedColors.current
+    val localCenter = remember(starBoundsInRoot, rootOriginInRoot) {
+        Offset(
+            x = starBoundsInRoot.center.x - rootOriginInRoot.x,
+            y = starBoundsInRoot.center.y - rootOriginInRoot.y
+        )
+    }
+    val baseRadiusPx = remember(starBoundsInRoot, density) {
+        val maxSide = max(starBoundsInRoot.width, starBoundsInRoot.height)
+        max(maxSide * 0.66f, with(density) { 34.dp.toPx() })
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "spotlight_pulse")
+    val pulseProgress by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1250, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "spotlight_ring_pulse"
+    )
+    var wrongTapBump by remember { mutableIntStateOf(0) }
+    val tooltipBumpScale by animateFloatAsState(
+        targetValue = if (wrongTapBump % 2 == 1) 1.04f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "spotlight_tooltip_bump"
+    )
+    LaunchedEffect(wrongTapBump) {
+        if (wrongTapBump % 2 == 1) {
+            delay(180L)
+            wrongTapBump += 1
+        }
+    }
+
+    val pointerTopPx = (localCenter.y + baseRadiusPx + with(density) { 10.dp.toPx() }).roundToInt()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(30f)
+            .pointerInput(localCenter, baseRadiusPx) {
+                detectTapGestures { tapOffset ->
+                    val dist = hypot(
+                        (tapOffset.x - localCenter.x).toDouble(),
+                        (tapOffset.y - localCenter.y).toDouble()
+                    ).toFloat()
+                    if (dist <= baseRadiusPx * 1.45f) {
+                        onTapStarTarget()
+                    } else {
+                        wrongTapBump += 1
+                    }
+                }
+            }
+            .testTag("star_spotlight_onboarding_overlay")
+    ) {
+        // Full-screen dim layer with transparent circular cutout strictly over the Star button
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+        ) {
+            drawRect(color = Color.Black.copy(alpha = 0.78f))
+            // Cut out the Star button spotlight hole
+            drawCircle(
+                color = Color.Transparent,
+                radius = baseRadiusPx,
+                center = localCenter,
+                blendMode = BlendMode.Clear
+            )
+            // Crisp static highlight border around the Star cutout
+            drawCircle(
+                color = extColors.cardGold,
+                radius = baseRadiusPx + 3.dp.toPx(),
+                center = localCenter,
+                style = Stroke(width = 2.5.dp.toPx())
+            )
+            // Animated expanding radar/pulse halo guiding the servant's eye directly to the Star
+            drawCircle(
+                color = extColors.cardGold.copy(alpha = (1f - pulseProgress) * 0.7f),
+                radius = baseRadiusPx + (pulseProgress * 22.dp.toPx()),
+                center = localCenter,
+                style = Stroke(width = 2.dp.toPx())
+            )
+            // Upward triangle arrow drawn in exact physical canvas coordinates pointing straight at the Star
+            val arrowHalfW = 10.dp.toPx()
+            val arrowH = 11.dp.toPx()
+            val arrowTopY = pointerTopPx.toFloat()
+            val triangle = Path().apply {
+                moveTo(localCenter.x, arrowTopY)
+                lineTo(localCenter.x + arrowHalfW, arrowTopY + arrowH)
+                lineTo(localCenter.x - arrowHalfW, arrowTopY + arrowH)
+                close()
+            }
+            drawPath(path = triangle, color = extColors.cardGold)
+        }
+
+        // Professional Coach-Mark Tooltip Card underneath the cutout
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(18.dp),
+            border = BorderStroke(1.8.dp, extColors.cardGold),
+            shadowElevation = 12.dp,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 20.dp)
+                .offset { IntOffset(x = 0, y = pointerTopPx + with(density) { 10.dp.toPx() }.roundToInt()) }
+                .widthIn(max = 380.dp)
+                .graphicsLayer {
+                    scaleX = tooltipBumpScale
+                    scaleY = tooltipBumpScale
+                }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Star,
+                        contentDescription = null,
+                        tint = extColors.cardGold,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        text = "اضغط على النجمة هنا أولاً",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Text(
+                    text = "قبل البدء في السحب، اضغط على زر النجمة المضيء بالأعلى لاختيار نوع الجلسة (حضور عادي أو أي كارت).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 19.sp
+                )
+                Surface(
+                    color = extColors.cardGold.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.padding(top = 4.dp)
+                ) {
+                    Text(
+                        text = "⭐ اضغط على النجمة المضيئة للمتابعة",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = extColors.cardGold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun SmartAttendanceSwipeCardContent(
+    isModeSelected: Boolean,
     selectedCardType: CardType?,
     customCardConfig: CustomCardConfig,
     student: Student,
@@ -1570,6 +1960,7 @@ private fun SmartAttendanceSwipeCardContent(
     isAdmin: Boolean,
     currentUserId: String,
     canUndo: Boolean,
+    onRequireModeSelection: () -> Unit,
     onSwipePresent: () -> Unit,
     onSwipeAbsent: () -> Unit,
     onSwipeIssue: () -> Unit,
@@ -1600,31 +1991,35 @@ private fun SmartAttendanceSwipeCardContent(
         }
     }
 
-    val offsetX = remember(student.id, selectedCardType?.id) { Animatable(0f) }
-    val offsetY = remember(student.id, selectedCardType?.id) { Animatable(0f) }
+    val offsetX = remember(student.id, selectedCardType?.id, isModeSelected) { Animatable(0f) }
+    val offsetY = remember(student.id, selectedCardType?.id, isModeSelected) { Animatable(0f) }
 
     val dragDx = offsetX.value
     val dragDy = offsetY.value
     val horizontalThreshold = 150f
     val verticalDownThreshold = 150f
 
-    // Visual gesture hint during drag
-    val activeGesturePreview: AttendanceStatus? = when {
-        abs(dragDx) >= abs(dragDy) && dragDx > 60f -> AttendanceStatus.PRESENT
-        abs(dragDx) >= abs(dragDy) && dragDx < -60f -> AttendanceStatus.ABSENT
-        dragDy > 60f -> AttendanceStatus.ISSUE
-        else -> null
+    // Visual gesture hint during drag (only shown when a mode is selected)
+    val activeGesturePreview: AttendanceStatus? = if (!isModeSelected) {
+        null
+    } else {
+        when {
+            abs(dragDx) >= abs(dragDy) && dragDx > 60f -> AttendanceStatus.PRESENT
+            abs(dragDx) >= abs(dragDy) && dragDx < -60f -> AttendanceStatus.ABSENT
+            dragDy > 60f -> AttendanceStatus.ISSUE
+            else -> null
+        }
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         val extColors = LocalKamExtendedColors.current
-        // Direction Legend Banner
+        // Compact Direction Legend Banner
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1634,7 +2029,7 @@ private fun SmartAttendanceSwipeCardContent(
                 label = if (selectedCardType == null) {
                     "يمين ← حاضر"
                 } else {
-                    "يمين ← حضر وأخذ الكارت (+${selectedCardType.displayPoints(customCardConfig)})"
+                    "يمين ← أخذ الكارت (+${selectedCardType.displayPoints(customCardConfig)})"
                 },
                 color = extColors.onlineGreen
             )
@@ -1646,15 +2041,15 @@ private fun SmartAttendanceSwipeCardContent(
                 label = if (selectedCardType == null) {
                     "يسار → غايب"
                 } else {
-                    "يسار → ما حضرش"
+                    "يسار → ما خدش"
                 },
                 color = MaterialTheme.colorScheme.error
             )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
-        // Main Draggable Student Card
+        // Main Draggable Student Card (fills all reclaimed top space so photo is much larger!)
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -1683,11 +2078,26 @@ private fun SmartAttendanceSwipeCardContent(
                         translationY = offsetY.value.coerceAtLeast(-40f)
                         rotationZ = (offsetX.value / 28f).coerceIn(-12f, 12f)
                     }
-                    .pointerInput(student.id, existingRecord?.id, selectedCardType?.id) {
+                    .pointerInput(student.id, existingRecord?.id, selectedCardType?.id, isModeSelected) {
                         detectDragGestures(
                             onDragEnd = {
                                 val endX = offsetX.value
                                 val endY = offsetY.value
+                                val crossedAnyThreshold =
+                                    (abs(endX) >= abs(endY) && abs(endX) > horizontalThreshold) ||
+                                        (endY > verticalDownThreshold)
+
+                                if (!isModeSelected) {
+                                    scope.launch {
+                                        launch { offsetX.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy)) }
+                                        launch { offsetY.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy)) }
+                                    }
+                                    if (crossedAnyThreshold || abs(endX) > 45f || endY > 45f) {
+                                        onRequireModeSelection()
+                                    }
+                                    return@detectDragGestures
+                                }
+
                                 when {
                                     abs(endX) >= abs(endY) && endX > horizontalThreshold -> {
                                         scope.launch {
@@ -1726,9 +2136,10 @@ private fun SmartAttendanceSwipeCardContent(
                             },
                             onDrag = { change, dragAmount ->
                                 change.consume()
+                                val damping = if (isModeSelected) 1f else 0.45f
                                 scope.launch {
-                                    offsetX.snapTo(offsetX.value + dragAmount.x)
-                                    offsetY.snapTo((offsetY.value + dragAmount.y).coerceAtLeast(-40f))
+                                    offsetX.snapTo(offsetX.value + dragAmount.x * damping)
+                                    offsetY.snapTo((offsetY.value + dragAmount.y * damping).coerceAtLeast(-40f))
                                 }
                             }
                         )
@@ -1738,10 +2149,10 @@ private fun SmartAttendanceSwipeCardContent(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(14.dp),
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Top Metadata Row inside Card: Block Color Badge + Student Number + Existing Status Badge
+                    // Top Metadata Row inside Card: Block Color Badge + Student Number
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1753,13 +2164,13 @@ private fun SmartAttendanceSwipeCardContent(
                             border = BorderStroke(1.dp, blockAccent)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(10.dp)
+                                        .size(9.dp)
                                         .clip(CircleShape)
                                         .background(blockAccent)
                                 )
@@ -1788,7 +2199,7 @@ private fun SmartAttendanceSwipeCardContent(
 
                     // Existing status banner if already prepared this week
                     if (existingRecord != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         ExistingAttendanceBadgeStrip(
                             selectedCardType = selectedCardType,
                             customCardConfig = customCardConfig,
@@ -1798,7 +2209,7 @@ private fun SmartAttendanceSwipeCardContent(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     // Large Photo or Large Initials Card
                     Box(
@@ -1896,7 +2307,7 @@ private fun SmartAttendanceSwipeCardContent(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     // Student Name + Navigation between students (including already prepared ones for editing)
                     Row(
@@ -1950,7 +2361,7 @@ private fun SmartAttendanceSwipeCardContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Quick Action Buttons + Undo Row
         Row(
