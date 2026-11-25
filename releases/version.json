@@ -4,10 +4,10 @@
   "minDeltaBaseVersionCode": 13,
   "maxDeltaGap": 3,
   "requiresFullInstall": true,
-  "commitSha": "fc5417eca313",
+  "commitSha": "c8ed0503fd4c",
   "apkSha256": "fc5417eca313f8437c0ade6b5b25b80a7555356303b5b2fd91ef505d245765b2",
-  "updatedAt": "2026-11-25T10:51:20Z",
+  "updatedAt": "2026-11-25T11:33:23Z",
   "apkDirectUrl": "https://github.com/Kett45/Y/raw/main/releases/kAM-Lite.apk",
   "deltaSyncUrl": "https://raw.githubusercontent.com/Kett45/Y/main/releases/delta-sync.json",
-  "releaseNotesArabic": "الإصدار 1.16 (نجم الكارت v1.16): زر النجمة الموحد لاختيار الكارت في السحب الذكي مع التظليل التوضيحي لأول مرة وإشعار التنبيه السريع، تكبير مساحة صورة الطفل، إرسال تقرير موحد واحد للمراسلة بالملخص السفلي (مشاغب، حاضر، المسجل، نوع التسجيل)، وإصلاح السحب لأسفل للتحديث في الشاشة الرئيسية (fc5417eca313)."
+  "releaseNotesArabic": "الإصدار 1.16 (نجم الكارت v1.16): تحديث تلقائي مباشر بأحدث بصمة للـ APK (c8ed0503fd4c)."
 }
