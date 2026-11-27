@@ -7,9 +7,10 @@
 
 ## نقاط الدخول والـ Navigation
 - `app/src/main/java/com/example/MainActivity.kt`:
-  - `KamBottomTab` (سطر 130): التبويبات (`HOME`, `VISITATION`, `MESSAGES`, `GROUP`, `SETTINGS`).
-  - `AppNavigation` (سطر 255) و`AuthenticatedKamApp` (سطر 325): إدارة الدخول، الربط مع `KamViewModel` و`ChatViewModel`، والتنقل بين التبويبات.
-- `app/src/main/java/com/example/ui/components/KamBottomNavigationBar.kt`: `KamFloatingBottomNavBar` (سطر 94).
+  - `KamBottomTab` (سطر 130): 4 تبويبات (`HOME`, `VISITATION`, `MESSAGES`, `SETTINGS`) بعد دمج إعدادات المجموعة داخل الإعدادات.
+  - `AppNavigation` (سطر 255) و`AuthenticatedKamApp` (سطر 325): إدارة الدخول، الربط مع `KamViewModel` و`ChatViewModel`، والتنقل بين التبويبات، وشريط الإشعار العلوي بدون رقم إصدار.
+- `app/src/main/java/com/example/ui/components/KamBottomNavigationBar.kt`: `KamFloatingBottomNavBar` (سطر 94، 4 تبويبات مقفولة لأسفل الشاشة).
+- `app/src/main/java/com/example/ui/components/BlockColorSliderBar.kt`: شريط اختيار لون البلوك والكارت الإضافي المتدرج مع المعاينة الحية.
 
 ---
 
@@ -17,18 +18,19 @@
 - **تسجيل الدخول**: `app/src/main/java/com/example/ui/auth/AuthScreen.kt` — `AuthScreen` (سطر 390).
 - **إعداد/انضمام المجموعة**: `app/src/main/java/com/example/ui/screens/GroupOnboardingScreen.kt` — `GroupOnboardingScreen` (سطر 62).
 - **الرئيسية**: `app/src/main/java/com/example/ui/screens/HomeScreen.kt`:
-  - `HomeScreen` (سطر 137)، الشريط العلوي `HomeTopControlCard` (سطر 939)، لمبة الحضور `AttendanceIndicatorLamp` (سطر 1790)، السحب لأسفل للتحديث `PullToRefreshBox` (سطر 356).
+  - `HomeScreen` (سطر 137)، الشريط العلوي `HomeTopControlCard`، تحريك البلوكات (`⏫` للأول، `↑` لأعلى، `↓` لأسفل) مع إعادة ترقيم الأطفال (`1, 2, 3...`) في `ServantBlockHeaderCard`، ولمبة الحضور `AttendanceIndicatorLamp`.
   - حوارات الرئيسية والبحث والشجرة: `app/src/main/java/com/example/ui/screens/HomeDialogsAndSections.kt`.
 - **السحب الذكي (الحضور والكروت)**: `app/src/main/java/com/example/ui/screens/SmartAttendanceScreen.kt`:
   - `SmartAttendanceScreen` (سطر 445)، الهيدر وزر النجمة `SmartAttendanceTopHeader` (سطر 1399)، التظليل التوضيحي `StarButtonSpotlightOverlay` (سطر 1784)، كارت السحب `SmartAttendanceSwipeCardContent` (سطر 1951)، الملخص `SmartAttendanceSummaryView` (سطر 2623).
 - **لوحة الأوائل والتقارير**: `app/src/main/java/com/example/ui/screens/FullClassLeaderboardScreen.kt` (سطر 114).
 - **الافتقاد**: `app/src/main/java/com/example/ui/screens/VisitationSwipeScreen.kt` — `VisitationSwipeScreen` (سطر 206).
 - **الرسائل والدردشة**: `app/src/main/java/com/example/ui/screens/MessagesScreen.kt`:
-  - `MessagesScreen` (سطر 160)، عرض تقارير الحضور والكروت `[ATTENDANCE_V3]` والملخص السفلي (سطور 3775–4525).
-- **المجموعة والدعوات والإعدادات**: `app/src/main/java/com/example/ui/screens/GroupAndSettingsScreens.kt`:
-  - `GroupInvitationsScreen` (سطر 152)، `SettingsScreen` (سطر 1820، ويشمل قسم التحديثات وعرض رقم الإصدار).
-- **المظهر والأيقونة**: `app/src/main/java/com/example/ui/components/AppearanceAndIconSettingsSection.kt`:
-  - `AppearanceSettingsEntryCard` (سطر 70)، `AppearanceFullScreen` (سطر 162).
+  - `MessagesScreen` (سطر 160)، عرض تقارير الحضور والكروت والافتقاد بنفس قائمة وترتيب الشاشة الرئيسية (بلوك تحت بلوك، كل طفل في سطره برقمه واسمه، والغائب/المشكلة بصورته جنب اسمه وملحوظته بخط أكبر) (أسطر 3450–4440).
+- **الإعدادات وصفحاتها الداخلية**: `app/src/main/java/com/example/ui/screens/GroupAndSettingsScreens.kt`:
+  - `SettingsScreen` (سطر 1875): بروفايل الخادم المصغر، زر المظهر والسمات، مجموعاتي والتبديل بينها (في مكان واحد فقط)، وصفحات داخلية لـ `إعدادات المجموعة` (`GroupInvitationsScreen` مع ترتيب البلوكات)، `إعدادات وإظهار الكروت` (مع شريط الألوان الحر للكارت الإضافي)، قواعد الفصل (مع `قفل نقل الطلاب`)، `المزامنة مع GitHub`، و`سجل الأحداث` للأمين مع زر `تراجع`.
+- **المظهر والأيقونة والألوان والصور**:
+  - `app/src/main/java/com/example/ui/components/AppearanceAndIconSettingsSection.kt` (`AppearanceSettingsEntryCard`، `AppearanceFullScreen`)، `app/src/main/java/com/example/ui/theme/Color.kt` و`Theme.kt` (دعم أي لون Hex زاهي للبلوكات).
+  - `app/src/main/java/com/example/ui/components/StudentAvatarComponents.kt` و`ServantPhoneAndProfileComponents.kt`: فك وتحميل الصور الكاملة مسبقاً في الكاش (`fullPhotoCache` / `fullPhotoByStudentIdCache`) وعرضها فوراً في المعاينة السريعة ونوافذ البروفايل بدون المرور بالصورة المصغرة.
 
 ---
 
@@ -41,7 +43,7 @@
   - `app/src/main/java/com/example/data/repository/ChatRepository.kt` (سطر 39).
   - `app/src/main/java/com/example/data/model/KamModels.kt` و`ChatModels.kt`.
   - الكاش المحلي: `app/src/main/java/com/example/data/cache/LocalClassroomCache.kt`.
-  - قواعد الأمان: `firestore.rules`.
+  - قواعد الأمان: `firestore.rules` (السماح للخادم بإنشاء وتلوين بلوكه الشخصي فقط، والأمين لكل البلوكات).
 - **تحديثات GitHub والنسخة**: `app/src/main/java/com/example/data/sync/GitHubSmartSyncEngine.kt` (سطر 122).
 
 ---

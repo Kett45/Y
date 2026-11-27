@@ -11,6 +11,7 @@ import com.example.data.model.ChildNote
 import com.example.data.model.ChildNoteType
 import com.example.data.model.EmailDirectoryEntry
 import com.example.data.model.Group
+import com.example.data.model.GroupAuditLogEvent
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_SERVANTS_PER_GROUP
 import com.example.data.model.MonthlyBalance
@@ -833,7 +834,8 @@ class KamRepository(private val db: FirebaseFirestore) {
         maxMonthlyPoints: Long,
         attendanceIsCardOnly: Boolean,
         showLeaderboard: Boolean,
-        autoStudentNumber: Boolean
+        autoStudentNumber: Boolean,
+        lockStudentTransfer: Boolean = false
     ): Result<Unit> = runCatching {
         requireUserId()
         val groupRef = db.collection("groups").document(groupId)
@@ -846,6 +848,7 @@ class KamRepository(private val db: FirebaseFirestore) {
                     "attendanceIsCardOnly" to attendanceIsCardOnly,
                     "showLeaderboard" to showLeaderboard,
                     "autoStudentNumber" to autoStudentNumber,
+                    "lockStudentTransfer" to lockStudentTransfer,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
@@ -1963,6 +1966,52 @@ class KamRepository(private val db: FirebaseFirestore) {
         }
     }
 
+    /**
+     * Reorders ServantBlocks (`sortOrder`) and updates sequential `studentNumber` (1..N) across the group
+     * in batched Firestore writes so moving a block carries its servants and children and updates all numbers.
+     */
+    suspend fun reorderServantBlocksAndSyncNumbers(
+        groupId: String,
+        blockSortUpdates: Map<String, Long>,
+        studentNumberUpdates: Map<String, Long>,
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        val groupRef = db.collection("groups").document(groupId)
+        val blocksCol = groupRef.collection("blocks")
+        val studentsCol = groupRef.collection("students")
+        try {
+            if (blockSortUpdates.isNotEmpty()) {
+                val blockBatch = db.batch()
+                blockSortUpdates.forEach { (blockId, newOrder) ->
+                    blockBatch.update(
+                        blocksCol.document(blockId),
+                        mapOf(
+                            "sortOrder" to newOrder.coerceIn(0L, 500L),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                val task = blockBatch.commit()
+                if (waitForServerAck) {
+                    task.await()
+                }
+            }
+            if (studentNumberUpdates.isNotEmpty()) {
+                syncStudentSequentialNumbers(
+                    groupId = groupId,
+                    numberUpdates = studentNumberUpdates,
+                    waitForServerAck = waitForServerAck
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, blocksCol.path)
+            throw e
+        }
+    }
+
     suspend fun updateStudent(
         groupId: String,
         studentId: String,
@@ -2740,6 +2789,131 @@ class KamRepository(private val db: FirebaseFirestore) {
             candidate = (1..3).map { chars.random() }.joinToString("")
         } while (candidate == excludeToken && excludeToken.isNotBlank())
         return candidate
+    }
+
+    // --- 9. Group Action Audit Logs & Admin Undo (groups/{groupId}/auditLogs/{logId}) ---
+
+    fun observeGroupAuditLogs(groupId: String): Flow<List<GroupAuditLogEvent>> {
+        if (groupId.isBlank()) return kotlinx.coroutines.flow.flowOf(emptyList())
+        val path = "groups/$groupId/auditLogs"
+        return flow {
+            val logsById = LinkedHashMap<String, GroupAuditLogEvent>()
+            var hasEmittedInitial = false
+            db.collection("groups")
+                .document(groupId)
+                .collection("auditLogs")
+                .snapshots()
+                .collect { snapshot ->
+                    if (hasEmittedInitial && snapshot.documentChanges.isEmpty()) {
+                        return@collect
+                    }
+                    hasEmittedInitial = true
+                    for (change in snapshot.documentChanges) {
+                        val docId = change.document.id
+                        when (change.type) {
+                            DocumentChange.Type.ADDED, DocumentChange.Type.MODIFIED -> {
+                                val parsed = change.document.toObject(
+                                    GroupAuditLogEvent::class.java,
+                                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                                )
+                                logsById[docId] = parsed.copy(id = docId)
+                            }
+                            DocumentChange.Type.REMOVED -> {
+                                logsById.remove(docId)
+                            }
+                        }
+                    }
+                    emit(
+                        logsById.values
+                            .sortedWith(
+                                compareByDescending<GroupAuditLogEvent> { it.effectiveTimestampMillis }
+                                    .thenByDescending { it.nanoTieBreaker }
+                                    .thenByDescending { it.id }
+                            )
+                            .take(250)
+                    )
+                }
+        }.catch { error ->
+            if (error is Exception && auth.currentUser != null) {
+                handleFirestoreError(error, OperationType.LIST, path)
+            }
+            emit(emptyList())
+        }
+    }
+
+    suspend fun recordAuditLogEvent(
+        event: GroupAuditLogEvent,
+        waitForServerAck: Boolean = false
+    ): Result<GroupAuditLogEvent> = runCatching {
+        val uid = requireUserId()
+        val safeGroupId = event.groupId.trim()
+        require(safeGroupId.isNotBlank()) { "معرف المجموعة مطلوب" }
+        val nowMs = if (event.clientTimestampMillis > 0L) event.clientTimestampMillis else System.currentTimeMillis()
+        val nano = if (event.nanoTieBreaker > 0L) event.nanoTieBreaker else (System.nanoTime() and 0xFFFFFFL)
+        val docId = event.id.ifBlank {
+            GroupAuditLogEvent.generateCollisionSafeId(
+                nowMillis = nowMs,
+                nanoTime = nano,
+                actorUid = uid
+            )
+        }
+        val docRef = db.collection("groups")
+            .document(safeGroupId)
+            .collection("auditLogs")
+            .document(docId)
+        val safeMembers = (event.memberUids + uid).filter { it.isNotBlank() }.distinct().take(MAX_SERVANTS_PER_GROUP)
+        val payload = mapOf(
+            "groupId" to safeGroupId,
+            "actionType" to event.actionType.trim().take(48),
+            "actorUid" to uid,
+            "actorName" to event.actorName.trim().ifBlank { "خادم" }.take(100),
+            "summaryArabic" to event.summaryArabic.trim().take(400),
+            "targetId" to event.targetId.trim().take(128),
+            "targetName" to event.targetName.trim().take(120),
+            "previousStateJson" to event.previousStateJson.take(2000),
+            "newStateJson" to event.newStateJson.take(2000),
+            "clientTimestampMillis" to nowMs,
+            "nanoTieBreaker" to nano,
+            "undone" to false,
+            "undoneByName" to "",
+            "memberUids" to safeMembers,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        val task = docRef.set(payload)
+        if (waitForServerAck) {
+            task.await()
+        }
+        event.copy(
+            id = docId,
+            actorUid = uid,
+            clientTimestampMillis = nowMs,
+            nanoTieBreaker = nano,
+            memberUids = safeMembers
+        )
+    }
+
+    suspend fun markAuditLogEventUndone(
+        groupId: String,
+        eventId: String,
+        adminName: String,
+        waitForServerAck: Boolean = false
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        val docRef = db.collection("groups")
+            .document(groupId.trim())
+            .collection("auditLogs")
+            .document(eventId.trim())
+        val task = docRef.update(
+            mapOf(
+                "undone" to true,
+                "undoneByName" to adminName.trim().ifBlank { "الأمين" }.take(100),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        )
+        if (waitForServerAck) {
+            task.await()
+        }
     }
 }
 

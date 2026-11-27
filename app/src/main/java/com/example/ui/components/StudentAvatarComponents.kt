@@ -187,13 +187,14 @@ object StudentAvatarImageHelper {
     private const val THUMBNAIL_TARGET_SIZE_PX = 240
     private val SAFE_STUDENT_NAME_REGEX = Regex("[^\\p{L}\\p{N}_-]+")
 
-    private val framedAvatarCache = object : LruCache<Int, ImageBitmap>(200) {}
-    private val fullPhotoCache = object : LruCache<Int, ImageBitmap>(12) {}
+    private val framedAvatarCache = object : LruCache<Int, ImageBitmap>(250) {}
+    private val fullPhotoCache = object : LruCache<Int, ImageBitmap>(90) {}
+    private val fullPhotoByStudentIdCache = ConcurrentHashMap<String, ImageBitmap>()
     private val localPackedAvatarByStudentId: MutableMap<String, String> =
         java.util.Collections.synchronizedMap(
-            object : java.util.LinkedHashMap<String, String>(32, 0.75f, true) {
+            object : java.util.LinkedHashMap<String, String>(160, 0.75f, true) {
                 override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
-                    return size > 24
+                    return size > 150
                 }
             }
         )
@@ -208,14 +209,21 @@ object StudentAvatarImageHelper {
             localPackedAvatarByStudentId.remove(studentId)
             localPackedAvatarHashByStudentId.remove(studentId)
             localMainCacheKeyByStudentId.remove(studentId)
+            fullPhotoByStudentIdCache.remove(studentId)
         } else {
+            val prevHash = localPackedAvatarHashByStudentId[studentId]
+            val nextHash = Student.computeAvatarHash(trimmed)
             localPackedAvatarByStudentId[studentId] = trimmed
-            localPackedAvatarHashByStudentId[studentId] = Student.computeAvatarHash(trimmed)
+            localPackedAvatarHashByStudentId[studentId] = nextHash
+            if (prevHash != null && prevHash != nextHash) {
+                fullPhotoByStudentIdCache.remove(studentId)
+            }
             val main = extractMainPhotoBase64(trimmed)
             if (main.isNotBlank()) {
                 localMainCacheKeyByStudentId[studentId] = main.hashCode()
             } else {
                 localMainCacheKeyByStudentId.remove(studentId)
+                fullPhotoByStudentIdCache.remove(studentId)
             }
         }
     }
@@ -241,6 +249,56 @@ object StudentAvatarImageHelper {
         return localPackedAvatarByStudentId.get(studentId).orEmpty()
     }
 
+    /**
+     * Fast 0ms memory-only lookup of the FULL uncropped photo for a student/servant/group.
+     * Never returns the low-res 160px circular thumbnail.
+     */
+    fun getCachedFullPhotoForStudent(student: Student): ImageBitmap? {
+        if (student.avatarBase64.isNotBlank()) {
+            getCachedFullPhotoBitmap(student.avatarBase64)?.let {
+                if (student.id.isNotBlank()) fullPhotoByStudentIdCache[student.id] = it
+                return it
+            }
+        }
+        val localRaw = localPackedAvatarByStudentId.get(student.id).orEmpty()
+        if (localRaw.isNotBlank()) {
+            val cachedLocalHash = localPackedAvatarHashByStudentId[student.id]
+            if (student.avatarHash.isBlank() || cachedLocalHash == student.avatarHash) {
+                getCachedFullPhotoBitmap(localRaw)?.let {
+                    if (student.id.isNotBlank()) fullPhotoByStudentIdCache[student.id] = it
+                    return it
+                }
+            }
+        }
+        if (student.id.isNotBlank()) {
+            fullPhotoByStudentIdCache[student.id]?.let { return it }
+        }
+        return null
+    }
+
+    /**
+     * Pre-decodes a student's or servant's full uncropped photo on background IO so opening
+     * the profile photo dialog or quick-peek overlay is instantaneous (0ms) with no thumbnail flash.
+     */
+    fun prewarmFullPhotoAsync(context: Context?, student: Student) {
+        if (context == null) return
+        if (!student.effectiveHasAvatar && student.avatarBase64.isBlank()) return
+        if (getCachedFullPhotoForStudent(student) != null) return
+        val appCtx = context.applicationContext ?: context
+        avatarIoScope.launch {
+            val packed = resolveStudentPackedAvatar(appCtx, student)
+            if (packed.isNotBlank()) {
+                val mainEntry = extractMainPhotoBase64(packed)
+                if (mainEntry.isNotBlank()) {
+                    val bmp = decodeFullPhotoToImageBitmap(appCtx, mainEntry, student.id)
+                    if (bmp != null && student.id.isNotBlank()) {
+                        fullPhotoByStudentIdCache[student.id] = bmp
+                    }
+                }
+            }
+        }
+    }
+
     fun prewarmVisibleAvatarsAsync(context: Context?, students: List<Student>, limit: Int = 14) {
         if (context == null || students.isEmpty()) return
         val appCtx = context.applicationContext ?: context
@@ -252,16 +310,20 @@ object StudentAvatarImageHelper {
         avatarIoScope.launch {
             for (stu in targets) {
                 if (isScrollActive) awaitScrollSettled()
-                if (getCachedBitmapForStudent(stu) != null) continue
                 val packed = resolveStudentPackedAvatar(appCtx, stu)
                 if (packed.isNotBlank()) {
                     val mainEntry = extractMainPhotoBase64(packed)
-                    val alias = "student_${stu.id}_${stu.effectiveAvatarKey}".hashCode()
-                    decodeThumbnailGuarded(
-                        base64 = mainEntry,
-                        context = appCtx,
-                        studentKeyAlias = alias
-                    )
+                    if (getCachedBitmapForStudent(stu) == null) {
+                        val alias = "student_${stu.id}_${stu.effectiveAvatarKey}".hashCode()
+                        decodeThumbnailGuarded(
+                            base64 = mainEntry,
+                            context = appCtx,
+                            studentKeyAlias = alias
+                        )
+                    }
+                    if (getCachedFullPhotoForStudent(stu) == null && mainEntry.isNotBlank()) {
+                        decodeFullPhotoToImageBitmap(appCtx, mainEntry, stu.id)
+                    }
                 }
             }
         }
@@ -272,6 +334,7 @@ object StudentAvatarImageHelper {
      * and verified against `student.avatarHash` so updated child photos are never stale.
      */
     fun getCachedLargeAttendancePhoto(student: Student): ImageBitmap? {
+        getCachedFullPhotoForStudent(student)?.let { return it }
         val localCandidate = localPackedAvatarByStudentId.get(student.id).orEmpty()
         val cachedLocalHash = localPackedAvatarHashByStudentId[student.id]
         val verifiedLocal = if (localCandidate.isNotBlank() &&
@@ -284,9 +347,8 @@ object StudentAvatarImageHelper {
         val raw = student.avatarBase64.ifBlank { verifiedLocal }
         if (raw.isNotBlank()) {
             getCachedFullPhotoBitmap(raw)?.let { return it }
-            getCachedBitmap(raw)?.let { return it }
         }
-        return getCachedBitmapForStudent(student)
+        return null
     }
 
     /**
@@ -1294,16 +1356,28 @@ object StudentAvatarImageHelper {
         }
     }
 
-    fun decodeFullPhotoToImageBitmap(context: Context?, photoEntry: String): ImageBitmap? {
+    fun decodeFullPhotoToImageBitmap(
+        context: Context?,
+        photoEntry: String,
+        studentId: String = ""
+    ): ImageBitmap? {
         val main = extractMainPhotoBase64(photoEntry)
         if (main.isBlank()) return null
         val (rawBase64, frame) = parsePhotoEntry(main)
         val cacheKey = "${rawBase64.hashCode()}_rot_${frame.rotationDegrees}".hashCode()
-        fullPhotoCache.get(cacheKey)?.let { return it }
+        fullPhotoCache.get(cacheKey)?.let { cached ->
+            if (studentId.isNotBlank()) {
+                fullPhotoByStudentIdCache[studentId] = cached
+            }
+            return cached
+        }
 
         val bmp = decodeFullUncroppedAndroidBitmap(context, main) ?: return null
         val imageBitmap = bmp.asImageBitmap()
         fullPhotoCache.put(cacheKey, imageBitmap)
+        if (studentId.isNotBlank()) {
+            fullPhotoByStudentIdCache[studentId] = imageBitmap
+        }
         return imageBitmap
     }
 
@@ -1454,28 +1528,36 @@ fun StudentAvatarCircle(
             if (hasPhotoInModel) StudentAvatarImageHelper.getCachedBitmapForStudent(student) else null
         )
     }
-    val currentImageBitmap by rememberUpdatedState(imageBitmap)
     var isHoldPreviewVisible by remember(student.id) { mutableStateOf(false) }
 
-    // Lazily load 160px circular thumbnail when visible, pausing non-cached decodes during active fling
-    if (hasPhotoInModel && imageBitmap == null) {
+    // Lazily load 160px circular thumbnail when visible, pausing non-cached decodes during active fling,
+    // and warm up the full uncropped photo in background so tapping/holding opens it in 0ms without thumbnail flash.
+    if (hasPhotoInModel) {
         LaunchedEffect(avatarIdentityKey) {
-            if (StudentAvatarImageHelper.isScrollActive) {
-                StudentAvatarImageHelper.awaitScrollSettled()
-            }
-            val packed = StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
-            if (packed.isNotBlank()) {
-                resolvedPackedAvatar = packed
-                val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(packed)
-                val studentKeyAlias = "student_${student.id}_${student.effectiveAvatarKey}".hashCode()
+            if (imageBitmap == null) {
                 if (StudentAvatarImageHelper.isScrollActive) {
                     StudentAvatarImageHelper.awaitScrollSettled()
                 }
-                imageBitmap = StudentAvatarImageHelper.decodeThumbnailGuarded(
-                    base64 = mainEntry,
-                    context = context,
-                    studentKeyAlias = studentKeyAlias
-                )
+                val packed = StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
+                if (packed.isNotBlank()) {
+                    resolvedPackedAvatar = packed
+                    val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(packed)
+                    val studentKeyAlias = "student_${student.id}_${student.effectiveAvatarKey}".hashCode()
+                    if (StudentAvatarImageHelper.isScrollActive) {
+                        StudentAvatarImageHelper.awaitScrollSettled()
+                    }
+                    imageBitmap = StudentAvatarImageHelper.decodeThumbnailGuarded(
+                        base64 = mainEntry,
+                        context = context,
+                        studentKeyAlias = studentKeyAlias
+                    )
+                }
+            }
+            if (StudentAvatarImageHelper.getCachedFullPhotoForStudent(student) == null) {
+                if (StudentAvatarImageHelper.isScrollActive) {
+                    StudentAvatarImageHelper.awaitScrollSettled()
+                }
+                StudentAvatarImageHelper.prewarmFullPhotoAsync(context, student)
             }
         }
     }
@@ -1487,11 +1569,12 @@ fun StudentAvatarCircle(
                 .ifBlank { stu.avatarBase64 }
                 .ifBlank { StudentAvatarImageHelper.peekCachedLocalAlbumRaw(stu.id) }
             val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(currentPacked)
-            val cachedFull = if (mainEntry.isNotBlank()) {
-                StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainEntry)
-            } else {
-                null
-            }
+            val cachedFull = StudentAvatarImageHelper.getCachedFullPhotoForStudent(stu)
+                ?: if (mainEntry.isNotBlank()) {
+                    StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainEntry)
+                } else {
+                    null
+                }
             val hasPhotoNow = currentHasPhotoInModel
             isHoldPreviewVisible = true
             peekController?.show(
@@ -1499,7 +1582,8 @@ fun StudentAvatarCircle(
                     student = stu,
                     blockAccent = currentBlockAccent,
                     blockLabel = currentBlockLabel,
-                    fullPhotoBitmap = cachedFull ?: if (hasPhotoNow) currentImageBitmap else null,
+                    // Never pass the 160px circular thumbnail as fullPhotoBitmap to avoid thumbnail flash!
+                    fullPhotoBitmap = cachedFull,
                     isLoadingFullPhoto = hasPhotoNow && cachedFull == null
                 )
             )
@@ -1527,27 +1611,40 @@ fun StudentAvatarCircle(
     // When hold preview is active, decode highest resolution available (1080px local HD -> 520px cloud full)
     if (isHoldPreviewVisible && hasPhotoInModel) {
         LaunchedEffect(isHoldPreviewVisible, student.id, student.effectiveAvatarKey) {
-            val packed = resolvedPackedAvatar
-                .ifBlank { student.avatarBase64 }
-                .ifBlank { StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student) }
-            if (packed.isNotBlank()) {
-                resolvedPackedAvatar = packed
-                val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(packed)
-                if (mainEntry.isNotBlank()) {
-                    val cachedFull = StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainEntry)
-                    val fullBmp = cachedFull ?: withContext(Dispatchers.Default) {
-                        StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainEntry)
-                    }
-                    if (isHoldPreviewVisible) {
-                        peekController?.updatePhoto(
-                            studentId = student.id,
-                            fullPhotoBitmap = fullBmp,
-                            isLoadingFullPhoto = false
-                        )
-                    }
-                }
+            val existingFull = StudentAvatarImageHelper.getCachedFullPhotoForStudent(student)
+            if (existingFull != null) {
+                peekController?.updatePhoto(
+                    studentId = student.id,
+                    fullPhotoBitmap = existingFull,
+                    isLoadingFullPhoto = false
+                )
             } else {
-                peekController?.updatePhoto(student.id, null, isLoadingFullPhoto = false)
+                val packed = resolvedPackedAvatar
+                    .ifBlank { student.avatarBase64 }
+                    .ifBlank {
+                        withContext(Dispatchers.IO) {
+                            StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
+                        }
+                    }
+                if (packed.isNotBlank()) {
+                    resolvedPackedAvatar = packed
+                    val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(packed)
+                    if (mainEntry.isNotBlank()) {
+                        val cachedFull = StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainEntry)
+                        val fullBmp = cachedFull ?: withContext(Dispatchers.IO) {
+                            StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainEntry, student.id)
+                        }
+                        if (isHoldPreviewVisible) {
+                            peekController?.updatePhoto(
+                                studentId = student.id,
+                                fullPhotoBitmap = fullBmp,
+                                isLoadingFullPhoto = false
+                            )
+                        }
+                    }
+                } else {
+                    peekController?.updatePhoto(student.id, null, isLoadingFullPhoto = false)
+                }
             }
         }
     }
@@ -1591,6 +1688,9 @@ fun StudentAvatarCircle(
                 .pointerInput(student.id) {
                     detectTapGestures(
                         onPress = {
+                            if (currentHasPhotoInModel) {
+                                StudentAvatarImageHelper.prewarmFullPhotoAsync(context, currentStudent)
+                            }
                             try {
                                 tryAwaitRelease()
                             } finally {
@@ -1636,19 +1736,24 @@ fun StudentAvatarCircle(
                 resolvedPackedAvatar.ifBlank { student.avatarBase64 }
             )
         }
-        var fallbackFullBmp by remember(mainBase64) {
+        var fallbackFullBmp by remember(student.id, mainBase64) {
             mutableStateOf(
-                if (mainBase64.isBlank()) null else StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainBase64)
+                StudentAvatarImageHelper.getCachedFullPhotoForStudent(student)
+                    ?: if (mainBase64.isBlank()) null else StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainBase64)
             )
         }
         if (hasPhotoInModel && fallbackFullBmp == null) {
             LaunchedEffect(student.id, mainBase64) {
                 val packed = resolvedPackedAvatar
-                    .ifBlank { StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student) }
+                    .ifBlank {
+                        withContext(Dispatchers.IO) {
+                            StudentAvatarImageHelper.resolveStudentPackedAvatar(context, student)
+                        }
+                    }
                 val mainEntry = StudentAvatarImageHelper.extractMainPhotoBase64(packed)
                 if (mainEntry.isNotBlank()) {
-                    fallbackFullBmp = withContext(Dispatchers.Default) {
-                        StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainEntry)
+                    fallbackFullBmp = withContext(Dispatchers.IO) {
+                        StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainEntry, student.id)
                     }
                 }
             }
@@ -1657,7 +1762,8 @@ fun StudentAvatarCircle(
             student = student,
             blockAccent = blockAccent,
             blockLabel = blockLabel,
-            fullPhotoBitmap = fallbackFullBmp ?: if (hasPhotoInModel) imageBitmap else null,
+            fullPhotoBitmap = fallbackFullBmp,
+            isLoadingFullPhoto = hasPhotoInModel && fallbackFullBmp == null,
             framedAvatarBitmap = null
         )
     }
@@ -1679,6 +1785,7 @@ fun StudentHoldQuickPeekRootOverlay(
         blockAccent = request.blockAccent,
         blockLabel = request.blockLabel,
         fullPhotoBitmap = request.fullPhotoBitmap,
+        isLoadingFullPhoto = request.isLoadingFullPhoto,
         modifier = modifier
     )
 }
@@ -1692,6 +1799,7 @@ fun StudentHoldQuickPeekPopup(
     blockAccent: Color,
     blockLabel: String?,
     fullPhotoBitmap: ImageBitmap?,
+    isLoadingFullPhoto: Boolean = false,
     framedAvatarBitmap: ImageBitmap? = null
 ) {
     val nonFocusablePopupProps = remember {
@@ -1711,7 +1819,8 @@ fun StudentHoldQuickPeekPopup(
             student = student,
             blockAccent = blockAccent,
             blockLabel = blockLabel,
-            fullPhotoBitmap = fullPhotoBitmap
+            fullPhotoBitmap = fullPhotoBitmap,
+            isLoadingFullPhoto = isLoadingFullPhoto
         )
     }
 }
@@ -1722,6 +1831,7 @@ private fun StudentHoldQuickPeekOverlayContent(
     blockAccent: Color,
     blockLabel: String?,
     fullPhotoBitmap: ImageBitmap?,
+    isLoadingFullPhoto: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(
@@ -1734,14 +1844,14 @@ private fun StudentHoldQuickPeekOverlayContent(
         contentAlignment = Alignment.Center
     ) {
         val cardMaxHeight = (maxHeight * 0.84f).coerceIn(340.dp, 680.dp)
-        val hasFullPhoto = fullPhotoBitmap != null
+        val hasFullPhotoOrLoading = fullPhotoBitmap != null || isLoadingFullPhoto
 
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 420.dp)
                 .then(
-                    if (hasFullPhoto) {
+                    if (hasFullPhotoOrLoading) {
                         Modifier.height(cardMaxHeight)
                     } else {
                         Modifier.heightIn(min = 280.dp, max = cardMaxHeight)
@@ -1773,6 +1883,19 @@ private fun StudentHoldQuickPeekOverlayContent(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .testTag("student_quick_peek_full_image_${student.id}")
+                        )
+                    }
+                } else if (isLoadingFullPhoto) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .background(KamBackgroundDark),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = blockAccent,
+                            modifier = Modifier.size(38.dp)
                         )
                     }
                 } else {
@@ -1928,7 +2051,7 @@ fun StudentPhotoPickerDialog(
     var currentPackedField by remember(student.id, student.avatarBase64, student.effectiveAvatarKey) {
         mutableStateOf(
             student.avatarBase64.ifBlank {
-                StudentAvatarImageHelper.readLocalAlbumRaw(context, student.id)
+                StudentAvatarImageHelper.peekCachedLocalAlbumRaw(student.id)
             }
         )
     }
@@ -1987,16 +2110,33 @@ fun StudentPhotoPickerDialog(
         StudentAvatarImageHelper.extractMainPhotoBase64(currentPackedField)
     }
 
-    var framedPreviewBitmap by remember(mainPhotoEntry) {
-        mutableStateOf(StudentAvatarImageHelper.getCachedBitmap(mainPhotoEntry))
+    var framedPreviewBitmap by remember(student.id, mainPhotoEntry) {
+        mutableStateOf(
+            StudentAvatarImageHelper.getCachedBitmap(mainPhotoEntry)
+                ?: StudentAvatarImageHelper.getCachedBitmapForStudent(student)
+        )
     }
-    LaunchedEffect(mainPhotoEntry) {
-        if (mainPhotoEntry.isBlank()) {
-            framedPreviewBitmap = null
-        } else if (framedPreviewBitmap == null) {
-            framedPreviewBitmap = withContext(Dispatchers.Default) {
-                StudentAvatarImageHelper.decodeBase64ToImageBitmap(mainPhotoEntry)
+    LaunchedEffect(student.id, mainPhotoEntry) {
+        if (mainPhotoEntry.isNotBlank()) {
+            val decodedFramed = StudentAvatarImageHelper.getCachedBitmap(mainPhotoEntry)
+                ?: withContext(Dispatchers.IO) {
+                    StudentAvatarImageHelper.decodeBase64ToImageBitmap(
+                        base64 = mainPhotoEntry,
+                        context = context,
+                        studentKeyAlias = "student_${student.id}_${student.effectiveAvatarKey}".hashCode(),
+                        asyncDiskWrite = true
+                    )
+                }
+            if (decodedFramed != null) {
+                framedPreviewBitmap = decodedFramed
             }
+            if (StudentAvatarImageHelper.getCachedFullPhotoBitmap(mainPhotoEntry) == null) {
+                withContext(Dispatchers.IO) {
+                    StudentAvatarImageHelper.decodeFullPhotoToImageBitmap(context, mainPhotoEntry, student.id)
+                }
+            }
+        } else if (!student.effectiveHasAvatar && student.avatarBase64.isBlank()) {
+            framedPreviewBitmap = null
         }
     }
 
@@ -2802,7 +2942,7 @@ fun StudentPhotoAlbumSection(
     var resolvedAvatarField by remember(student.id, student.avatarBase64, student.effectiveAvatarKey) {
         mutableStateOf(
             student.avatarBase64.ifBlank {
-                StudentAvatarImageHelper.readLocalAlbumRaw(context, student.id)
+                StudentAvatarImageHelper.peekCachedLocalAlbumRaw(student.id)
             }
         )
     }

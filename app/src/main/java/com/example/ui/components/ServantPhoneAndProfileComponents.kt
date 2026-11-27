@@ -1218,13 +1218,12 @@ fun ServantProfileSettingsCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
-            .border(1.dp, extColors.hairline, RoundedCornerShape(16.dp))
-            .padding(16.dp)
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+            .border(1.dp, extColors.hairline, RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
             .testTag("servant_profile_settings_card"),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Header Row: Servant Avatar + Editable Name + Gmail + Change Photo Button
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1240,151 +1239,134 @@ fun ServantProfileSettingsCard(
                     groupId = groupId,
                     memberProfile = memberProfile,
                     accentColor = accentColor,
-                    size = 56.dp,
+                    size = 42.dp,
                     isEditable = true,
                     onClick = onOpenAvatarPicker
                 )
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(10.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(6.dp))
                             .clickable { showEditNameDialog = true }
-                            .padding(vertical = 2.dp, horizontal = 4.dp)
+                            .padding(vertical = 1.dp, horizontal = 2.dp)
                             .testTag("settings_edit_own_name_button")
                     ) {
                         Text(
                             text = servantName.ifBlank { "خادم الفصل" },
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Icon(
                             imageVector = Icons.Default.Edit,
                             contentDescription = "تعديل الاسم",
                             tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    val subtitleText = buildString {
+                        if (primaryPhone.isNotBlank()) {
+                            append(primaryPhone)
+                            if (secondaryPhone.isNotBlank() && secondaryPhone != primaryPhone) {
+                                append(" • ")
+                                append(secondaryPhone)
+                            }
+                        } else if (email.isNotBlank()) {
+                            append(email)
+                        } else {
+                            append("بدون رقم موبايل")
+                        }
+                    }
+                    Text(
+                        text = subtitleText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    border = BorderStroke(1.dp, extColors.hairline),
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onOpenAvatarPicker)
+                        .testTag("settings_change_servant_photo_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Filled.CameraAlt,
+                            contentDescription = "تغيير صورتي",
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(16.dp)
                         )
                     }
-                    if (email.isNotBlank()) {
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = KamWhatsAppGreen,
+                    modifier = Modifier
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onOpenPhoneWizard)
+                        .testTag("settings_edit_phone_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (hasAnyPhone) Icons.Default.Edit else Icons.Default.Phone,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
                         Text(
-                            text = email,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            text = if (hasAnyPhone) "رقمي" else "إضافة رقم",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
                         )
                     }
-                    Text(
-                        text = "اضغط على الاسم لتعديله أو على الصورة لتغييرها",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
                 }
-            }
 
-            OutlinedButton(
-                onClick = onOpenAvatarPicker,
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                modifier = Modifier.testTag("settings_change_servant_photo_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.CameraAlt,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("صورتي")
-            }
-        }
-
-        HorizontalDivider()
-
-        // Saved Phone Numbers Summary
-        if (!hasAnyPhone) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "لم تضف رقم الموبايل / الواتساب بعد",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        } else {
-            if (primaryPhone.isNotBlank()) {
-                SavedPhoneBadgeCard(
-                    label = "الرقم الأساسي",
-                    phone = primaryPhone
-                )
-            }
-            if (secondaryPhone.isNotBlank() && secondaryPhone != primaryPhone) {
-                SavedPhoneBadgeCard(
-                    label = "الرقم التاني",
-                    phone = secondaryPhone
-                )
-            }
-        }
-
-        // Action Buttons: Add/Edit Phone + Delete Phone
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Button(
-                onClick = onOpenPhoneWizard,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp)
-                    .testTag("settings_edit_phone_button"),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = KamWhatsAppGreen,
-                    contentColor = Color.White
-                )
-            ) {
-                Icon(
-                    imageVector = if (hasAnyPhone) Icons.Default.Edit else Icons.Default.Phone,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = if (hasAnyPhone) "تعديل الرقم" else "إضافة رقم الواتساب",
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            if (hasAnyPhone) {
-                OutlinedButton(
-                    onClick = onDeletePhones,
-                    modifier = Modifier
-                        .height(48.dp)
-                        .testTag("settings_delete_phone_button"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    ),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "حذف الرقم",
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("حذف الرقم", fontWeight = FontWeight.Bold)
+                if (hasAnyPhone) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(onClick = onDeletePhones)
+                            .testTag("settings_delete_phone_button")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "حذف الرقم",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

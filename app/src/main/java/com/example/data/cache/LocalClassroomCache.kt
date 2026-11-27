@@ -483,6 +483,7 @@ object LocalClassroomCache {
             put("attendanceIsCardOnly", g.attendanceIsCardOnly)
             put("showLeaderboard", g.showLeaderboard)
             put("autoStudentNumber", g.autoStudentNumber)
+            put("lockStudentTransfer", g.lockStudentTransfer)
             put("bannedUids", JSONArray(g.bannedUids))
             put("bannedServantEntries", JSONArray(g.bannedServantEntries))
             put("dailyInviteToken", g.dailyInviteToken)
@@ -518,6 +519,7 @@ object LocalClassroomCache {
             attendanceIsCardOnly = obj.optBoolean("attendanceIsCardOnly", true),
             showLeaderboard = obj.optBoolean("showLeaderboard", true),
             autoStudentNumber = obj.optBoolean("autoStudentNumber", true),
+            lockStudentTransfer = obj.optBoolean("lockStudentTransfer", false),
             bannedUids = jsonArrayToStringList(obj.optJSONArray("bannedUids")),
             bannedServantEntries = jsonArrayToStringList(obj.optJSONArray("bannedServantEntries")),
             dailyInviteToken = obj.optString("dailyInviteToken", ""),

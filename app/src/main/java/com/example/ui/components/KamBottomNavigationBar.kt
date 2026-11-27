@@ -60,6 +60,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -126,13 +128,6 @@ fun KamFloatingBottomNavBar(
             ),
             KamNavDestination(
                 index = 3,
-                labelResId = R.string.tab_group,
-                selectedIcon = Icons.Filled.Groups,
-                unselectedIcon = Icons.Filled.GroupsOutline,
-                testTag = "nav_tab_group"
-            ),
-            KamNavDestination(
-                index = 4,
                 labelResId = R.string.tab_settings,
                 selectedIcon = Icons.Filled.Settings,
                 unselectedIcon = Icons.Outlined.Settings,
@@ -158,55 +153,63 @@ fun KamFloatingBottomNavBar(
         ) + fadeOut(animationSpec = tween(durationMillis = 150)),
         modifier = modifier
     ) {
-        Box(
+        val dockContainerColor = if (extColors.isDark) {
+            extColors.elevatedSurface
+        } else {
+            MaterialTheme.colorScheme.surface
+        }
+        val dockBorderColor = if (extColors.isDark) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+        } else {
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.85f)
+        }
+        val activePillBrush = if (extColors.isDark) {
+            Brush.verticalGradient(
+                colors = listOf(
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                )
+            )
+        } else {
+            Brush.verticalGradient(
+                colors = listOf(
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.98f),
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                )
+            )
+        }
+
+        // Full-width docked bottom surface + pointer shield seals all space down to screen edge
+        Surface(
+            shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
+            color = dockContainerColor,
+            border = BorderStroke(1.dp, dockBorderColor),
+            shadowElevation = if (extColors.isDark) 8.dp else 12.dp,
+            tonalElevation = if (extColors.isDark) 3.dp else 2.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            contentAlignment = Alignment.Center
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            awaitPointerEvent(PointerEventPass.Main).changes.forEach { it.consume() }
+                        }
+                    }
+                }
+                .testTag("kam_floating_bottom_nav")
         ) {
-            val capsuleContainerColor = if (extColors.isDark) {
-                extColors.elevatedSurface.copy(alpha = 0.96f)
-            } else {
-                MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)
-            }
-            val capsuleBorderColor = if (extColors.isDark) {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
-            } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)
-            }
-            val activePillBrush = if (extColors.isDark) {
-                Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.24f),
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                    )
-                )
-            } else {
-                Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                    )
-                )
-            }
-
-            Surface(
-                shape = RoundedCornerShape(28.dp),
-                color = capsuleContainerColor,
-                border = BorderStroke(1.dp, capsuleBorderColor),
-                shadowElevation = if (extColors.isDark) 6.dp else 10.dp,
-                tonalElevation = if (extColors.isDark) 3.dp else 2.dp,
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 520.dp)
-                    .height(66.dp)
-                    .testTag("kam_floating_bottom_nav")
+                    .navigationBarsPadding()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center
             ) {
                 BoxWithConstraints(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 6.dp, vertical = 5.dp)
+                        .fillMaxWidth()
+                        .widthIn(max = 560.dp)
+                        .height(62.dp)
+                        .padding(horizontal = 4.dp, vertical = 3.dp)
                 ) {
                     val slotCount = destinations.size
                     val slotWidth = maxWidth / slotCount
@@ -338,7 +341,7 @@ fun KamFloatingBottomNavBar(
                                                     .background(MaterialTheme.colorScheme.error)
                                                     .border(
                                                         width = 1.5.dp,
-                                                        color = capsuleContainerColor,
+                                                        color = dockContainerColor,
                                                         shape = CircleShape
                                                     )
                                                     .padding(horizontal = 4.5.dp, vertical = 1.dp)

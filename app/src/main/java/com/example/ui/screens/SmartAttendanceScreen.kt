@@ -341,18 +341,8 @@ private fun formatMergedAttendanceSystemMessage(
     }
 
     val maxLen = ChatMessage.MAX_SYSTEM_TEXT_LENGTH
-    val presentIdsLine = if (cleanPresentIds.isNotEmpty()) {
-        "\nPID|" + cleanPresentIds.joinToString(",")
-    } else {
-        ""
-    }
-    val presentLine = if (cleanPresentNames.isNotEmpty()) {
-        "\nPL|" + cleanPresentNames.joinToString(" • ")
-    } else {
-        ""
-    }
-    val reservedForPresent = (presentLine.length + presentIdsLine.length).coerceAtMost(1200)
-    val bodyBudget = (maxLen - reservedForPresent).coerceAtLeast(450)
+    val bodyReserveForPresent = 900
+    val bodyBudget = (maxLen - bodyReserveForPresent).coerceAtLeast(600)
 
     for (item in absentList) {
         val line = "\nA|${sanitizeReportField(item.studentId)}|${item.studentNumber}|${sanitizeReportField(item.studentName)}"
@@ -373,12 +363,39 @@ private fun formatMergedAttendanceSystemMessage(
             sb.append(line)
         }
     }
-    if (presentIdsLine.isNotEmpty() && sb.length + presentIdsLine.length <= maxLen - 20) {
-        sb.append(presentIdsLine)
+
+    if (cleanPresentIds.isNotEmpty() && sb.length + 10 < maxLen) {
+        val idsBuilder = StringBuilder("\nPID|")
+        var addedAnyId = false
+        for (id in cleanPresentIds) {
+            val sep = if (addedAnyId) "," else ""
+            if (sb.length + idsBuilder.length + sep.length + id.length <= maxLen - 20) {
+                idsBuilder.append(sep).append(id)
+                addedAnyId = true
+            } else {
+                break
+            }
+        }
+        if (addedAnyId) {
+            sb.append(idsBuilder)
+        }
     }
-    if (presentLine.isNotEmpty() && sb.length + 6 < maxLen) {
-        val remaining = maxLen - sb.length
-        sb.append(presentLine.take(remaining))
+
+    if (cleanPresentNames.isNotEmpty() && sb.length + 10 < maxLen) {
+        val namesBuilder = StringBuilder("\nPL|")
+        var addedAnyName = false
+        for (name in cleanPresentNames) {
+            val sep = if (addedAnyName) " • " else ""
+            if (sb.length + namesBuilder.length + sep.length + name.length <= maxLen) {
+                namesBuilder.append(sep).append(name)
+                addedAnyName = true
+            } else {
+                break
+            }
+        }
+        if (addedAnyName) {
+            sb.append(namesBuilder)
+        }
     }
     return sb.toString().take(maxLen)
 }
@@ -717,8 +734,20 @@ fun SmartAttendanceScreen(
         } else {
             emptyList()
         }
-        val combinedPresentIds = (presentBatchEntries.map { it.studentId } + presentFromActiveRecords.map { it.id }).distinct()
-        val combinedPresentNames = (presentBatchEntries.map { it.studentName } + presentFromActiveRecords.map { it.name }).distinct()
+        val presentPairs = LinkedHashMap<String, Pair<String, Long>>()
+        for (item in presentBatchEntries) {
+            if (item.studentId.isNotBlank()) {
+                presentPairs[item.studentId] = item.studentName to item.studentNumber
+            }
+        }
+        for (stu in presentFromActiveRecords) {
+            if (stu.id.isNotBlank() && !presentPairs.containsKey(stu.id)) {
+                presentPairs[stu.id] = stu.name to stu.studentNumber
+            }
+        }
+        val sortedPresentPairs = presentPairs.entries.sortedBy { it.value.second }
+        val combinedPresentIds = sortedPresentPairs.map { it.key }
+        val combinedPresentNames = sortedPresentPairs.map { it.value.first }
 
         val messageTextToSend = formatMergedAttendanceSystemMessage(
             weekKey = activeWeekKey,

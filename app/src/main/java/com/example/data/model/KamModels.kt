@@ -38,7 +38,7 @@ data class CustomCardConfig(
         get() = rawTrimmedName.isNotBlank()
 
     val effectiveName: String
-        get() = rawTrimmedName.ifBlank { "كارت القمداء" }
+        get() = rawTrimmedName.ifBlank { "كارت التميز" }
 
     val effectiveIcon: String
         get() = icon.trim().ifBlank { "🏅" }
@@ -76,7 +76,7 @@ enum class CardType(
     GOLD("GOLD", "الذهب", 20, "⭐", "GOLD"),
     MEMORIZATION("MEMORIZATION", "المحفوظات", 6, "📖", "TEAL"),
     CONFESSION("CONFESSION", "الاعتراف", 4, "🕊️", "ROSE"),
-    CUSTOM_ELDER("CUSTOM_ELDER", "كارت القمداء", 15, "🏅", "GOLD");
+    CUSTOM_ELDER("CUSTOM_ELDER", "كارت التميز", 15, "🏅", "GOLD");
 
     fun displayTitle(customConfig: CustomCardConfig? = null): String {
         return if (this == CUSTOM_ELDER && customConfig != null) customConfig.effectiveName else arabicTitle
@@ -159,6 +159,7 @@ data class Group(
     val attendanceIsCardOnly: Boolean = true,
     val showLeaderboard: Boolean = true,
     val autoStudentNumber: Boolean = true,
+    val lockStudentTransfer: Boolean = false,
     val bannedUids: List<String> = emptyList(),
     val bannedServantEntries: List<String> = emptyList(),
     val dailyInviteToken: String = "",
@@ -1424,4 +1425,83 @@ data class EmailDirectoryEntry(
         }
     }
 }
+
+enum class BlockMoveAction {
+    UP,
+    DOWN,
+    TO_TOP
+}
+
+enum class AuditActionType(
+    val id: String,
+    val arabicTitle: String
+) {
+    AWARD_CARD("AWARD_CARD", "إعطاء كارت"),
+    UNDO_CARD("UNDO_CARD", "سحب كارت"),
+    ADD_STUDENT("ADD_STUDENT", "إضافة طفل"),
+    UPDATE_STUDENT("UPDATE_STUDENT", "تعديل بيانات طفل"),
+    DELETE_STUDENT("DELETE_STUDENT", "حذف طفل"),
+    MOVE_STUDENT("MOVE_STUDENT", "نقل طفل بين البلوكات"),
+    REORDER_STUDENT("REORDER_STUDENT", "تغيير ترتيب طفل"),
+    REORDER_BLOCK("REORDER_BLOCK", "تغيير ترتيب بلوك"),
+    CREATE_OR_UPDATE_BLOCK("CREATE_OR_UPDATE_BLOCK", "تعديل/إنشاء بلوك");
+
+    companion object {
+        fun fromId(raw: String?): AuditActionType {
+            return entries.firstOrNull { it.id.equals(raw?.trim(), ignoreCase = true) } ?: AWARD_CARD
+        }
+    }
+}
+
+@Immutable
+@IgnoreExtraProperties
+data class GroupAuditLogEvent(
+    @DocumentId val id: String = "",
+    val groupId: String = "",
+    val actionType: String = AuditActionType.AWARD_CARD.id,
+    val actorUid: String = "",
+    val actorName: String = "",
+    val summaryArabic: String = "",
+    val targetId: String = "",
+    val targetName: String = "",
+    val previousStateJson: String = "",
+    val newStateJson: String = "",
+    val clientTimestampMillis: Long = 0L,
+    val nanoTieBreaker: Long = 0L,
+    val undone: Boolean = false,
+    val undoneByName: String = "",
+    val memberUids: List<String> = emptyList(),
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val effectiveTimestampMillis: Long
+        get() = when {
+            clientTimestampMillis > 0L -> clientTimestampMillis
+            createdAt != null && createdAt.seconds > 0L -> createdAt.toDate().time
+            else -> 0L
+        }
+
+    companion object {
+        private val atomicCounter = java.util.concurrent.atomic.AtomicLong(0L)
+
+        /**
+         * Collision-safe ID even when two servants perform the exact same action in the same millisecond/second.
+         */
+        fun generateCollisionSafeId(
+            nowMillis: Long = System.currentTimeMillis(),
+            nanoTime: Long = System.nanoTime(),
+            actorUid: String = ""
+        ): String {
+            val safeMillis = nowMillis.coerceAtLeast(1L).toString().padStart(15, '0')
+            val nanoPart = ((nanoTime and 0xFFFFFFL) xor (atomicCounter.incrementAndGet() and 0xFFFFL))
+                .toString(16)
+                .padStart(6, '0')
+                .takeLast(6)
+            val uidPart = actorUid.replace(Regex("[^a-zA-Z0-9]"), "").take(6).ifBlank { "srv" }
+            val randPart = ((Math.random() * 65535).toInt() and 0xFFFF).toString(16).padStart(4, '0')
+            return "ev_${safeMillis}_${nanoPart}_${uidPart}_$randPart"
+        }
+    }
+}
+
 

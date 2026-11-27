@@ -14,6 +14,8 @@ import com.example.data.cache.LocalClassroomCache
 import com.example.data.cache.LocalUserPreferences
 import com.example.data.model.ArabicInitialsHelper
 import com.example.data.model.AttendanceRecord
+import com.example.data.model.AuditActionType
+import com.example.data.model.BlockMoveAction
 import com.example.data.model.CardEvent
 import com.example.data.model.CardType
 import com.example.data.model.ChatMessageType
@@ -24,6 +26,7 @@ import com.example.data.model.CustomCardFrequency
 import com.example.data.model.DuplicateCardAlert
 import com.example.data.model.DuplicateStudentNameGroup
 import com.example.data.model.Group
+import com.example.data.model.GroupAuditLogEvent
 import com.example.data.model.Invitation
 import com.example.data.model.MAX_STUDENTS_PER_GROUP
 import com.example.data.model.MonthlyBalance
@@ -35,6 +38,7 @@ import com.example.data.model.ServantMemberProfile
 import com.example.data.model.Student
 import com.example.data.model.UserProfile
 import com.example.data.model.VisitationStatus
+import org.json.JSONObject
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.KamRepository
 import com.example.ui.components.StudentAvatarImageHelper
@@ -334,6 +338,7 @@ data class KamScreenState(
     val invitations: List<Invitation> = emptyList(),
     val childNotes: List<ChildNote> = emptyList(),
     val allAttendanceRecords: List<AttendanceRecord> = emptyList(),
+    val auditLogs: List<GroupAuditLogEvent> = emptyList(),
     val selectedMonthKey: String = "",
     val selectedWeekKey: String? = null,
     val currentWeekKey: String = "",
@@ -799,6 +804,7 @@ class KamViewModel(
     private val _optimisticAddedEvents = MutableStateFlow<Map<String, CardEvent>>(emptyMap())
     private val _optimisticRemovedEventIds = MutableStateFlow<Set<String>>(emptySet())
     private val _optimisticStudentOverrides = MutableStateFlow<Map<String, Student>>(emptyMap())
+    private val _optimisticBlockOverrides = MutableStateFlow<Map<String, ServantBlock>>(emptyMap())
     private val _optimisticMemberOverrides = MutableStateFlow<Map<String, ServantMemberProfile>>(emptyMap())
     private val _optimisticGroupPolicyOverride = MutableStateFlow<Group?>(null)
     private val _optimisticChildNotes = MutableStateFlow<List<ChildNote>>(emptyList())
@@ -1114,8 +1120,35 @@ class KamViewModel(
         }
     }
 
+    private val auditLogsFlow: Flow<List<GroupAuditLogEvent>> = activeGroupRefreshScopeFlow.flatMapLatest { (groupId, _) ->
+        if (groupId.isBlank()) {
+            flowOf(emptyList())
+        } else {
+            repository.observeGroupAuditLogs(groupId)
+                .onStart { emit(emptyList()) }
+                .debounceSubsequentCloudEmissions(180L)
+                .catch { err ->
+                    Log.w(TAG, "Error observing group audit logs", err)
+                    emit(emptyList())
+                }
+        }
+    }
+
+    private val mergedBlocksFlow: Flow<List<ServantBlock>> = combine(
+        blocksFlow,
+        _optimisticBlockOverrides
+    ) { cloudBlocks, optimisticBlocks ->
+        if (optimisticBlocks.isEmpty()) {
+            cloudBlocks
+        } else {
+            cloudBlocks
+                .map { blk -> optimisticBlocks[blk.id] ?: blk }
+                .sortedWith(compareBy<ServantBlock> { it.sortOrder }.thenBy { it.id })
+        }
+    }
+
     private val coreClassroomStateFlow: Flow<KamScreenState> = combine(
-        combine(userProfileFlow, groupFlow, userGroupsFlow, blocksFlow, _localPrefsOverride) { profile, group, userGroups, blocks, localPrefs ->
+        combine(userProfileFlow, groupFlow, userGroupsFlow, mergedBlocksFlow, _localPrefsOverride) { profile, group, userGroups, blocks, localPrefs ->
             arrayOf<Any?>(profile, group, userGroups, blocks, localPrefs)
         },
         combine(
@@ -1159,6 +1192,7 @@ class KamViewModel(
                     attendanceIsCardOnly = optimisticGroupOverride.attendanceIsCardOnly,
                     showLeaderboard = optimisticGroupOverride.showLeaderboard,
                     autoStudentNumber = optimisticGroupOverride.autoStudentNumber,
+                    lockStudentTransfer = optimisticGroupOverride.lockStudentTransfer,
                     avatarBase64 = optimisticGroupOverride.avatarBase64.ifBlank { base.avatarBase64 },
                     avatarHash = optimisticGroupOverride.avatarHash.ifBlank { base.avatarHash },
                     customCardEnabled = optimisticGroupOverride.customCardEnabled,
@@ -1576,11 +1610,11 @@ class KamViewModel(
 
     val uiState: StateFlow<KamScreenState> = combine(
         coreClassroomStateFlow,
-        allAttendanceFlow,
+        combine(allAttendanceFlow, auditLogsFlow) { att, logs -> att to logs },
         combine(_searchQuery, _isRefreshing) { q, ref -> q to ref },
         combine(isOnlineFlow, hasPendingWritesFlow) { online, pending -> online to pending },
         combine(_actionBanner, _operationError) { banner, error -> banner to error }
-    ) { coreState, attendanceRecords, (searchQuery, isRefreshing), (isOnline, hasPendingWrites), (banner, error) ->
+    ) { coreState, (attendanceRecords, auditLogs), (searchQuery, isRefreshing), (isOnline, hasPendingWrites), (banner, error) ->
         val activeGroup = coreState.group
         if (activeGroup != null && activeGroup.isUserAdmin(currentUserId) && isOnline && activeGroup.isDailyCodeExpired()) {
             val rotationKey = "${activeGroup.inviteCode}_${activeGroup.inviteCodeUpdatedAtMillis}"
@@ -1601,6 +1635,7 @@ class KamViewModel(
             errorMessage = resolvedError,
             actionBannerMessage = banner,
             allAttendanceRecords = if (activeGroup == null) emptyList() else attendanceRecords,
+            auditLogs = if (activeGroup == null) emptyList() else auditLogs,
             searchQuery = searchQuery,
             isOnline = isOnline,
             isRefreshing = isRefreshing,
@@ -1633,6 +1668,7 @@ class KamViewModel(
         _optimisticAddedEvents.value = emptyMap()
         _optimisticRemovedEventIds.value = emptySet()
         _optimisticStudentOverrides.value = emptyMap()
+        _optimisticBlockOverrides.value = emptyMap()
         _optimisticMemberOverrides.value = emptyMap()
         _optimisticGroupPolicyOverride.value = null
         policyMutationSeq = 0L
@@ -1913,21 +1949,24 @@ class KamViewModel(
         showBanner("تم الإبقاء على الاسمين كطفلين منفصلين")
     }
 
-    // --- Servant Blocks (Create, Edit & Assign Servant strictly Admin-only) ---
+    // --- Servant Blocks (Admin: any servant/unlinked; Regular Servant: own block only) ---
 
     fun createServantBlock(
         servantName: String,
         colorHex: String,
-        servantUid: String = ""
+        servantUid: String = "",
+        onCreated: (String) -> Unit = {}
     ) {
         val state = uiState.value
         val group = state.group ?: return
-        if (!state.isAdmin) {
-            showBanner("إنشاء البلوكات متاح لأمين المجموعة فقط")
+        val requestedUid = servantUid.trim()
+        if (!state.isAdmin && requestedUid.isNotBlank() && requestedUid != currentUserId) {
+            showBanner("غير مسموح بإنشاء بلوك لخادم آخر — يمكنك إنشاء بلوكك الشخصي فقط")
             return
         }
-        val cleanServantUid = servantUid.trim()
-        val cleanServantName = servantName.trim()
+        val cleanServantUid = if (state.isAdmin) requestedUid else currentUserId
+        val fallbackName = state.userProfile?.displayName?.trim()?.ifBlank { "خادم" } ?: "خادم"
+        val cleanServantName = servantName.trim().ifBlank { fallbackName }
         viewModelScope.launch {
             val nextOrder = (state.blocks.maxOfOrNull { it.sortOrder.toInt() } ?: -1) + 1
             repository.createBlock(
@@ -1938,10 +1977,11 @@ class KamViewModel(
                 sortOrder = nextOrder,
                 memberUids = group.memberUids,
                 waitForServerAck = false
-            ).onSuccess {
+            ).onSuccess { blockId ->
                 showBanner("تم إضافة بلوك الخادم: $cleanServantName")
+                onCreated(blockId)
             }.onFailure {
-                _operationError.value = it.localizedMessage ?: "تعذر إضافة البلوك (متاح للأمين فقط)"
+                _operationError.value = it.localizedMessage ?: "تعذر إضافة البلوك"
             }
         }
     }
@@ -2176,10 +2216,11 @@ class KamViewModel(
         val siblingsInTarget = state.students.filter { it.blockId == targetBlockId }
         val nextOrder = (siblingsInTarget.maxOfOrNull { it.sortOrder.toInt() } ?: -1) + 1
         val nextPosition = (siblingsInTarget.maxOfOrNull { it.effectivePosition } ?: 0.0) + 1000.0
+        val cleanName = name.trim()
         viewModelScope.launch {
             repository.addStudent(
                 groupId = group.inviteCode,
-                name = name,
+                name = cleanName,
                 studentNumber = nextNum,
                 blockId = targetBlockId,
                 sortOrder = nextOrder,
@@ -2187,7 +2228,18 @@ class KamViewModel(
                 memberUids = group.memberUids,
                 waitForServerAck = false
             ).onSuccess {
-                showBanner("تم إضافة الطفل '$name' (${state.students.size + 1} / $MAX_STUDENTS_PER_GROUP)")
+                showBanner("تم إضافة الطفل '$cleanName' (${state.students.size + 1} / $MAX_STUDENTS_PER_GROUP)")
+                logGroupAction(
+                    actionType = AuditActionType.ADD_STUDENT,
+                    summaryArabic = "إضافة الطفل '$cleanName'",
+                    targetId = cleanName,
+                    targetName = cleanName,
+                    newStateJson = JSONObject().apply {
+                        put("name", cleanName)
+                        put("studentNumber", nextNum)
+                        put("blockId", targetBlockId)
+                    }.toString()
+                )
             }.onFailure {
                 _operationError.value = it.localizedMessage ?: "تعذر إضافة الطفل"
             }
@@ -2258,6 +2310,18 @@ class KamViewModel(
     fun moveStudentToBlock(student: Student, targetBlockId: String) {
         val state = uiState.value
         val group = state.group ?: return
+        if (group.lockStudentTransfer && !group.isUserAdmin(currentUserId)) {
+            _operationError.value = "نقل الطلاب مقفول حالياً بقرار أمين المجموعة"
+            return
+        }
+        val oldBlockId = student.blockId
+        val oldSortOrder = student.sortOrder
+        val oldPosition = student.effectivePosition
+        val oldBlockName = if (oldBlockId.isBlank()) {
+            "بدون بلوك"
+        } else {
+            state.blocks.find { it.id == oldBlockId }?.servantName ?: "بلوك سابق"
+        }
         val targetSiblings = state.students.filter { it.blockId == targetBlockId && it.id != student.id }
         val maxSortInTarget = targetSiblings.maxOfOrNull { it.sortOrder } ?: -1L
         val maxPositionInTarget = targetSiblings.maxOfOrNull { it.effectivePosition } ?: 0.0
@@ -2290,6 +2354,24 @@ class KamViewModel(
                     state.blocks.find { it.id == targetBlockId }?.servantName ?: "البلوك"
                 }
                 showBanner("تم نقل '${student.name}' إلى $targetName وتحديث التسلسل")
+                logGroupAction(
+                    actionType = AuditActionType.MOVE_STUDENT,
+                    summaryArabic = "نقل '${student.name}' من «$oldBlockName» إلى «$targetName»",
+                    targetId = student.id,
+                    targetName = student.name,
+                    previousStateJson = JSONObject().apply {
+                        put("studentId", student.id)
+                        put("blockId", oldBlockId)
+                        put("sortOrder", oldSortOrder)
+                        put("position", oldPosition)
+                    }.toString(),
+                    newStateJson = JSONObject().apply {
+                        put("studentId", student.id)
+                        put("blockId", targetBlockId)
+                        put("sortOrder", newSortOrder)
+                        put("position", newPosition)
+                    }.toString()
+                )
             }.onFailure {
                 _optimisticStudentOverrides.update { it - student.id }
                 _operationError.value = it.localizedMessage ?: "تعذر نقل الطفل"
@@ -2304,6 +2386,10 @@ class KamViewModel(
     fun reorderStudentWithinBlock(student: Student, moveUp: Boolean) {
         val state = uiState.value
         val group = state.group ?: return
+        if (group.lockStudentTransfer && !group.isUserAdmin(currentUserId)) {
+            _operationError.value = "تغيير ترتيب ونقل الطلاب مقفول حالياً بقرار أمين المجموعة"
+            return
+        }
         val validBlockIds = state.blocks.map { it.id }.toSet()
         val isUnassigned = student.blockId.isBlank() || student.blockId !in validBlockIds
 
@@ -2379,6 +2465,24 @@ class KamViewModel(
                 waitForServerAck = false
             )
             _optimisticStudentOverrides.update { it - student.id - neighborStudent.id }
+            logGroupAction(
+                actionType = AuditActionType.REORDER_STUDENT,
+                summaryArabic = "تغيير ترتيب '${student.name}' إلى رقم #$movedNewNumber",
+                targetId = student.id,
+                targetName = student.name,
+                previousStateJson = JSONObject().apply {
+                    put("studentId", student.id)
+                    put("position", student.effectivePosition)
+                    put("studentNumber", student.studentNumber)
+                    put("neighborId", neighborStudent.id)
+                    put("neighborStudentNumber", neighborStudent.studentNumber)
+                }.toString(),
+                newStateJson = JSONObject().apply {
+                    put("studentId", student.id)
+                    put("position", newPosition)
+                    put("studentNumber", movedNewNumber)
+                }.toString()
+            )
         }
     }
 
@@ -2393,6 +2497,15 @@ class KamViewModel(
         val safeNumber = newNumber.coerceIn(1, 2000)
         val safeBlockId = newBlockId.trim().take(80)
         val movedToNewBlock = safeBlockId != student.blockId
+        if (movedToNewBlock && group.lockStudentTransfer && !group.isUserAdmin(currentUserId)) {
+            _operationError.value = "نقل الطلاب بين البلوكات مقفول حالياً بقرار أمين المجموعة"
+            return
+        }
+        val oldName = student.name
+        val oldNumber = student.studentNumber.toInt()
+        val oldBlockId = student.blockId
+        val oldSortOrder = student.sortOrder
+        val oldPosition = student.effectivePosition
         val newPosition = if (movedToNewBlock) {
             val targetMax = state.students
                 .filter { it.blockId == safeBlockId && it.id != student.id }
@@ -2436,6 +2549,32 @@ class KamViewModel(
                 } else {
                     showBanner("تم حفظ تعديلات '$cleanName'")
                 }
+                logGroupAction(
+                    actionType = AuditActionType.UPDATE_STUDENT,
+                    summaryArabic = if (targetBlockName != null) {
+                        "تعديل '$oldName' إلى '$cleanName' ونقله لـ «$targetBlockName»"
+                    } else {
+                        "تعديل بيانات الطفل '$oldName' إلى '$cleanName' (#$safeNumber)"
+                    },
+                    targetId = student.id,
+                    targetName = cleanName,
+                    previousStateJson = JSONObject().apply {
+                        put("studentId", student.id)
+                        put("name", oldName)
+                        put("studentNumber", oldNumber)
+                        put("blockId", oldBlockId)
+                        put("sortOrder", oldSortOrder)
+                        put("position", oldPosition)
+                    }.toString(),
+                    newStateJson = JSONObject().apply {
+                        put("studentId", student.id)
+                        put("name", cleanName)
+                        put("studentNumber", safeNumber)
+                        put("blockId", safeBlockId)
+                        put("sortOrder", safeSortOrder)
+                        put("position", newPosition)
+                    }.toString()
+                )
             }.onFailure { err ->
                 _optimisticStudentOverrides.update { it - student.id }
                 _operationError.value = err.localizedMessage ?: "تعذر تعديل بيانات الطفل"
@@ -2486,6 +2625,19 @@ class KamViewModel(
             repository.deleteStudent(group.inviteCode, student.id)
                 .onSuccess {
                     showBanner("تم حذف '${student.name}'")
+                    logGroupAction(
+                        actionType = AuditActionType.DELETE_STUDENT,
+                        summaryArabic = "حذف الطفل '${student.name}' (#${student.studentNumber})",
+                        targetId = student.id,
+                        targetName = student.name,
+                        previousStateJson = JSONObject().apply {
+                            put("name", student.name)
+                            put("studentNumber", student.studentNumber.toInt())
+                            put("blockId", student.blockId)
+                            put("sortOrder", student.sortOrder.toInt())
+                            put("position", student.effectivePosition)
+                        }.toString()
+                    )
                 }
                 .onFailure {
                     _operationError.value = "رفض السيرفر الحذف: الحذف متاح للأمين فقط"
@@ -2690,6 +2842,21 @@ class KamViewModel(
                 } else {
                     showBanner("+$cardPoints ($cardTitle) لـ ${student.name}")
                 }
+                logGroupAction(
+                    actionType = AuditActionType.AWARD_CARD,
+                    summaryArabic = "إعطاء كارت '$cardTitle' (+$cardPoints) للطفل '${student.name}'",
+                    targetId = savedId,
+                    targetName = student.name,
+                    newStateJson = JSONObject().apply {
+                        put("eventId", savedId)
+                        put("studentId", student.id)
+                        put("studentName", student.name)
+                        put("cardType", cardType.id)
+                        put("points", cardPoints)
+                        put("monthKey", state.selectedMonthKey)
+                        put("weekKey", activeWeekKey)
+                    }.toString()
+                )
             }.onFailure { err ->
                 _optimisticAddedEvents.update { it - deterministicEventId }
                 recentTapTimestamps.remove(tapKey)
@@ -2714,6 +2881,21 @@ class KamViewModel(
             ).onSuccess {
                 _optimisticRemovedEventIds.update { it - event.id }
                 showBanner("تم إلغاء كارت من سجل '${event.studentName}'")
+                val cardTitle = CardType.fromId(event.cardType)?.displayTitle(group.customCardConfig) ?: event.cardType
+                logGroupAction(
+                    actionType = AuditActionType.UNDO_CARD,
+                    summaryArabic = "إلغاء كارت '$cardTitle' من سجل '${event.studentName}'",
+                    targetId = event.studentId,
+                    targetName = event.studentName,
+                    previousStateJson = JSONObject().apply {
+                        put("studentId", event.studentId)
+                        put("studentName", event.studentName)
+                        put("cardType", event.cardType)
+                        put("points", event.points)
+                        put("monthKey", event.monthKey)
+                        put("weekKey", event.weekKey)
+                    }.toString()
+                )
             }.onFailure {
                 _optimisticRemovedEventIds.update { it - event.id }
                 _operationError.value = "غير مسموح بإلغاء الكارت إلا للأمين أو للخادم المسجِّل حسب إعدادات المجموعة"
@@ -2778,7 +2960,8 @@ class KamViewModel(
         maxMonthlyPoints: Long,
         attendanceIsCardOnly: Boolean,
         showLeaderboard: Boolean,
-        autoStudentNumber: Boolean
+        autoStudentNumber: Boolean,
+        lockStudentTransfer: Boolean = uiState.value.group?.lockStudentTransfer ?: false
     ) {
         val group = uiState.value.group ?: return
         if (!group.isUserAdmin(currentUserId)) {
@@ -2794,7 +2977,8 @@ class KamViewModel(
             maxMonthlyPoints = clampedMaxPoints,
             attendanceIsCardOnly = attendanceIsCardOnly,
             showLeaderboard = showLeaderboard,
-            autoStudentNumber = autoStudentNumber
+            autoStudentNumber = autoStudentNumber,
+            lockStudentTransfer = lockStudentTransfer
         )
         _optimisticGroupPolicyOverride.value = optimisticGroup
 
@@ -2806,7 +2990,8 @@ class KamViewModel(
                 maxMonthlyPoints = clampedMaxPoints,
                 attendanceIsCardOnly = attendanceIsCardOnly,
                 showLeaderboard = showLeaderboard,
-                autoStudentNumber = autoStudentNumber
+                autoStudentNumber = autoStudentNumber,
+                lockStudentTransfer = lockStudentTransfer
             ).onSuccess {
                 showBanner("تم حفظ قواعد وقرارات المجموعة")
                 delay(600L)
@@ -2826,6 +3011,321 @@ class KamViewModel(
                     else -> err.localizedMessage ?: "تعذر حفظ القاعدة في السحابة، تم إرجاع الحالة"
                 }
             }
+        }
+    }
+
+    /**
+     * Moves a ServantBlock UP, DOWN, or TO_TOP (first block), carrying its servant and all its children,
+     * and recalculates sequential student numbers (1, 2, 3...) across the entire classroom.
+     */
+    fun moveServantBlock(blockId: String, action: BlockMoveAction) {
+        val state = uiState.value
+        val group = state.group ?: return
+        if (group.lockStudentTransfer && !group.isUserAdmin(currentUserId)) {
+            _operationError.value = "تحريك البلوكات وترتيب الطلاب مقفول حالياً بقرار أمين المجموعة"
+            return
+        }
+        val sortedBlocks = state.blocks
+            .sortedWith(compareBy<ServantBlock> { it.sortOrder }.thenBy { it.id })
+            .toMutableList()
+        val currentIdx = sortedBlocks.indexOfFirst { it.id == blockId }
+        if (currentIdx == -1) return
+        val targetIdx = when (action) {
+            BlockMoveAction.UP -> currentIdx - 1
+            BlockMoveAction.DOWN -> currentIdx + 1
+            BlockMoveAction.TO_TOP -> 0
+        }
+        if (targetIdx !in sortedBlocks.indices || targetIdx == currentIdx) return
+
+        val oldOrderJson = JSONObject()
+        sortedBlocks.forEachIndexed { idx, blk ->
+            oldOrderJson.put(blk.id, idx.toLong())
+        }
+
+        val movedBlock = sortedBlocks.removeAt(currentIdx)
+        sortedBlocks.add(targetIdx, movedBlock)
+
+        val reorderedBlocks = sortedBlocks.mapIndexed { index, blk ->
+            blk.copy(sortOrder = index.toLong())
+        }
+        val blockSortUpdates = reorderedBlocks.associate { it.id to it.sortOrder }
+
+        val renumberedStudents = computeSequentiallyNumberedStudents(
+            rawStudents = state.students,
+            blocks = reorderedBlocks
+        )
+        val oldNumbersById = state.students.associate { it.id to it.studentNumber }
+        val changedStudentNumbers = LinkedHashMap<String, Long>()
+        val optimisticStudentsMap = LinkedHashMap<String, Student>()
+        renumberedStudents.forEach { stu ->
+            if (oldNumbersById[stu.id] != stu.studentNumber) {
+                changedStudentNumbers[stu.id] = stu.studentNumber
+                optimisticStudentsMap[stu.id] = stu
+            }
+        }
+
+        // Apply 0ms optimistic block & student numbering update
+        _optimisticBlockOverrides.update { current ->
+            current + reorderedBlocks.associateBy { it.id }
+        }
+        if (optimisticStudentsMap.isNotEmpty()) {
+            _optimisticStudentOverrides.update { current ->
+                current + optimisticStudentsMap
+            }
+        }
+
+        val newOrderJson = JSONObject()
+        reorderedBlocks.forEach { blk ->
+            newOrderJson.put(blk.id, blk.sortOrder)
+        }
+
+        val actionDesc = when (action) {
+            BlockMoveAction.TO_TOP -> "رفع «بلوك ${state.resolvedBlockOwnerName(movedBlock)}» ليكون أول بلوك في الأعلى"
+            BlockMoveAction.UP -> "تحريك «بلوك ${state.resolvedBlockOwnerName(movedBlock)}» لأعلى"
+            BlockMoveAction.DOWN -> "تحريك «بلوك ${state.resolvedBlockOwnerName(movedBlock)}» لأسفل"
+        }
+
+        viewModelScope.launch {
+            repository.reorderServantBlocksAndSyncNumbers(
+                groupId = group.inviteCode,
+                blockSortUpdates = blockSortUpdates,
+                studentNumberUpdates = changedStudentNumbers,
+                waitForServerAck = false
+            ).onSuccess {
+                _optimisticBlockOverrides.update { current ->
+                    current - reorderedBlocks.map { it.id }.toSet()
+                }
+                if (optimisticStudentsMap.isNotEmpty()) {
+                    _optimisticStudentOverrides.update { current ->
+                        current - optimisticStudentsMap.keys
+                    }
+                }
+                showBanner("تم $actionDesc وتحديث ترقيم الأطفال (1..${renumberedStudents.size})")
+                logGroupAction(
+                    actionType = AuditActionType.REORDER_BLOCK,
+                    summaryArabic = actionDesc,
+                    targetId = movedBlock.id,
+                    targetName = movedBlock.servantName,
+                    previousStateJson = oldOrderJson.toString(),
+                    newStateJson = newOrderJson.toString()
+                )
+            }.onFailure { err ->
+                _optimisticBlockOverrides.update { current ->
+                    current - reorderedBlocks.map { it.id }.toSet()
+                }
+                if (optimisticStudentsMap.isNotEmpty()) {
+                    _optimisticStudentOverrides.update { current ->
+                        current - optimisticStudentsMap.keys
+                    }
+                }
+                _operationError.value = err.localizedMessage ?: "تعذر تحريك البلوك"
+            }
+        }
+    }
+
+    private fun logGroupAction(
+        actionType: AuditActionType,
+        summaryArabic: String,
+        targetId: String = "",
+        targetName: String = "",
+        previousStateJson: String = "",
+        newStateJson: String = ""
+    ) {
+        val state = uiState.value
+        val group = state.group ?: return
+        val actorName = state.userProfile?.displayName?.trim()?.takeIf { it.isNotBlank() }
+            ?: initialDisplayName.ifBlank { "خادم" }
+        val nowMs = System.currentTimeMillis()
+        val nano = System.nanoTime() and 0xFFFFFFL
+        val eventId = GroupAuditLogEvent.generateCollisionSafeId(
+            nowMillis = nowMs,
+            nanoTime = nano,
+            actorUid = currentUserId
+        )
+        val event = GroupAuditLogEvent(
+            id = eventId,
+            groupId = group.inviteCode,
+            actionType = actionType.id,
+            actorUid = currentUserId,
+            actorName = actorName,
+            summaryArabic = summaryArabic,
+            targetId = targetId,
+            targetName = targetName,
+            previousStateJson = previousStateJson,
+            newStateJson = newStateJson,
+            clientTimestampMillis = nowMs,
+            nanoTieBreaker = nano,
+            memberUids = group.memberUids
+        )
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.recordAuditLogEvent(event, waitForServerAck = false)
+        }
+    }
+
+    /**
+     * Admin-only Undo for any recorded event in the Group Audit Log (`سجل الأحداث`).
+     */
+    fun adminUndoAuditEvent(event: GroupAuditLogEvent) {
+        val state = uiState.value
+        val group = state.group ?: return
+        if (!state.isAdmin) {
+            _operationError.value = "التراجع من سجل الأحداث متاح لأمين المجموعة فقط"
+            return
+        }
+        if (event.undone) {
+            showBanner("تم التراجع عن هذا الحدث من قبل")
+            return
+        }
+        val adminName = state.userProfile?.displayName?.trim()?.takeIf { it.isNotBlank() }
+            ?: group.adminName.ifBlank { "الأمين" }
+
+        viewModelScope.launch {
+            val type = AuditActionType.fromId(event.actionType)
+            when (type) {
+                AuditActionType.AWARD_CARD -> {
+                    val existingEvent = state.effectiveAllCardEvents.firstOrNull { it.id == event.targetId }
+                        ?: runCatching {
+                            val obj = JSONObject(event.newStateJson)
+                            CardEvent(
+                                id = obj.optString("eventId", event.targetId),
+                                groupId = group.inviteCode,
+                                studentId = obj.optString("studentId", ""),
+                                studentName = obj.optString("studentName", event.targetName),
+                                cardType = obj.optString("cardType", CardType.ATTENDANCE.id),
+                                points = obj.optLong("points", 3L),
+                                monthKey = obj.optString("monthKey", state.selectedMonthKey),
+                                weekKey = obj.optString("weekKey", state.currentWeekKey)
+                            )
+                        }.getOrNull()
+                    if (existingEvent != null && existingEvent.id.isNotBlank()) {
+                        repository.undoCardEvent(group.inviteCode, existingEvent, waitForServerAck = false)
+                    }
+                }
+                AuditActionType.UNDO_CARD -> {
+                    val prev = runCatching { JSONObject(event.previousStateJson) }.getOrNull()
+                    val stuId = prev?.optString("studentId", event.targetId).orEmpty()
+                    val student = state.students.firstOrNull { it.id == stuId }
+                    val cType = CardType.fromId(prev?.optString("cardType", "").orEmpty())
+                    if (student != null && cType != null) {
+                        awardCardToStudent(student, cType)
+                    }
+                }
+                AuditActionType.MOVE_STUDENT -> {
+                    val prev = runCatching { JSONObject(event.previousStateJson) }.getOrNull()
+                    val stuId = prev?.optString("studentId", event.targetId).orEmpty()
+                    val oldBlockId = prev?.optString("blockId", "").orEmpty()
+                    val oldSortOrder = prev?.optLong("sortOrder", 0L) ?: 0L
+                    val oldPosition = prev?.optDouble("position", 1000.0) ?: 1000.0
+                    if (stuId.isNotBlank()) {
+                        repository.moveStudentToBlock(
+                            groupId = group.inviteCode,
+                            studentId = stuId,
+                            targetBlockId = oldBlockId,
+                            newSortOrder = oldSortOrder,
+                            newPosition = oldPosition,
+                            memberUids = group.memberUids,
+                            waitForServerAck = false
+                        )
+                    }
+                }
+                AuditActionType.UPDATE_STUDENT -> {
+                    val prev = runCatching { JSONObject(event.previousStateJson) }.getOrNull()
+                    val stuId = prev?.optString("studentId", event.targetId).orEmpty()
+                    val oldName = prev?.optString("name", "").orEmpty()
+                    val oldNumber = prev?.optInt("studentNumber", 1) ?: 1
+                    val oldBlockId = prev?.optString("blockId", "").orEmpty()
+                    val oldSortOrder = prev?.optLong("sortOrder", 0L) ?: 0L
+                    val oldPosition = prev?.optDouble("position", 1000.0) ?: 1000.0
+                    if (stuId.isNotBlank() && oldName.isNotBlank()) {
+                        repository.updateStudent(
+                            groupId = group.inviteCode,
+                            studentId = stuId,
+                            newName = oldName,
+                            newStudentNumber = oldNumber,
+                            newBlockId = oldBlockId,
+                            newSortOrder = oldSortOrder,
+                            newPosition = oldPosition,
+                            memberUids = group.memberUids,
+                            waitForServerAck = false
+                        )
+                    }
+                }
+                AuditActionType.DELETE_STUDENT -> {
+                    val prev = runCatching { JSONObject(event.previousStateJson) }.getOrNull()
+                    val oldName = prev?.optString("name", event.targetName).orEmpty()
+                    val oldNumber = prev?.optInt("studentNumber", state.students.size + 1) ?: (state.students.size + 1)
+                    val oldBlockId = prev?.optString("blockId", "").orEmpty()
+                    val oldSortOrder = prev?.optInt("sortOrder", 0) ?: 0
+                    val oldPosition = prev?.optDouble("position", 1000.0) ?: 1000.0
+                    if (oldName.isNotBlank()) {
+                        repository.addStudent(
+                            groupId = group.inviteCode,
+                            name = oldName,
+                            studentNumber = oldNumber,
+                            blockId = oldBlockId,
+                            sortOrder = oldSortOrder,
+                            position = oldPosition,
+                            memberUids = group.memberUids,
+                            waitForServerAck = false
+                        )
+                    }
+                }
+                AuditActionType.ADD_STUDENT -> {
+                    val stu = state.students.firstOrNull {
+                        it.id == event.targetId || it.name.equals(event.targetName, ignoreCase = true)
+                    }
+                    if (stu != null) {
+                        repository.deleteStudent(group.inviteCode, stu.id)
+                    }
+                }
+                AuditActionType.REORDER_STUDENT -> {
+                    val prev = runCatching { JSONObject(event.previousStateJson) }.getOrNull()
+                    val stuId = prev?.optString("studentId", event.targetId).orEmpty()
+                    val oldPos = prev?.optDouble("position", 1000.0) ?: 1000.0
+                    val oldNum = prev?.optLong("studentNumber", 1L) ?: 1L
+                    if (stuId.isNotBlank()) {
+                        repository.updateStudentPosition(
+                            groupId = group.inviteCode,
+                            studentId = stuId,
+                            newPosition = oldPos,
+                            newStudentNumber = oldNum,
+                            waitForServerAck = false
+                        )
+                    }
+                }
+                AuditActionType.REORDER_BLOCK, AuditActionType.CREATE_OR_UPDATE_BLOCK -> {
+                    val prev = runCatching { JSONObject(event.previousStateJson) }.getOrNull()
+                    if (prev != null) {
+                        val blockUpdates = LinkedHashMap<String, Long>()
+                        val keys = prev.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            blockUpdates[k] = prev.optLong(k, 0L)
+                        }
+                        if (blockUpdates.isNotEmpty()) {
+                            val restoredBlocks = state.blocks.map { blk ->
+                                val restoredOrder = blockUpdates[blk.id]
+                                if (restoredOrder != null) blk.copy(sortOrder = restoredOrder) else blk
+                            }
+                            val renumbered = computeSequentiallyNumberedStudents(state.students, restoredBlocks)
+                            val stuUpdates = renumbered.associate { it.id to it.studentNumber }
+                            repository.reorderServantBlocksAndSyncNumbers(
+                                groupId = group.inviteCode,
+                                blockSortUpdates = blockUpdates,
+                                studentNumberUpdates = stuUpdates,
+                                waitForServerAck = false
+                            )
+                        }
+                    }
+                }
+            }
+            repository.markAuditLogEventUndone(
+                groupId = group.inviteCode,
+                eventId = event.id,
+                adminName = adminName,
+                waitForServerAck = false
+            )
+            showBanner("تم التراجع عن: ${event.summaryArabic}")
         }
     }
 

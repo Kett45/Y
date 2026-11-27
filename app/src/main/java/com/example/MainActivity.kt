@@ -131,7 +131,6 @@ enum class KamBottomTab(val routeId: String, val labelRes: Int) {
     HOME("home", R.string.tab_home),
     VISITATION("visitation", R.string.tab_visitation),
     MESSAGES("messages", R.string.tab_messages),
-    GROUP("group", R.string.tab_group),
     SETTINGS("settings", R.string.tab_settings)
 }
 
@@ -686,9 +685,11 @@ fun AuthenticatedKamApp(
                             onAddSingleStudent = viewModel::addSingleStudent,
                             onAnalyzeBulkImport = viewModel::analyzeBulkImportText,
                             onConfirmBulkImport = viewModel::importBulkStudents,
-                            onCreateBlock = viewModel::createServantBlock,
+                            onCreateBlock = { name, hex, uid -> viewModel.createServantBlock(name, hex, uid) },
+                            onCreateBlockWithResult = viewModel::createServantBlock,
                             onUpdateBlock = viewModel::updateServantBlock,
                             onUpdateBlockAvatar = viewModel::updateBlockCustomAvatar,
+                            onMoveBlock = viewModel::moveServantBlock,
                             onMoveStudentToBlock = viewModel::moveStudentToBlock,
                             onReorderStudent = viewModel::reorderStudentWithinBlock,
                             onUpdateStudent = viewModel::updateStudentDetails,
@@ -761,32 +762,6 @@ fun AuthenticatedKamApp(
                         )
                     }
 
-                    KamBottomTab.GROUP -> {
-                        GroupInvitationsScreen(
-                            state = tabState,
-                            onSendInvitation = onSendInvitationRemembered,
-                            onRespondToInvitation = viewModel::respondToInvitation,
-                            onDeleteInvitation = viewModel::deleteInvitation,
-                            onDeleteBlock = viewModel::deleteServantBlock,
-                            onCopyBanner = viewModel::showBanner,
-                            onSwitchGroup = viewModel::switchActiveGroup,
-                            onJoinGroupByCode = viewModel::joinGroupByCode,
-                            onCreateNewGroup = viewModel::createGroup,
-                            onToggleBlockHidden = viewModel::toggleBlockHidden,
-                            onRefreshDailyInviteCode = viewModel::refreshDailyInviteCode,
-                            onRemoveAndBanServant = viewModel::removeAndBanServantFromBlock,
-                            onUnbanServant = viewModel::unbanServant,
-                            currentUserId = user.uid,
-                            onCreateBlock = viewModel::createServantBlock,
-                            onUpdateBlock = viewModel::updateServantBlock,
-                            onDeleteBlockKeepingChildren = viewModel::deleteBlockKeepingChildren,
-                            onDeleteBlockWithChildren = viewModel::deleteBlockWithChildren,
-                            onSavePersonalServantAlias = viewModel::savePersonalServantAlias,
-                            onEditOwnDisplayName = viewModel::editOwnDisplayName,
-                            onToggleAssistantAdmin = viewModel::toggleAssistantAdmin
-                        )
-                    }
-
                     KamBottomTab.SETTINGS -> {
                         SettingsScreen(
                             state = tabState,
@@ -804,7 +779,23 @@ fun AuthenticatedKamApp(
                             onUpdateOwnServantAvatar = viewModel::updateOwnServantAvatar,
                             onDeleteOwnPhones = viewModel::deleteOwnPhoneNumbers,
                             onEditOwnDisplayName = viewModel::editOwnDisplayName,
-                            onSaveCustomCardSettings = viewModel::updateCustomCardSettings
+                            onSaveCustomCardSettings = viewModel::updateCustomCardSettings,
+                            onSendInvitation = onSendInvitationRemembered,
+                            onRespondToInvitation = viewModel::respondToInvitation,
+                            onDeleteInvitation = viewModel::deleteInvitation,
+                            onDeleteBlock = viewModel::deleteServantBlock,
+                            onCopyBanner = viewModel::showBanner,
+                            onRefreshDailyInviteCode = viewModel::refreshDailyInviteCode,
+                            onRemoveAndBanServant = viewModel::removeAndBanServantFromBlock,
+                            onUnbanServant = viewModel::unbanServant,
+                            onCreateBlock = viewModel::createServantBlock,
+                            onUpdateBlock = viewModel::updateServantBlock,
+                            onDeleteBlockKeepingChildren = viewModel::deleteBlockKeepingChildren,
+                            onDeleteBlockWithChildren = viewModel::deleteBlockWithChildren,
+                            onSavePersonalServantAlias = viewModel::savePersonalServantAlias,
+                            onToggleAssistantAdmin = viewModel::toggleAssistantAdmin,
+                            onMoveBlock = viewModel::moveServantBlock,
+                            onAdminUndoAuditEvent = viewModel::adminUndoAuditEvent
                         )
                     }
                 }
@@ -1025,8 +1016,8 @@ private fun FloatingNotificationsOverlay(
                                 Text(
                                     text = when {
                                         isDownloadingApk -> "جاري تنزيل التحديث داخل التطبيق ($downloadProgressPercent%)"
-                                        downloadedApkReady -> "التحديث جاهز للتثبيت المباشر (v${prompt?.versionName.orEmpty()})"
-                                        else -> "تحديث جديد متاح (v${prompt?.versionName.orEmpty()})"
+                                        downloadedApkReady -> "التحديث جاهز للتثبيت المباشر"
+                                        else -> "تحديث جديد متاح"
                                     },
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer,

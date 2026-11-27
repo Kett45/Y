@@ -140,7 +140,7 @@ service cloud.firestore {
         data.keys().hasOnly([
           'inviteCode', 'name', 'adminId', 'adminName', 'assistantAdminIds', 'memberUids',
           'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
-          'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
+          'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber', 'lockStudentTransfer',
           'bannedUids', 'bannedServantEntries', 'dailyInviteToken', 'inviteCodeUpdatedAtMillis',
           'avatarBase64', 'avatarHash',
           'customCardEnabled', 'customCardName', 'customCardPoints',
@@ -161,6 +161,7 @@ service cloud.firestore {
         data.attendanceIsCardOnly is bool &&
         data.showLeaderboard is bool &&
         data.autoStudentNumber is bool &&
+        (!('lockStudentTransfer' in data) || data.lockStudentTransfer is bool) &&
         (!('bannedUids' in data) || isBoundedStringList(data.bannedUids, 0, 50)) &&
         (!('bannedServantEntries' in data) || isBoundedStringList(data.bannedServantEntries, 0, 50)) &&
         (!('dailyInviteToken' in data) || isOptionalString(data.dailyInviteToken, 16)) &&
@@ -655,11 +656,16 @@ service cloud.firestore {
 
       // 2b. Servant Blocks
       // Read/List: Any member of the group (queried by groupId).
-      // Create & Delete: Strictly Group Admin ONLY.
-      // Update: Group Admin OR assigned servant updating only their own servantName / claiming unassigned block.
+      // Create: Group Admin (any servant/unlinked) OR Group Member creating ONLY their own block (servantId == uid()).
+      // Update: Group Admin OR assigned servant updating their own block's name & color (without reassigning servantId/sortOrder).
+      // Delete: Strictly Group Admin ONLY.
       match /blocks/{blockId} {
         allow get, list: if isGroupMember(groupId);
-        allow create: if isGroupAdmin(groupId) && isValidServantBlock(incoming(), groupId);
+        allow create: if isValidServantBlock(incoming(), groupId) &&
+          (
+            isGroupAdmin(groupId) ||
+            (isGroupMember(groupId) && incoming().servantId == uid())
+          );
         allow update: if isValidServantBlock(incoming(), groupId) &&
           incoming().groupId == existing().groupId &&
           incoming().createdAt == existing().createdAt &&
@@ -669,7 +675,6 @@ service cloud.firestore {
               isGroupMember(groupId) &&
               existing().servantId == uid() &&
               incoming().servantId == existing().servantId &&
-              incoming().colorHex == existing().colorHex &&
               incoming().sortOrder == existing().sortOrder
             )
           );
@@ -825,6 +830,21 @@ service cloud.firestore {
           incoming().createdAt == existing().createdAt;
         allow delete: if isGroupAdmin(groupId) ||
           (isGroupMember(groupId) && existing().authorUid == uid());
+      }
+
+      // 2l. Group Action Audit Logs (groups/{groupId}/auditLogs/{logId})
+      match /auditLogs/{logId} {
+        allow get, list: if isSignedIn() && (
+          ('memberUids' in existing() && uid() in existing().memberUids) ||
+          isGroupMember(groupId)
+        );
+        allow create: if isGroupMember(groupId) &&
+          incoming().groupId == groupId &&
+          isNonEmptyString(incoming().actionType, 48) &&
+          isNonEmptyString(incoming().actorUid, 64) &&
+          isOptionalString(incoming().actorName, 100) &&
+          isOptionalString(incoming().summaryArabic, 400);
+        allow update, delete: if isGroupAdmin(groupId);
       }
     }
 

@@ -73,20 +73,44 @@ object KamSemanticColors {
 
     fun blockColor(hex: String): Color {
         val ext = activeExtended
-        return when (BlockColorPreset.fromHex(hex)) {
-            BlockColorPreset.BLUE -> ext.blockBlue
-            BlockColorPreset.EMERALD -> ext.blockEmerald
-            BlockColorPreset.VIOLET -> ext.blockViolet
-            BlockColorPreset.AMBER -> ext.blockAmber
-            BlockColorPreset.ROSE -> ext.blockRose
-            BlockColorPreset.CYAN -> ext.blockCyan
-            BlockColorPreset.ORANGE -> ext.blockOrange
+        val clean = hex.trim()
+        val matchedPreset = BlockColorPreset.entries.find { it.hex.equals(clean, ignoreCase = true) }
+        if (matchedPreset != null) {
+            return when (matchedPreset) {
+                BlockColorPreset.BLUE -> ext.blockBlue
+                BlockColorPreset.EMERALD -> ext.blockEmerald
+                BlockColorPreset.VIOLET -> ext.blockViolet
+                BlockColorPreset.AMBER -> ext.blockAmber
+                BlockColorPreset.ROSE -> ext.blockRose
+                BlockColorPreset.CYAN -> ext.blockCyan
+                BlockColorPreset.ORANGE -> ext.blockOrange
+            }
         }
+        val parsed = runCatching {
+            val normalized = if (clean.startsWith("#")) clean else "#$clean"
+            android.graphics.Color.parseColor(normalized)
+        }.getOrNull() ?: return ext.blockBlue
+
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(parsed, hsv)
+        if (hsv[1] > 0.08f) {
+            hsv[1] = hsv[1].coerceAtLeast(0.82f)
+        }
+        hsv[2] = if (ext.isDark) {
+            hsv[2].coerceAtLeast(0.92f)
+        } else {
+            hsv[2].coerceIn(0.68f, 0.84f)
+        }
+        return Color(android.graphics.Color.HSVToColor(hsv))
     }
 
     fun cardColorByKey(colorKey: String): Color {
         val ext = activeExtended
-        return when (colorKey.trim().uppercase()) {
+        val trimmed = colorKey.trim()
+        if (trimmed.startsWith("#")) {
+            return blockColor(trimmed)
+        }
+        return when (trimmed.uppercase()) {
             "EMERALD" -> ext.cardAttendance
             "SKY" -> ext.cardQuiet
             "VIOLET" -> ext.cardParticipation
@@ -95,7 +119,27 @@ object KamSemanticColors {
             "TEAL" -> ext.cardMemorization
             "ROSE" -> ext.cardConfession
             "ORANGE" -> ext.blockOrange
-            else -> ext.cardGold
+            else -> if (trimmed.length == 6 && trimmed.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
+                blockColor("#$trimmed")
+            } else {
+                ext.cardGold
+            }
+        }
+    }
+
+    fun cardColorKeyToHex(colorKey: String): String {
+        val trimmed = colorKey.trim()
+        if (trimmed.startsWith("#") && trimmed.length == 7) return trimmed.uppercase()
+        return when (trimmed.uppercase()) {
+            "EMERALD" -> "#10B981"
+            "SKY" -> "#0EA5E9"
+            "VIOLET" -> "#8B5CF6"
+            "INDIGO" -> "#6366F1"
+            "GOLD" -> "#F59E0B"
+            "TEAL" -> "#14B8A6"
+            "ROSE" -> "#F43F5E"
+            "ORANGE" -> "#F97316"
+            else -> "#F59E0B"
         }
     }
 
