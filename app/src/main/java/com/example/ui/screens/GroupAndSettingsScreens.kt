@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -144,11 +145,26 @@ private fun shareInvitationText(
 ) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
     clipboard?.setPrimaryClip(ClipData.newPlainText("دعوة المجموعة", shareMessage))
+    val cleanEmail = recipientEmail?.trim()?.takeIf { it.contains("@") }
+    if (cleanEmail != null) {
+        val mailtoSuccess = runCatching {
+            val mailtoUri = Uri.parse(
+                "mailto:${Uri.encode(cleanEmail)}" +
+                    "?subject=${Uri.encode("دعوة انضمام لمجموعة الفصل ($inviteCode)")}" +
+                    "&body=${Uri.encode(shareMessage)}"
+            )
+            val emailIntent = Intent(Intent.ACTION_SENDTO, mailtoUri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(emailIntent)
+        }.isSuccess
+        if (mailtoSuccess) return
+    }
     runCatching {
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            if (!recipientEmail.isNullOrBlank()) {
-                putExtra(Intent.EXTRA_EMAIL, arrayOf(recipientEmail.trim()))
+            if (!cleanEmail.isNullOrBlank()) {
+                putExtra(Intent.EXTRA_EMAIL, arrayOf(cleanEmail))
             }
             putExtra(Intent.EXTRA_SUBJECT, "دعوة انضمام لمجموعة الفصل ($inviteCode)")
             putExtra(Intent.EXTRA_TEXT, shareMessage)

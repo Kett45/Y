@@ -625,6 +625,7 @@ service cloud.firestore {
               'dailyInviteToken', 'inviteCodeUpdatedAtMillis', 'name',
               'allowServantUndo', 'enforceWeeklyCardLimit', 'maxMonthlyPoints',
               'attendanceIsCardOnly', 'showLeaderboard', 'autoStudentNumber',
+              'lockStudentTransfer',
               'customCardEnabled', 'customCardName', 'customCardPoints',
               'customCardIcon', 'customCardColorKey', 'customCardFrequency'
             ]) &&

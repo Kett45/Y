@@ -405,6 +405,7 @@ fun ChildProfileFullSheet(
     isAdmin: Boolean,
     currentUserId: String,
     canServantUndoOwnEvents: Boolean,
+    lockStudentTransfer: Boolean = false,
     onDismiss: () -> Unit,
     onSaveEdits: (String, Int, String) -> Unit,
     onDeleteStudent: () -> Unit,
@@ -415,6 +416,7 @@ fun ChildProfileFullSheet(
     onDeleteNote: (ChildNote) -> Unit,
     onOpenMemorizationSheet: () -> Unit
 ) {
+    val canChangePositionOrBlock = isAdmin || !lockStudentTransfer
     var isEditing by rememberSaveable(student.id) { mutableStateOf(false) }
     var editedName by rememberSaveable(student.id) { mutableStateOf(student.name) }
     var editedNumber by rememberSaveable(student.id) { mutableStateOf(student.studentNumber.toString()) }
@@ -580,9 +582,13 @@ fun ChildProfileFullSheet(
                                     OutlinedTextField(
                                         value = editedNumber,
                                         onValueChange = { raw ->
-                                            val digits = raw.filter { ch -> ch.isDigit() }.take(4)
-                                            editedNumber = digits
+                                            if (canChangePositionOrBlock) {
+                                                val digits = raw.filter { ch -> ch.isDigit() }.take(4)
+                                                editedNumber = digits
+                                            }
                                         },
+                                        enabled = canChangePositionOrBlock,
+                                        readOnly = !canChangePositionOrBlock,
                                         label = { Text("رقم الطفل") },
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                         singleLine = true,
@@ -599,6 +605,14 @@ fun ChildProfileFullSheet(
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
+                                        if (!canChangePositionOrBlock) {
+                                            Text(
+                                                text = "🔒 نقل الطفل أو تغيير رقمه مقفول حالياً بقرار أمين المجموعة",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
                                         FlowRow(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -617,7 +631,7 @@ fun ChildProfileFullSheet(
                                                     modifier = Modifier
                                                         .heightIn(min = 44.dp)
                                                         .clip(RoundedCornerShape(12.dp))
-                                                        .clickable { editedBlockId = blk.id }
+                                                        .clickable(enabled = canChangePositionOrBlock) { editedBlockId = blk.id }
                                                         .testTag("edit_student_block_option_${blk.id}")
                                                 ) {
                                                     Row(
@@ -652,7 +666,7 @@ fun ChildProfileFullSheet(
                                                 modifier = Modifier
                                                     .heightIn(min = 44.dp)
                                                     .clip(RoundedCornerShape(12.dp))
-                                                    .clickable { editedBlockId = "" }
+                                                    .clickable(enabled = canChangePositionOrBlock) { editedBlockId = "" }
                                                     .testTag("edit_student_block_option_unassigned")
                                             ) {
                                                 Row(

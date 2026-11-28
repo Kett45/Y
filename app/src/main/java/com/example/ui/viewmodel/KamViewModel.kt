@@ -2300,6 +2300,15 @@ class KamViewModel(
                 } else {
                     showBanner("تم استيراد $count اسم بنجاح للمجموعة المشتركة")
                 }
+                logGroupAction(
+                    actionType = AuditActionType.ADD_STUDENT,
+                    summaryArabic = "استيراد قائمة أسماء ($count طفل)",
+                    targetId = "bulk_${System.currentTimeMillis()}",
+                    targetName = "$count طفل",
+                    newStateJson = JSONObject().apply {
+                        put("count", count)
+                    }.toString()
+                )
             }.onFailure { err ->
                 _operationError.value = err.localizedMessage ?: "تعذر استيراد القائمة"
             }
@@ -2497,8 +2506,9 @@ class KamViewModel(
         val safeNumber = newNumber.coerceIn(1, 2000)
         val safeBlockId = newBlockId.trim().take(80)
         val movedToNewBlock = safeBlockId != student.blockId
-        if (movedToNewBlock && group.lockStudentTransfer && !group.isUserAdmin(currentUserId)) {
-            _operationError.value = "نقل الطلاب بين البلوكات مقفول حالياً بقرار أمين المجموعة"
+        val changedStudentNumber = safeNumber.toLong() != student.studentNumber
+        if ((movedToNewBlock || changedStudentNumber) && group.lockStudentTransfer && !group.isUserAdmin(currentUserId)) {
+            _operationError.value = "نقل الطلاب وتغيير أرقامهم مقفول حالياً بقرار أمين المجموعة"
             return
         }
         val oldName = student.name
@@ -3302,7 +3312,7 @@ class KamViewModel(
                             val k = keys.next()
                             blockUpdates[k] = prev.optLong(k, 0L)
                         }
-                        if (blockUpdates.isNotEmpty()) {
+                    if (blockUpdates.isNotEmpty()) {
                             val restoredBlocks = state.blocks.map { blk ->
                                 val restoredOrder = blockUpdates[blk.id]
                                 if (restoredOrder != null) blk.copy(sortOrder = restoredOrder) else blk
@@ -3318,6 +3328,41 @@ class KamViewModel(
                         }
                     }
                 }
+                AuditActionType.ADD_NOTE -> {
+                    val newJson = runCatching { JSONObject(event.newStateJson) }.getOrNull()
+                    val noteId = newJson?.optString("noteId", event.targetId).orEmpty()
+                    if (noteId.isNotBlank()) {
+                        repository.deleteChildNote(group.inviteCode, noteId, waitForServerAck = false)
+                    }
+                }
+                AuditActionType.DELETE_NOTE -> {
+                    val prev = runCatching { JSONObject(event.previousStateJson) }.getOrNull()
+                    val stuId = prev?.optString("studentId", event.targetId).orEmpty()
+                    val stu = state.students.firstOrNull { it.id == stuId }
+                    val noteText = prev?.optString("text", "").orEmpty()
+                    val noteType = ChildNoteType.fromId(prev?.optString("type", ChildNoteType.COMMENT.id))
+                    val noteStatus = prev?.optString("status", "").orEmpty()
+                    val authorName = prev?.optString("authorName", adminName).orEmpty()
+                    if (stu != null && noteText.isNotBlank()) {
+                        repository.addChildNote(
+                            groupId = group.inviteCode,
+                            student = stu,
+                            type = noteType,
+                            text = noteText,
+                            status = noteStatus,
+                            authorName = authorName,
+                            memberUids = group.memberUids,
+                            waitForServerAck = false
+                        )
+                    }
+                }
+                AuditActionType.MARK_ATTENDANCE, AuditActionType.UNDO_ATTENDANCE, AuditActionType.UPDATE_POLICY -> {
+                    val newJson = runCatching { JSONObject(event.newStateJson) }.getOrNull()
+                    val docId = newJson?.optString("docId", event.targetId).orEmpty()
+                    if (type == AuditActionType.MARK_ATTENDANCE && docId.isNotBlank()) {
+                        repository.deleteAttendanceRecord(group.inviteCode, docId, waitForServerAck = false)
+                    }
+                }
             }
             repository.markAuditLogEventUndone(
                 groupId = group.inviteCode,
@@ -3330,7 +3375,7 @@ class KamViewModel(
     }
 
     /**
-     * Updates the configurable custom extra card (كارت القمداء) settings for the group.
+     * Updates the configurable custom extra card (كارت التميز) settings for the group.
      * Restricted to Primary Admin and Assistant Admins.
      */
     fun updateCustomCardSettings(config: CustomCardConfig) {
@@ -3363,7 +3408,7 @@ class KamViewModel(
                 val displayLabel = if (cleanConfig.hasCustomName) {
                     cleanConfig.name
                 } else {
-                    "${cleanConfig.icon} كارت القمداء"
+                    "${cleanConfig.icon} كارت التميز"
                 }
                 val statusLabel = if (cleanConfig.enabled) {
                     "تم حفظ وتفعيل '$displayLabel' (${cleanConfig.points} نقطة • ${cleanConfig.frequency.shortArabicLabel})"
@@ -3719,6 +3764,18 @@ class KamViewModel(
             ).onSuccess { saved ->
                 _optimisticChildNotes.update { list -> list.filterNot { it.id == tempNote.id } + saved }
                 showBanner("تم حفظ التعليق عن '${student.name}'")
+                logGroupAction(
+                    actionType = AuditActionType.ADD_NOTE,
+                    summaryArabic = "تعليق عن '${student.name}': ${cleanText.take(60)}",
+                    targetId = saved.id,
+                    targetName = student.name,
+                    newStateJson = JSONObject().apply {
+                        put("noteId", saved.id)
+                        put("studentId", student.id)
+                        put("type", ChildNoteType.COMMENT.id)
+                        put("text", cleanText)
+                    }.toString()
+                )
                 if (notifyGroup) {
                     chatRepository?.sendGroupMessage(
                         groupId = group.inviteCode,
@@ -3781,6 +3838,18 @@ class KamViewModel(
                 _optimisticChildNotes.update { list -> list.filterNot { it.id == tempNote.id } + saved }
                 _optimisticStudentOverrides.update { it - student.id }
                 showBanner("تم تحديث حفظ '${student.name}'")
+                logGroupAction(
+                    actionType = AuditActionType.ADD_NOTE,
+                    summaryArabic = "تسميع '${student.name}': ${cleanText.take(60)}",
+                    targetId = saved.id,
+                    targetName = student.name,
+                    newStateJson = JSONObject().apply {
+                        put("noteId", saved.id)
+                        put("studentId", student.id)
+                        put("type", ChildNoteType.MEMORIZATION.id)
+                        put("text", cleanText)
+                    }.toString()
+                )
                 chatRepository?.sendGroupMessage(
                     groupId = group.inviteCode,
                     senderName = authorName,
@@ -3843,6 +3912,19 @@ class KamViewModel(
             ).onSuccess { saved ->
                 _optimisticChildNotes.update { list -> list.filterNot { it.id == tempNote.id } + saved }
                 showBanner("${status.arabicLabel}: ${student.name}")
+                logGroupAction(
+                    actionType = AuditActionType.ADD_NOTE,
+                    summaryArabic = "افتقاد '${student.name}' (${status.arabicLabel}): ${effectiveText.take(60)}",
+                    targetId = saved.id,
+                    targetName = student.name,
+                    newStateJson = JSONObject().apply {
+                        put("noteId", saved.id)
+                        put("studentId", student.id)
+                        put("type", ChildNoteType.VISITATION.id)
+                        put("status", status.id)
+                        put("text", effectiveText)
+                    }.toString()
+                )
                 if (notifyGroup) {
                     val emoji = if (status == VisitationStatus.FOLLOWUP) "🔔" else "🏠"
                     chatRepository?.sendGroupMessage(
@@ -3872,6 +3954,19 @@ class KamViewModel(
             repository.deleteChildNote(group.inviteCode, note.id, waitForServerAck = false)
                 .onSuccess {
                     showBanner("تم حذف الملاحظة")
+                    logGroupAction(
+                        actionType = AuditActionType.DELETE_NOTE,
+                        summaryArabic = "حذف ملاحظة عن '${note.studentName}': ${note.text.take(40)}",
+                        targetId = note.studentId,
+                        targetName = note.studentName,
+                        previousStateJson = JSONObject().apply {
+                            put("studentId", note.studentId)
+                            put("type", note.type)
+                            put("status", note.status)
+                            put("text", note.text)
+                            put("authorName", note.authorName)
+                        }.toString()
+                    )
                 }
                 .onFailure { err ->
                     _optimisticDeletedNoteIds.update { it - note.id }

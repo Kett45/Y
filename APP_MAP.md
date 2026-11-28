@@ -27,23 +27,23 @@
 - **الرسائل والدردشة**: `app/src/main/java/com/example/ui/screens/MessagesScreen.kt`:
   - `MessagesScreen` (سطر 160)، عرض تقارير الحضور والكروت والافتقاد بنفس قائمة وترتيب الشاشة الرئيسية (بلوك تحت بلوك، كل طفل في سطره برقمه واسمه، والغائب/المشكلة بصورته جنب اسمه وملحوظته بخط أكبر) (أسطر 3450–4440).
 - **الإعدادات وصفحاتها الداخلية**: `app/src/main/java/com/example/ui/screens/GroupAndSettingsScreens.kt`:
-  - `SettingsScreen` (سطر 1875): بروفايل الخادم المصغر، زر المظهر والسمات، مجموعاتي والتبديل بينها (في مكان واحد فقط)، وصفحات داخلية لـ `إعدادات المجموعة` (`GroupInvitationsScreen` مع ترتيب البلوكات)، `إعدادات وإظهار الكروت` (مع شريط الألوان الحر للكارت الإضافي)، قواعد الفصل (مع `قفل نقل الطلاب`)، `المزامنة مع GitHub`، و`سجل الأحداث` للأمين مع زر `تراجع`.
+  - `SettingsScreen` (سطر 1915): بروفايل الخادم المصغر، زر المظهر والسمات، مجموعاتي والتبديل بينها (في مكان واحد فقط)، وصفحات داخلية لـ `إعدادات المجموعة` (`GroupInvitationsScreen` مع ترتيب البلوكات والدعوة عبر Gmail)، `إعدادات وإظهار الكروت` (كارت التميز مع شريط الألوان الحر)، قواعد الفصل (مع `قفل نقل الطلاب`)، `المزامنة مع GitHub`، و`سجل الأحداث` للأمين مع زر `تراجع`.
 - **المظهر والأيقونة والألوان والصور**:
   - `app/src/main/java/com/example/ui/components/AppearanceAndIconSettingsSection.kt` (`AppearanceSettingsEntryCard`، `AppearanceFullScreen`)، `app/src/main/java/com/example/ui/theme/Color.kt` و`Theme.kt` (دعم أي لون Hex زاهي للبلوكات).
-  - `app/src/main/java/com/example/ui/components/StudentAvatarComponents.kt` و`ServantPhoneAndProfileComponents.kt`: فك وتحميل الصور الكاملة مسبقاً في الكاش (`fullPhotoCache` / `fullPhotoByStudentIdCache`) وعرضها فوراً في المعاينة السريعة ونوافذ البروفايل بدون المرور بالصورة المصغرة.
+  - `app/src/main/java/com/example/ui/components/StudentAvatarComponents.kt` و`ServantPhoneAndProfileComponents.kt` و`MemorizationAndChildProfileSheets.kt`: فك وتحميل الصور الكاملة مسبقاً في الكاش، وقفل تعديل رقم/بلوك الطفل لغير الأمين عند تفعيل `lockStudentTransfer`.
 
 ---
 
 ## الـ ViewModels وقاعدة البيانات والمزامنة
 - **ViewModels**:
-  - `app/src/main/java/com/example/ui/viewmodel/KamViewModel.kt` (`KamViewModel` سطر 761، المزامنة `forceFullCloudSync` سطر 2870، نص دعوة الخدام `buildInvitationShareText` سطر 3692).
+  - `app/src/main/java/com/example/ui/viewmodel/KamViewModel.kt` (`KamViewModel` سطر 761، تحريك البلوكات `moveServantBlock` سطر 3030، تسجيل الأحداث `logGroupAction` سطر 3135، التراجع للأمين `adminUndoAuditEvent` سطر 3177، المزامنة `forceFullCloudSync` سطر 3436).
   - `app/src/main/java/com/example/ui/viewmodel/ChatViewModel.kt` (`ChatViewModel` سطر 81).
 - **Repositories & Models**:
   - `app/src/main/java/com/example/data/repository/KamRepository.kt` (سطر 51).
   - `app/src/main/java/com/example/data/repository/ChatRepository.kt` (سطر 39).
   - `app/src/main/java/com/example/data/model/KamModels.kt` و`ChatModels.kt`.
   - الكاش المحلي: `app/src/main/java/com/example/data/cache/LocalClassroomCache.kt`.
-  - قواعد الأمان: `firestore.rules` (السماح للخادم بإنشاء وتلوين بلوكه الشخصي فقط، والأمين لكل البلوكات).
+  - قواعد الأمان: `firestore.rules` (حماية `lockStudentTransfer` للأمين ومساعده، وسجل الأحداث `auditLogs`).
 - **تحديثات GitHub والنسخة**: `app/src/main/java/com/example/data/sync/GitHubSmartSyncEngine.kt` (سطر 122).
 
 ---

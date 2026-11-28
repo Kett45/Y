@@ -511,6 +511,7 @@ fun HomeScreen(
                     ) {
                         val isOwnBlock = block.servantId.isNotBlank() && block.servantId == currentUserId
                         val servantProfile = state.memberProfileForBlock(block)
+                        val canReorderThisBlock = (state.isAdmin || (state.group?.lockStudentTransfer != true && isOwnBlock)) && visibleBlocks.size > 1
                         ServantBlockHeaderCard(
                             block = block,
                             resolvedOwnerName = resolvedOwnerName,
@@ -522,7 +523,7 @@ fun HomeScreen(
                             servantProfile = servantProfile,
                             isOwnBlock = isOwnBlock,
                             isAdmin = state.isAdmin,
-                            canReorderBlock = canTransferOrReorder && visibleBlocks.size > 1,
+                            canReorderBlock = canReorderThisBlock,
                             isFirstBlock = blockIdx == 0,
                             isLastBlock = blockIdx == visibleBlocks.lastIndex,
                             onMoveBlockUp = { onMoveBlock(block.id, BlockMoveAction.UP) },
@@ -571,6 +572,7 @@ fun HomeScreen(
                                     outerBorderColor = blockBorderColor,
                                     canMoveUp = canTransferOrReorder && idx > 0,
                                     canMoveDown = canTransferOrReorder && idx < blockStudents.lastIndex,
+                                    canTransferBlock = canTransferOrReorder,
                                     onAwardCard = onHomeCardTapRemembered,
                                     onOpenQuickComment = onOpenQuickCommentRemembered,
                                     onOpenMoveDialog = onOpenMoveSheetRemembered,
@@ -621,6 +623,7 @@ fun HomeScreen(
                                 attendanceStatus = activeAttendanceByStudentId[student.id]?.attendanceStatus,
                                 canMoveUp = canTransferOrReorder && idx > 0,
                                 canMoveDown = canTransferOrReorder && idx < unassignedStudents.lastIndex,
+                                canTransferBlock = canTransferOrReorder,
                                 onAwardCard = onHomeCardTapRemembered,
                                 onOpenQuickComment = onOpenQuickCommentRemembered,
                                 onMoveStudentToBlock = onMoveStudentToBlock,
@@ -816,6 +819,7 @@ fun HomeScreen(
             isAdmin = state.isAdmin,
             currentUserId = currentUserId,
             canServantUndoOwnEvents = canUndoEvents,
+            lockStudentTransfer = state.group?.lockStudentTransfer == true,
             onDismiss = { studentForDetailsSheet = null },
             onSaveEdits = { newName, newNumber, newBlockId ->
                 onUpdateStudent(targetStudent, newName, newNumber, newBlockId)
@@ -1820,6 +1824,7 @@ private fun UnassignedStudentLazyRow(
     attendanceStatus: AttendanceStatus? = null,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
+    canTransferBlock: Boolean = true,
     onAwardCard: (Student, CardType) -> Unit,
     onOpenQuickComment: (Student) -> Unit = {},
     onMoveStudentToBlock: (Student, String) -> Unit,
@@ -1857,6 +1862,7 @@ private fun UnassignedStudentLazyRow(
             outerBorderColor = null,
             canMoveUp = canMoveUp,
             canMoveDown = canMoveDown,
+            canTransferBlock = canTransferBlock,
             onAwardCard = onAwardCard,
             onOpenQuickComment = onOpenQuickComment,
             onOpenMoveDialog = onOpenMoveDialog,
@@ -1865,8 +1871,8 @@ private fun UnassignedStudentLazyRow(
             onReorder = onReorder
         )
 
-        // One-tap quick transfer chips to any Servant Block
-        if (blocks.isNotEmpty()) {
+        // One-tap quick transfer chips to any Servant Block (hidden for non-admins when transfer is locked)
+        if (canTransferBlock && blocks.isNotEmpty()) {
             Text(
                 text = "نقل سريع بضغطة واحدة إلى بلوك:",
                 style = MaterialTheme.typography.labelSmall,
@@ -1969,6 +1975,7 @@ private fun StudentFastCardRow(
     outerBorderColor: Color? = null,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
+    canTransferBlock: Boolean = true,
     onAwardCard: (Student, CardType) -> Unit,
     onOpenQuickComment: (Student) -> Unit = {},
     onOpenMoveDialog: (Student) -> Unit,
@@ -2168,19 +2175,21 @@ private fun StudentFastCardRow(
                         )
                     }
                 }
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clickable(onClick = clickMoveDialog)
-                        .testTag("move_student_button_${student.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.CompareArrows,
-                        contentDescription = "نقل لبلوك آخر",
-                        tint = colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
-                    )
+                if (canTransferBlock) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clickable(onClick = clickMoveDialog)
+                            .testTag("move_student_button_${student.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.CompareArrows,
+                            contentDescription = "نقل لبلوك آخر",
+                            tint = colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
                 Box(
                     contentAlignment = Alignment.Center,

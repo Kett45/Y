@@ -335,7 +335,7 @@ class ExampleRobolectricTest {
                 SettingsScreen(
                     state = uiState,
                     onToggleCardVisibility = { _, _ -> },
-                    onSaveGroupPolicies = { allowUndo, enforceWeekly, maxPts, attOnly, showLb, autoNum ->
+                    onSaveGroupPolicies = { allowUndo, enforceWeekly, maxPts, attOnly, showLb, autoNum, lockTransfer ->
                         savedWeeklyLimit = enforceWeekly
                         uiState = uiState.copy(
                             group = uiState.group?.copy(
@@ -344,7 +344,8 @@ class ExampleRobolectricTest {
                                 maxMonthlyPoints = maxPts,
                                 attendanceIsCardOnly = attOnly,
                                 showLeaderboard = showLb,
-                                autoStudentNumber = autoNum
+                                autoStudentNumber = autoNum,
+                                lockStudentTransfer = lockTransfer
                             )
                         )
                     },
@@ -448,18 +449,18 @@ class ExampleRobolectricTest {
             capturedLongPressMs >= 300L
         )
 
-        // 2. Verify localPackedAvatarByStudentId LruCache(24) bounds entries and scroll gate toggles cleanly
+        // 2. Verify localPackedAvatarByStudentId LruCache(150) bounds entries and scroll gate toggles cleanly
         StudentAvatarImageHelper.setScrollActive(true)
         assertTrue(StudentAvatarImageHelper.isScrollActive)
         StudentAvatarImageHelper.setScrollActive(false)
         assertEquals(false, StudentAvatarImageHelper.isScrollActive)
-        for (i in 1..30) {
+        for (i in 1..155) {
             StudentAvatarImageHelper.writeLocalAlbumRaw(null, "cap_test_$i", "dummy_$i")
         }
         assertEquals("", StudentAvatarImageHelper.peekCachedLocalAlbumRaw("cap_test_1"))
-        assertEquals("dummy_30", StudentAvatarImageHelper.peekCachedLocalAlbumRaw("cap_test_30"))
+        assertEquals("dummy_155", StudentAvatarImageHelper.peekCachedLocalAlbumRaw("cap_test_155"))
 
-        // 3. Verify flattened SettingsScreen scrolls down to bottom performance & sign-out items with all tags intact
+        // 3. Verify flattened SettingsScreen scrolls down to bottom sub-screen rows & sign-out items with all tags intact
         val adminProfile = UserProfile(
             id = "admin_flat",
             userId = "admin_flat",
@@ -490,7 +491,7 @@ class ExampleRobolectricTest {
                 SettingsScreen(
                     state = state,
                     onToggleCardVisibility = { _, _ -> },
-                    onSaveGroupPolicies = { _, _, _, _, _, _ -> },
+                    onSaveGroupPolicies = { _, _, _, _, _, _, _ -> },
                     onLeaveGroup = {},
                     onSignOut = {}
                 )
@@ -498,12 +499,12 @@ class ExampleRobolectricTest {
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("settings_lazy_column")
-            .performScrollToNode(hasTestTag("github_smart_sync_settings_card"))
-        composeTestRule.onNodeWithTag("github_smart_sync_settings_card").assertIsDisplayed()
+            .performScrollToNode(hasTestTag("open_github_sync_subscreen_button"))
+        composeTestRule.onNodeWithTag("open_github_sync_subscreen_button").assertIsDisplayed()
 
         composeTestRule.onNodeWithTag("settings_lazy_column")
-            .performScrollToNode(hasTestTag("performance_metrics_settings_card"))
-        composeTestRule.onNodeWithTag("performance_metrics_settings_card").assertIsDisplayed()
+            .performScrollToNode(hasTestTag("open_admin_audit_log_subscreen_button"))
+        composeTestRule.onNodeWithTag("open_admin_audit_log_subscreen_button").assertIsDisplayed()
 
         composeTestRule.onNodeWithTag("settings_lazy_column")
             .performScrollToNode(hasTestTag("settings_sign_out_button"))

@@ -1438,13 +1438,18 @@ enum class AuditActionType(
 ) {
     AWARD_CARD("AWARD_CARD", "إعطاء كارت"),
     UNDO_CARD("UNDO_CARD", "سحب كارت"),
+    MARK_ATTENDANCE("MARK_ATTENDANCE", "تسجيل حضور/غياب"),
+    UNDO_ATTENDANCE("UNDO_ATTENDANCE", "إلغاء تسجيل حضور"),
     ADD_STUDENT("ADD_STUDENT", "إضافة طفل"),
     UPDATE_STUDENT("UPDATE_STUDENT", "تعديل بيانات طفل"),
     DELETE_STUDENT("DELETE_STUDENT", "حذف طفل"),
     MOVE_STUDENT("MOVE_STUDENT", "نقل طفل بين البلوكات"),
     REORDER_STUDENT("REORDER_STUDENT", "تغيير ترتيب طفل"),
     REORDER_BLOCK("REORDER_BLOCK", "تغيير ترتيب بلوك"),
-    CREATE_OR_UPDATE_BLOCK("CREATE_OR_UPDATE_BLOCK", "تعديل/إنشاء بلوك");
+    CREATE_OR_UPDATE_BLOCK("CREATE_OR_UPDATE_BLOCK", "تعديل/إنشاء بلوك"),
+    ADD_NOTE("ADD_NOTE", "إضافة ملاحظة/تسميع/افتقاد"),
+    DELETE_NOTE("DELETE_NOTE", "حذف ملاحظة"),
+    UPDATE_POLICY("UPDATE_POLICY", "تعديل قواعد الفصل");
 
     companion object {
         fun fromId(raw: String?): AuditActionType {
